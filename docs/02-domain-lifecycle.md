@@ -58,13 +58,15 @@ Case Graph 支持的首版关系：
 
 ### 2.2 HumanProposal
 
-HumanProposal 可为空，但一旦提交必须版本化。建议字段：
+HumanProposal 由 Case Owner 在创建或受理 Case 时提供，可为空，但一旦提交必须版本化。其他角色在后续流程中提供的内容应进入 Evidence、Review 或 Commitment，不得写入 HumanProposal。建议字段：
 
 - `case_id`
 - `revision`
 - `author_actor_id`
 - `content`
 - `created_at`
+
+`author_actor_id` 必须是该版本提交时的 Case Owner；Owner 变更不改写已有 HumanProposal 的作者记录。
 
 Manifest 记录采用、部分采用或未采用的 HumanProposal 版本及理由。
 
@@ -195,7 +197,7 @@ DAG 描述稳定的责任拓扑，不用反向边表达打回循环。打回通�
 
 节点首先要求 `Organization + Role`，就绪后进入角色 Inbox，由具体 Actor 认领。审批记录保存 Actor 在提交时拥有的角色。改派和委托必须留痕。
 
-首版可为每个角色固定一个 Actor，但仍使用认领语义。Role Switcher 必须标记为 `Demo identity simulation`，不得声称提供生产级认证授权。
+首版可为每个角色固定一个 Actor，但仍使用认领语义。Role Switcher 只允许从全局身份区（左下角头像）进入，不在 CommitmentDAG 节点或任务卡片中提供快捷切换；它必须标记为 `Demo identity simulation`，不得声称提供生产级认证授权。
 
 Coordinator 可以查看、提醒、升级、转达、标记阻塞和建议改派，但不能代替业务角色 COMMIT，除非该 Actor 同时拥有相应角色。
 
