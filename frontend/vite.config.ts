@@ -1,6 +1,6 @@
 import { sites } from "@openai/sites-vite-plugin";
 import vinext from "vinext";
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 import hostingConfig from "./.openai/hosting.json";
 
 const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
@@ -10,6 +10,14 @@ const { d1, r2 } = hostingConfig;
 
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
+
+function parsePort(value: string | undefined): number {
+  const port = Number(value ?? "3000");
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`AGENTIC_CM_WEB_PORT must be an integer between 1 and 65535; received: ${value}`);
+  }
+  return port;
+}
 
 const localBindingConfig = {
   main: "./worker/index.ts",
@@ -33,7 +41,11 @@ const localBindingConfig = {
     : [],
 };
 
-export default defineConfig(async () => {
+export default defineConfig(async ({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), "AGENTIC_CM_");
+  const host = env.AGENTIC_CM_WEB_HOST || "127.0.0.1";
+  const port = parsePort(env.AGENTIC_CM_WEB_PORT);
+
   // Keep Wrangler and Miniflare state project-local. These are non-secret tool
   // settings; application environment belongs in ignored `.env*` files.
   process.env.WRANGLER_WRITE_LOGS ??= "false";
@@ -44,9 +56,14 @@ export default defineConfig(async () => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
-    server: isCodexSeatbeltSandbox
-      ? { watch: { useFsEvents: false, usePolling: true } }
-      : undefined,
+    server: {
+      host,
+      port,
+      strictPort: true,
+      ...(isCodexSeatbeltSandbox
+        ? { watch: { useFsEvents: false, usePolling: true } }
+        : {}),
+    },
     plugins: [
       vinext(),
       sites(),

@@ -39,7 +39,7 @@ npm ci
 npm run dev
 ```
 
-打开 `http://localhost:3000`。API 文档位于 `http://localhost:8000/docs`。
+前端默认监听 `127.0.0.1:3000`，可在 `frontend/.env.local` 中通过 `AGENTIC_CM_WEB_HOST` 和 `AGENTIC_CM_WEB_PORT` 修改。API 文档位于 `http://localhost:8000/docs`。
 
 ### 技术选择
 
