@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "kind": "policy",
+  "id": "POL-CUSTOMER-2",
+  "version": "2.1.0",
+  "title": "客户接受度确认",
+  "status": "published",
+  "match": {
+    "organization": ["demo-supply-chain"],
+    "case_type": ["ORDER_DELIVERY_RISK"],
+    "path_definition": ["MaterialSubstitution"]
+  },
+  "requirements": {
+    "commitments": [
+      {
+        "id": "CUSTOMER",
+        "role": "一线经理",
+        "node_type": "REVIEW",
+        "reviews": ["customer", "overall_recommendation"],
+        "depends_on": ["SUPPLY", "TECH"]
+      }
+    ]
+  }
+}

@@ -48,6 +48,16 @@ def get_case(case_id: str):
         raise HTTPException(status_code=404, detail="Case not found") from exc
 
 
+@app.get("/api/cases/{case_id}/capabilities")
+def get_case_capabilities(case_id: str):
+    try:
+        return service.get_case_capabilities(case_id)
+    except CaseNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Case not found") from exc
+    except InvalidTransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @app.post("/api/cases/{case_id}/manifest/approve")
 def approve_manifest(case_id: str):
     try:
