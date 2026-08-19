@@ -1,0 +1,66 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
+from .repository import CaseRepository
+from .service import CaseNotFoundError, CaseService, InvalidTransitionError
+
+
+DATABASE_PATH = Path(os.getenv("AGENTIC_CM_DB", "data/agentic_cm.db"))
+DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
+service = CaseService(CaseRepository(DATABASE_PATH))
+service.ensure_demo_data()
+
+app = FastAPI(title="Agentic Case Management API", version="0.1.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
+)
+
+
+class ResetRequest(BaseModel):
+    dataset_id: str
+
+
+@app.get("/api/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/api/cases")
+def list_cases():
+    return [case.to_dict() for case in service.list_cases()]
+
+
+@app.get("/api/cases/{case_id}")
+def get_case(case_id: str):
+    try:
+        return service.get_case(case_id).to_dict()
+    except CaseNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Case not found") from exc
+
+
+@app.post("/api/cases/{case_id}/manifest/approve")
+def approve_manifest(case_id: str):
+    try:
+        return service.approve_manifest(case_id).to_dict()
+    except CaseNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Case not found") from exc
+    except InvalidTransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/demo/reset", status_code=204)
+def reset_demo(request: ResetRequest):
+    try:
+        service.reset_demo(request.dataset_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

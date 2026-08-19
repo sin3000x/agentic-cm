@@ -20,7 +20,7 @@
 - 一线经理；
 - 大调度：Coordinator。
 
-Role Switcher 用于模拟不同 Actor 操作，页面必须持续显示 `Demo identity simulation`。
+Role Switcher 用于模拟不同 Actor 操作，只能从左下角全局身份头像进入；DAG 节点和任务卡片不得提供角色切换按钮。页面必须持续显示 `Demo identity simulation`。
 
 ## 2. 主 Golden Path
 
@@ -28,7 +28,7 @@ Role Switcher 用于模拟不同 Actor 操作，页面必须持续显示 `Demo i
 
 1. 从 Case Graph 打开订单延期 Case；
 2. 查看 Case 结构化信息和 HumanProposal；
-3. HumanProposal 建议探索物料替代；
+3. Case Owner 在创建 Case 时提交的 HumanProposal 建议探索物料替代；
 4. Orchestrator 结合 Capability、Policy 和 Experience 生成 Manifest；
 5. Manifest 只包含一个准备执行的 Path：`MaterialSubstitution`；
 6. Owner 可以删除该 Path或批准它；
@@ -128,6 +128,7 @@ Golden Path 的预期解释是：
 - [ ] Case Graph 能展示固定 Case 及其关系；
 - [ ] Case 包含标题、描述、Owner、状态和可为空的 HumanProposal；
 - [ ] HumanProposal 修改产生新版本；
+- [ ] HumanProposal 的作者是提交时的 Case Owner，其他角色意见进入证据、评审或 Commitment；
 - [ ] Orchestrator 能生成版本化 Manifest；
 - [ ] Owner 可以在批准前删除 Path；
 - [ ] Owner 批准的是保留的全部 Path；
@@ -149,6 +150,7 @@ Golden Path 的预期解释是：
 - [ ] 下游节点在前置条件满足前不可提交；
 - [ ] 具体 Actor 通过角色 Inbox 认领并签署；
 - [ ] Coordinator 不能代替其他业务角色 COMMIT；
+- [ ] 角色只能从左下角全局身份区切换，DAG 节点不提供快捷切换；
 - [ ] COMMIT、REQUEST_CHANGES、DECLINE 均保留 Actor、角色、版本和时间；
 - [ ] DECLINE 使当前 PathAttempt 进入 FAILED；
 - [ ] 技术运行失败不会被记录为业务 DECLINE。

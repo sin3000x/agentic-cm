@@ -53,7 +53,7 @@ flowchart LR
 |---|---|---|
 | Case | 有独立业务结果、Owner 和生命周期的异常工作项 | 普通审批步骤或 Agent task |
 | Case Graph | Case 之间的依赖和派生关系图 | 单个 Case 内的执行图 |
-| HumanProposal | 人对 Case 提出的版本化初始解决建议，可为空 | 可覆盖的普通文本字段 |
+| HumanProposal | Case Owner 在创建或受理 Case 时提出的版本化初始解决建议，可为空 | 其他角色的证据、评审或可覆盖的普通文本字段 |
 | PathDefinition | 组织已知的一种业务解决思路，例如物料替代 | 一次具体 Agent run |
 | PathAttempt | 某个 PathDefinition 在当前 Case 中的一次探索实例 | 可被原地覆盖的执行记录 |
 | Manifest | 本轮 Path 决策及其系统执行细节的版本化载体 | Agent 生成后不可审查的计划书 |
