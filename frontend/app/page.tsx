@@ -11,7 +11,20 @@ const cases = [
   { id: "CM-2026-006", title: "华南仓到货差异", status: "已关闭" },
 ];
 
-const stages = ["Case 受理", "Manifest 评审", "Path 探索", "最终决策"];
+const stages = ["Case 受理", "Manifest 评审", "Path 探索", "专业承诺", "最终决策", "结果验证"];
+
+const demoIdentities = [
+  { name: "陈澄", role: "订单履行经理", avatar: "陈" },
+  { name: "王淼", role: "主计划", avatar: "王" },
+  { name: "林乔", role: "研发", avatar: "林" },
+  { name: "赵宁", role: "一线经理", avatar: "赵" },
+];
+
+const commitmentCopy: Record<string, string> = {
+  SUPPLY: "确认 A / B 供应可行性",
+  TECH: "确认 A / B 技术可行性",
+  CUSTOMER: "确认客户接受度与整体建议",
+};
 
 type CapabilityAsset = {
   id?: string;
@@ -46,6 +59,15 @@ type CapabilitySnapshot = {
   skills: Array<{ id: string }>;
   knowledge: Array<{ id: string }>;
   compiled_policy: { commitments: Array<{ id: string; depends_on?: string[] }> };
+};
+
+type CommitmentNode = {
+  id: string;
+  role: string;
+  node_type: string;
+  status: "BLOCKED" | "PENDING" | "READY" | "COMMITTED" | "STALE";
+  depends_on: string[];
+  path_id: string;
 };
 
 function CapabilityPanel({ details }: { details: CapabilityDetails }) {
@@ -89,6 +111,10 @@ export default function Home() {
   const [manifestPaths, setManifestPaths] = useState<ManifestPath[]>([]);
   const [capabilitySnapshots, setCapabilitySnapshots] = useState<Record<string, CapabilitySnapshot>>({});
   const [selectedPathIds, setSelectedPathIds] = useState<string[]>([]);
+  const [commitmentNodes, setCommitmentNodes] = useState<CommitmentNode[]>([]);
+  const [identityIndex, setIdentityIndex] = useState(0);
+  const [showInbox, setShowInbox] = useState(false);
+  const currentIdentity = demoIdentities[identityIndex];
 
   function loadManifest(manifest: { paths?: ManifestPath[]; capability_snapshots?: Record<string, CapabilitySnapshot> } | null) {
     const paths = manifest?.paths ?? [];
@@ -104,6 +130,7 @@ export default function Home() {
       .then((data) => {
         setPhase(data.phase);
         setApproved(data.phase === "PATH_EXPLORATION");
+        setCommitmentNodes(data.commitment_nodes ?? []);
         loadManifest(data.manifest);
         if (data.phase === "PATH_EXPLORATION") {
           setSelectedPathIds((data.manifest?.paths ?? []).filter((path: ManifestPath) => path.selected).map((path: ManifestPath) => path.id));
@@ -142,9 +169,10 @@ export default function Home() {
       if (!response.ok) throw new Error("approve failed");
       const data = await response.json();
       setManifestPaths(data.manifest.paths);
+      setCommitmentNodes(data.commitment_nodes ?? []);
       setApproved(true);
       setPhase("PATH_EXPLORATION");
-      setMessage("Manifest 已批准；主计划与研发评审已并行开放。 ");
+      setMessage("Manifest 已批准；主计划与研发任务已分别投递到各自 Inbox，等待本人批准。 ");
     } catch {
       setMessage("无法连接本地 API，请先启动 Python 服务。 ");
     } finally {
@@ -167,6 +195,9 @@ export default function Home() {
       setManifestPaths([]);
       setCapabilitySnapshots({});
       setSelectedPathIds([]);
+      setCommitmentNodes([]);
+      setIdentityIndex(0);
+      setShowInbox(false);
       setMessage("Golden Path 演示数据已重置。 ");
     } catch {
       setMessage("重置失败：本地 API 未连接。 ");
@@ -198,6 +229,137 @@ export default function Home() {
     }
   }
 
+  async function approveCommitment(node: CommitmentNode) {
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch(
+        `${API_BASE}/api/cases/CM-2026-014/paths/${node.path_id}/commitments/${node.id}/approve`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ actor: currentIdentity.name, role: currentIdentity.role }),
+        },
+      );
+      if (!response.ok) throw new Error("commitment approval failed");
+      const data = await response.json();
+      setCommitmentNodes(data.commitment_nodes ?? []);
+      setMessage(`${currentIdentity.name} 已在 ${currentIdentity.role} Inbox 批准 ${node.id}，节点现为 READY。`);
+    } catch {
+      setMessage("Inbox 批准失败：请确认当前身份与本地 API 状态。 ");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const activeStageIndex = approved ? 2 : phase === "INTAKE" ? 0 : 1;
+  const currentStage = stages[activeStageIndex];
+  const selectedAttemptPathId = manifestPaths.find((path) => path.selected)?.id ?? selectedPathIds[0];
+  const activeCommitments = commitmentNodes.filter((node) => node.path_id === selectedAttemptPathId);
+  const inboxItems = commitmentNodes.filter(
+    (node) => node.role === currentIdentity.role && node.status === "PENDING",
+  );
+
+  function commitmentNode(nodeId: string, fallbackRole: string, fallbackStatus: CommitmentNode["status"]) {
+    const node = activeCommitments.find((item) => item.id === nodeId) ?? {
+      id: nodeId,
+      role: fallbackRole,
+      node_type: "APPROVAL",
+      status: fallbackStatus,
+      depends_on: nodeId === "CUSTOMER" ? ["SUPPLY", "TECH"] : [],
+      path_id: selectedAttemptPathId ?? "PATH-01",
+    };
+    const statusLabel = node.status === "PENDING" ? "待本人批准" : node.status;
+    return (
+      <article className={`dagNode ${node.depends_on.length ? "downstream" : "upstream"} ${node.status.toLowerCase()}`}>
+        <span>{statusLabel}</span>
+        <h3>{node.role}</h3>
+        <p>{commitmentCopy[node.id] ?? "等待责任人确认"}</p>
+      </article>
+    );
+  }
+
+  const orchestrationCard = approved ? (
+    <>
+      <div className="panelTitle">
+        <div><span className="agentIcon">✓</span><span><small>PATH ATTEMPT · ATTEMPT-01</small><h2>物料替代 · 审批 DAG</h2></span></div>
+        <span className="version">AWAITING INBOX</span>
+      </div>
+      <p className="lead">方案 v1 已覆盖候选物料 A / B。主计划与研发任务已并行投递到各自 Inbox；本人批准后节点才会变成 READY。</p>
+      <div className="dag" aria-label="Commitment DAG">
+        {commitmentNode("SUPPLY", "主计划", "PENDING")}
+        {commitmentNode("TECH", "研发", "PENDING")}
+        <div className="dagJoin"><i /><i /></div>
+        {commitmentNode("CUSTOMER", "一线经理", "BLOCKED")}
+      </div>
+      <div className="metricStrip">
+        <span><strong>2</strong><small>parallel review branches</small></span>
+        <span><strong>0</strong><small>preserved commitments</small></span>
+        <span><strong>0</strong><small>re-review avoided</small></span>
+      </div>
+      <button className="linkButton capabilityToggle" onClick={toggleCapabilities}>{showCapabilities ? "收起能力快照 ↑" : "查看本次能力快照 →"}</button>
+      {showCapabilities && capabilities && <CapabilityPanel details={capabilities} />}
+    </>
+  ) : phase === "INTAKE" ? (
+    <>
+      <div className="panelTitle">
+        <div><span className="agentIcon">✦</span><span><small>ORCHESTRATOR</small><h2>从 Case 组装 Manifest</h2></span></div>
+        <span className="version">等待规划</span>
+      </div>
+      <p className="lead">平台将基于 Case 事实匹配 Policy、Skill 与 Knowledge，枚举可探索路径；Agent 只提出方案，不会修改业务系统。</p>
+      <article className="pathCard compactPath">
+        <div className="pathHeading"><span className="pathBadge">CASE READY</span></div>
+        <h3>订单延期 · SO-48392</h3>
+        <p>关键物料 MCU-X7 存在 18,400 pcs 缺口，目标交付日为 2026-08-24。</p>
+      </article>
+      <div className="approvalBox">
+        <span><strong>下一步：生成可审查的 Manifest</strong><small>Planner 无权发明 Path、删除强制责任或作出业务承诺。</small></span>
+        <button className="primary" disabled={busy} onClick={generateManifest}>{busy ? "组装中…" : "生成 Manifest"}</button>
+      </div>
+    </>
+  ) : (
+    <>
+      <div className="panelTitle">
+        <div><span className="agentIcon">✦</span><span><small>ORCHESTRATOR 建议</small><h2>审查 Path Manifest</h2></span></div>
+        <span className="version">v1 · 待批准</span>
+      </div>
+      <p className="lead">命中的缺料处理 Skill 支持以下三条 Path。Owner 可以选择本轮真正进入探索的 Path。</p>
+      <div className="pathChoices">
+        {manifestPaths.map((path, index) => {
+          const snapshot = capabilitySnapshots[path.id];
+          const selected = selectedPathIds.includes(path.id);
+          const commitments = snapshot?.compiled_policy.commitments ?? [];
+          return (
+            <article className={`pathCard ${selected ? "selected" : ""}`} key={path.id}>
+              <div className="pathHeading">
+                <span className="pathBadge">PATH {String(index + 1).padStart(2, "0")}</span>
+                {path.definition === "MaterialSubstitution" && <span className="recommended">DEMO</span>}
+                <label className="pathSelector">
+                  <input type="checkbox" checked={selected} onChange={() => togglePath(path.id)} />
+                  <span>{selected ? "本轮探索" : "暂不探索"}</span>
+                </label>
+              </div>
+              <h3>{path.title} <span>{path.definition}</span></h3>
+              <p>{path.rationale}</p>
+              <div className="pathStats">
+                <span><small>责任节点</small><strong>{commitments.length}</strong></span>
+                <span><small>并行起点</small><strong>{commitments.filter((item) => !(item.depends_on?.length)).length}</strong></span>
+                <span><small>强制 Policy</small><strong>{snapshot?.policies.length ?? 0}</strong></span>
+                <span><small>命中 Skill</small><strong>{snapshot?.skills.length ?? 0}</strong></span>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+      <button className="linkButton capabilityToggle" onClick={toggleCapabilities}>{showCapabilities ? "收起替代 Path 能力快照 ↑" : "查看替代 Path 能力快照 →"}</button>
+      {showCapabilities && capabilities && <CapabilityPanel details={capabilities} />}
+      <div className="approvalBox">
+        <span><strong>批准范围 · 已选 {selectedPathIds.length} 条</strong><small>只为勾选的 Path 创建 PathAttempt，不代表批准最终业务方案。</small></span>
+        <button className="primary" disabled={busy || selectedPathIds.length === 0} onClick={approveManifest}>{busy ? "处理中…" : "批准并启动所选 Path"}</button>
+      </div>
+    </>
+  );
+
   return (
     <main className="shell">
       <aside className="sidebar">
@@ -207,7 +369,7 @@ export default function Home() {
         </div>
         <nav aria-label="主要导航" className="nav">
           <a className="navItem active" href="#cases"><span>◇</span> Cases <b>5</b></a>
-          <a className="navItem" href="#inbox"><span>□</span> 我的 Inbox <b>2</b></a>
+          <button className={`navItem ${showInbox ? "active" : ""}`} onClick={() => setShowInbox(true)}><span>□</span> 我的 Inbox <b>{inboxItems.length}</b></button>
           <a className="navItem" href="#assets"><span>◎</span> 组织资产</a>
         </nav>
         <div className="caseList" id="cases">
@@ -220,9 +382,9 @@ export default function Home() {
           ))}
         </div>
         <div className="identity">
-          <span className="avatar">陈</span>
-          <span><small>当前角色</small><strong>陈澄 · 订单履行经理</strong></span>
-          <button aria-label="切换演示身份">⌄</button>
+          <span className="avatar">{currentIdentity.avatar}</span>
+          <span><small>当前角色</small><strong>{currentIdentity.name} · {currentIdentity.role}</strong></span>
+          <button aria-label="切换演示身份" onClick={() => setIdentityIndex((current) => (current + 1) % demoIdentities.length)}>⌄</button>
           <em>Demo identity simulation</em>
         </div>
       </aside>
@@ -233,131 +395,118 @@ export default function Home() {
           <div className="topActions"><button className="ghost">审计记录</button><button className="ghost" disabled={busy} onClick={resetDemo}>重置 Demo</button></div>
         </header>
         <div className="content">
-          <div className="caseHeader">
+          <header className="issueHeader">
             <div>
-              <div className="eyebrow"><span className="statusDot" /> OPEN <span>·</span> 高优先级</div>
-              <h1>订单预计延期</h1>
-              <p>订单 SO-48392 的关键物料预计晚于承诺日期 12 天，可能影响客户交付。</p>
+              <div className="eyebrow">SUPPLY CHAIN CASE <span>·</span> 高优先级</div>
+              <h1>订单预计延期 <span>#CM-2026-014</span></h1>
+              <p><span className="openBadge">● Open</span> 陈澄于今天 08:46 创建 · 当前由 <strong>陈澄</strong> 负责</p>
             </div>
             <button className="primary">继续处理 <span>→</span></button>
-          </div>
-          <div className="metaRow">
-            <div><small>CASE OWNER</small><strong>陈澄</strong><span>订单履行经理</span></div>
-            <div><small>当前阶段</small><strong>{approved ? "Path 探索" : phase === "INTAKE" ? "Case 受理" : "Manifest 评审"}</strong><span>{approved ? "等待并行评审" : phase === "INTAKE" ? "等待 Orchestrator" : "等待 Owner 决策"}</span></div>
-            <div><small>目标交付日</small><strong>2026-08-24</strong><span className="danger">预计延期 12 天</span></div>
-            <div><small>最后更新</small><strong>今天 10:42</strong><span>Orchestrator</span></div>
-          </div>
-          <ol className="stageBar" aria-label="Case 当前进度">
-            {stages.map((stage, index) => (
-              <li className={index < (approved ? 3 : phase === "INTAKE" ? 1 : 2) ? "done" : ""} key={stage}>
-                <span>{index < 1 ? "✓" : index + 1}</span><strong>{stage}</strong>
-              </li>
-            ))}
-          </ol>
-          <div className="mainGrid">
-            <section className="panel manifest">
+          </header>
+
+          <div className="mainGrid threadLayout">
+            <section className="caseThread" aria-label="Case 完整流转 Thread">
               {message && <div className="toast" role="status">{message}</div>}
-              {approved ? (
-                <>
-                  <div className="panelTitle">
-                    <div><span className="agentIcon">✓</span><span><small>PATH ATTEMPT · ATTEMPT-01</small><h2>物料替代 · 审批 DAG</h2></span></div>
-                    <span className="version">AWAITING HUMAN</span>
+
+              <article className="threadItem commentItem">
+                <div className="threadAvatar humanAvatar">陈</div>
+                <div className="commentBox">
+                  <header><strong>陈澄</strong><span>Case Owner · 今天 08:46</span><b>创建 Case</b></header>
+                  <div className="commentBody">
+                    <p>订单 SO-48392 的关键物料预计晚于承诺日期 12 天，可能影响客户交付。</p>
+                    <h3>Human Proposal</h3>
+                    <blockquote>建议优先评估现有认证范围内的替代物料，避免直接承诺未经客户确认的新方案。</blockquote>
+                    <div className="factChips"><span>MCU-X7</span><span>缺口 18,400 pcs</span><span>目标 2026-08-24</span></div>
                   </div>
-                  <p className="lead">方案 v1 已覆盖候选物料 A / B。两个上游专业评审无相互依赖，现已并行开放。</p>
-                  <div className="dag" aria-label="Commitment DAG">
-                    <article className="dagNode ready"><span>READY</span><h3>主计划</h3><p>确认 A / B 供应可行性</p></article>
-                    <article className="dagNode ready"><span>READY</span><h3>研发</h3><p>确认 A / B 技术可行性</p></article>
-                    <div className="dagJoin"><i /><i /></div>
-                    <article className="dagNode blocked"><span>BLOCKED</span><h3>一线经理</h3><p>等待供应与技术承诺</p></article>
-                  </div>
-                  <div className="metricStrip">
-                    <span><strong>2</strong><small>parallel review branches</small></span>
-                    <span><strong>0</strong><small>preserved commitments</small></span>
-                    <span><strong>0</strong><small>re-review avoided</small></span>
-                  </div>
-                  <button className="linkButton capabilityToggle" onClick={toggleCapabilities}>{showCapabilities ? "收起能力快照 ↑" : "查看本次能力快照 →"}</button>
-                  {showCapabilities && capabilities && <CapabilityPanel details={capabilities} />}
-                </>
-              ) : phase === "INTAKE" ? (
-                <>
-                  <div className="panelTitle">
-                    <div><span className="agentIcon">✦</span><span><small>ORCHESTRATOR</small><h2>从 Case 组装 Manifest</h2></span></div>
-                    <span className="version">等待规划</span>
-                  </div>
-                  <p className="lead">平台根据命中的 Skill 枚举其声明的全部 PathDefinition，确定性匹配 Policy、Skill 与 Knowledge，再由 Planner 为每条 Path 排序并解释。</p>
-                  <article className="pathCard">
-                    <div className="pathHeading"><span className="pathBadge">CASE READY</span></div>
-                    <h3>订单延期 · SO-48392</h3>
-                    <p>关键物料 MCU-X7 存在 18,400 pcs 缺口。Agent 只能提出探索路径，不会执行 ERP、库存、订单或客户系统操作。</p>
-                  </article>
-                  <div className="approvalBox">
-                    <span><strong>规划边界</strong><small>Policy 由平台结构化匹配；Planner 无权发明 Path、删除强制责任或作出业务承诺。</small></span>
-                    <button className="primary" disabled={busy} onClick={generateManifest}>{busy ? "组装中…" : "生成 Manifest"}</button>
-                  </div>
-                </>
-              ) : (
-                <>
-              <div className="panelTitle">
-                <div><span className="agentIcon">✦</span><span><small>ORCHESTRATOR 建议</small><h2>审查 Path Manifest</h2></span></div>
-                <span className="version">v1 · 待批准</span>
+                </div>
+              </article>
+
+              <div className="threadEvent completedEvent">
+                <span className="eventIcon">✓</span>
+                <p><strong>平台完成 Case 受理</strong><span>事实已固化，责任人为陈澄 · 今天 08:47</span></p>
               </div>
-              <p className="lead">命中的缺料处理 Skill 支持以下三条 Path。Owner 可以单选或多选本轮真正进入探索的 Path；Demo 默认只选择“替代”。</p>
-              <div className="pathChoices">
-                {manifestPaths.map((path, index) => {
-                  const snapshot = capabilitySnapshots[path.id];
-                  const selected = selectedPathIds.includes(path.id);
-                  const commitments = snapshot?.compiled_policy.commitments ?? [];
-                  return (
-                    <article className={`pathCard ${selected ? "selected" : ""}`} key={path.id}>
-                      <div className="pathHeading">
-                        <span className="pathBadge">PATH {String(index + 1).padStart(2, "0")}</span>
-                        {path.definition === "MaterialSubstitution" && <span className="recommended">DEMO</span>}
-                        <label className="pathSelector">
-                          <input type="checkbox" checked={selected} onChange={() => togglePath(path.id)} />
-                          <span>{selected ? "本轮探索" : "暂不探索"}</span>
-                        </label>
-                      </div>
-                      <h3>{path.definition} <span>{path.title}</span></h3>
-                      <p>{path.rationale}</p>
-                      <div className="pathStats">
-                        <span><small>责任节点</small><strong>{commitments.length}</strong></span>
-                        <span><small>并行起点</small><strong>{commitments.filter((item) => !(item.depends_on?.length)).length}</strong></span>
-                        <span><small>强制 Policy</small><strong>{snapshot?.policies.length ?? 0}</strong></span>
-                        <span><small>命中 Skill</small><strong>{snapshot?.skills.length ?? 0}</strong></span>
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
-              <button className="linkButton capabilityToggle" onClick={toggleCapabilities}>{showCapabilities ? "收起替代 Path 能力快照 ↑" : "查看替代 Path 能力快照 →"}</button>
-              {showCapabilities && capabilities && <CapabilityPanel details={capabilities} />}
-              <div className="approvalBox">
-                <span><strong>批准范围 · 已选 {selectedPathIds.length} 条</strong><small>只为勾选的 Path 创建 PathAttempt；不代表逐项审批底层 Skill 或 Tool。</small></span>
-                <button className="primary" disabled={busy || selectedPathIds.length === 0} onClick={approveManifest}>{busy ? "处理中…" : "批准并启动所选 Path"}</button>
-              </div>
-                </>
+
+              {phase !== "INTAKE" && (
+                <div className="threadEvent completedEvent">
+                  <span className="eventIcon botEvent">✦</span>
+                  <p><strong>Orchestrator 生成 Manifest v1</strong><span>匹配组织能力并冻结 Policy / Skill / Knowledge 快照 · 今天 09:02</span></p>
+                </div>
               )}
+
+              {approved && (
+                <div className="threadEvent completedEvent">
+                  <span className="eventIcon humanEvent">陈</span>
+                  <p><strong>陈澄批准 Manifest</strong><span>启动物料替代 PathAttempt，最终业务决定尚未作出 · 今天 09:18</span></p>
+                </div>
+              )}
+
+              <article className="threadItem commentItem currentThreadItem">
+                <div className="threadAvatar botAvatar">AC</div>
+                <div className="commentBox activeComment">
+                  <header><strong>Agentic CM</strong><span>Orchestrator · 当前步骤</span><b className="currentLabel">{currentStage}</b></header>
+                  <div className="commentBody actionBody">{orchestrationCard}</div>
+                </div>
+              </article>
+
+              <div className="futureFlow" aria-label="后续流程">
+                <div><span>4</span><p><strong>专业承诺汇合</strong><small>供应与技术并行评审；依赖未满足时下游保持阻塞</small></p></div>
+                <div><span>5</span><p><strong>Case Owner 最终决策</strong><small>基于已承诺证据选择、修订或拒绝方案</small></p></div>
+                <div><span>6</span><p><strong>受控行动与结果验证</strong><small>执行结果回写 Case；未解决则开启新一轮，解决后关闭</small></p></div>
+              </div>
             </section>
+
             <aside className="rightRail">
+              <section className="panel flowSummary">
+                <div className="compactTitle"><h2>完整流程</h2><span>{activeStageIndex + 1} / {stages.length}</span></div>
+                <ol>
+                  {stages.map((stage, index) => (
+                    <li className={index < activeStageIndex ? "complete" : index === activeStageIndex ? "current" : ""} key={stage}>
+                      <span>{index < activeStageIndex ? "✓" : index + 1}</span>
+                      <div><strong>{stage}</strong><small>{index === activeStageIndex ? "进行中" : index < activeStageIndex ? "已完成" : "尚未开始"}</small></div>
+                    </li>
+                  ))}
+                </ol>
+              </section>
               <section className="panel facts">
                 <div className="compactTitle"><h2>Case 事实</h2><button>查看全部</button></div>
                 <dl>
+                  <div><dt>Case Owner</dt><dd>陈澄</dd></div>
                   <div><dt>订单</dt><dd>SO-48392</dd></div>
                   <div><dt>客户</dt><dd>Northstar Mobility</dd></div>
                   <div><dt>关键物料</dt><dd>MCU-X7</dd></div>
                   <div><dt>缺口数量</dt><dd>18,400 pcs</dd></div>
+                  <div><dt>目标交付日</dt><dd>2026-08-24</dd></div>
                 </dl>
               </section>
-              <section className="panel proposal">
-                <div className="compactTitle"><h2>Case Owner Proposal</h2><span>v1 · 创建时</span></div>
-                <blockquote>“建议优先评估现有认证范围内的替代物料，避免直接承诺未经客户确认的新方案。”</blockquote>
-                <p>陈澄 · 订单履行经理（Case Owner） <span>创建于今天 08:46</span></p>
-              </section>
-              <section className="notice"><strong>演示安全边界</strong><p>本 Demo 不连接或修改 ERP、库存、订单及客户系统；所有执行均为 sandbox 推演。</p></section>
+              <section className="notice"><strong>演示安全边界</strong><p>不连接或修改 ERP、库存、订单及客户系统；所有执行均为 sandbox 推演。</p></section>
             </aside>
           </div>
         </div>
       </section>
+
+      {showInbox && (
+        <div className="inboxBackdrop" role="presentation">
+          <aside className="inboxDrawer" aria-label={`${currentIdentity.role} Inbox`}>
+            <header>
+              <div><small>ROLE INBOX</small><h2>{currentIdentity.role}</h2><p>{currentIdentity.name} · Demo identity simulation</p></div>
+              <button aria-label="关闭 Inbox" onClick={() => setShowInbox(false)}>×</button>
+            </header>
+            <div className="inboxHint">这里只显示分配给当前角色、且依赖已经满足的待批准节点。请从左下角切换演示身份。</div>
+            <div className="inboxList">
+              {inboxItems.length ? inboxItems.map((node) => (
+                <article key={`${node.path_id}-${node.id}`}>
+                  <div><span>PENDING</span><small>{node.path_id} · {node.id}</small></div>
+                  <h3>{commitmentCopy[node.id] ?? node.role}</h3>
+                  <p>Case CM-2026-014 · {manifestPaths.find((path) => path.id === node.path_id)?.title ?? node.path_id}</p>
+                  <button className="primary" disabled={busy} onClick={() => approveCommitment(node)}>{busy ? "处理中…" : "批准并设为 READY"}</button>
+                </article>
+              )) : (
+                <div className="emptyInbox"><strong>当前没有待批准事项</strong><p>如果 Manifest 已批准，请切换到主计划或研发身份查看各自任务。</p></div>
+              )}
+            </div>
+          </aside>
+        </div>
+      )}
     </main>
   );
 }

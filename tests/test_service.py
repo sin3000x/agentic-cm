@@ -135,7 +135,7 @@ def test_paths_owning_skill_requires_one_case_type_binding(tmp_path: Path) -> No
         raise AssertionError("A paths-owning Skill must belong to one Case type")
 
 
-def test_manifest_approval_opens_parallel_nodes(tmp_path: Path) -> None:
+def test_manifest_approval_routes_parallel_nodes_to_role_inboxes(tmp_path: Path) -> None:
     service = make_service(tmp_path)
     orchestrate(service)
     initial_case = service.get_case("CM-2026-014")
@@ -144,10 +144,48 @@ def test_manifest_approval_opens_parallel_nodes(tmp_path: Path) -> None:
     assert initial_case.human_proposal["role"] == initial_case.owner_role
     case = service.approve_manifest("CM-2026-014", ["PATH-01"])
     assert case.phase is OrchestrationPhase.PATH_EXPLORATION
-    ready = {node.id for node in case.commitment_nodes if node.status is NodeStatus.READY}
-    assert ready == {"SUPPLY", "TECH"}
+    pending = {node.id for node in case.commitment_nodes if node.status is NodeStatus.PENDING}
+    assert pending == {"SUPPLY", "TECH"}
+    assert {item["node"].id for item in service.get_inbox("主计划")} == {"SUPPLY"}
+    assert {item["node"].id for item in service.get_inbox("研发")} == {"TECH"}
     assert [attempt["definition"] for attempt in case.path_attempts] == ["MaterialSubstitution"]
     assert case.commitment_nodes[-1].status is NodeStatus.BLOCKED
+
+
+def test_role_inbox_approval_makes_node_ready_and_releases_dependents(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+    orchestrate(service)
+    service.approve_manifest("CM-2026-014", ["PATH-01"])
+
+    try:
+        service.approve_commitment(
+            "CM-2026-014", "PATH-01", "SUPPLY", actor="林乔", role="研发"
+        )
+    except InvalidTransitionError as exc:
+        assert "requires role 主计划" in str(exc)
+    else:
+        raise AssertionError("a different role must not approve the commitment")
+
+    case = service.approve_commitment(
+        "CM-2026-014", "PATH-01", "SUPPLY", actor="王淼", role="主计划"
+    )
+    statuses = {node.id: node.status for node in case.commitment_nodes}
+    assert statuses == {
+        "SUPPLY": NodeStatus.READY,
+        "TECH": NodeStatus.PENDING,
+        "CUSTOMER": NodeStatus.BLOCKED,
+    }
+
+    case = service.approve_commitment(
+        "CM-2026-014", "PATH-01", "TECH", actor="林乔", role="研发"
+    )
+    statuses = {node.id: node.status for node in case.commitment_nodes}
+    assert statuses == {
+        "SUPPLY": NodeStatus.READY,
+        "TECH": NodeStatus.READY,
+        "CUSTOMER": NodeStatus.PENDING,
+    }
+    assert {item["node"].id for item in service.get_inbox("一线经理")} == {"CUSTOMER"}
 
 
 def test_demo_manifest_freezes_resolved_capabilities(tmp_path: Path) -> None:

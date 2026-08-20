@@ -195,7 +195,7 @@ DAG 描述稳定的责任拓扑，不用反向边表达打回循环。打回通�
 
 ### 5.2 角色解析
 
-节点首先要求 `Organization + Role`，就绪后进入角色 Inbox，由具体 Actor 认领。审批记录保存 Actor 在提交时拥有的角色。改派和委托必须留痕。
+节点首先要求 `Organization + Role`。依赖满足后节点进入 `PENDING` 并投递到角色 Inbox；具体 Actor 在自己的 Inbox 批准后，节点才进入 `READY`。审批记录保存 Actor 在提交时拥有的角色。改派和委托必须留痕。
 
 首版可为每个角色固定一个 Actor，但仍使用认领语义。Role Switcher 只允许从全局身份区（左下角头像）进入，不在 CommitmentDAG 节点或任务卡片中提供快捷切换；它必须标记为 `Demo identity simulation`，不得声称提供生产级认证授权。
 

@@ -21,6 +21,7 @@ class OrchestrationPhase(StrEnum):
 
 class NodeStatus(StrEnum):
     BLOCKED = "BLOCKED"
+    PENDING = "PENDING"
     READY = "READY"
     COMMITTED = "COMMITTED"
     STALE = "STALE"

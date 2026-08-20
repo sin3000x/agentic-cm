@@ -37,6 +37,11 @@ class ManifestApprovalRequest(BaseModel):
     selected_path_ids: list[str]
 
 
+class CommitmentApprovalRequest(BaseModel):
+    actor: str
+    role: str
+
+
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -92,6 +97,32 @@ def approve_manifest(case_id: str, request: ManifestApprovalRequest | None = Non
         return service.approve_manifest(
             case_id,
             request.selected_path_ids if request else None,
+        ).to_dict()
+    except CaseNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Case not found") from exc
+    except InvalidTransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/api/inbox")
+def get_inbox(role: str):
+    return service.get_inbox(role)
+
+
+@app.post("/api/cases/{case_id}/paths/{path_id}/commitments/{node_id}/approve")
+def approve_commitment(
+    case_id: str,
+    path_id: str,
+    node_id: str,
+    request: CommitmentApprovalRequest,
+):
+    try:
+        return service.approve_commitment(
+            case_id,
+            path_id,
+            node_id,
+            actor=request.actor,
+            role=request.role,
         ).to_dict()
     except CaseNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Case not found") from exc

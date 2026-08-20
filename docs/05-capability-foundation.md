@@ -95,7 +95,7 @@ Case classification
   -> CaseService 只按 frozen compiled_policy 创建 CommitmentDAG
 ```
 
-页面中的“查看执行层与能力快照”会读取 `GET /api/cases/CM-2026-014/capabilities`，展示本轮实际冻结的三类资产。批准 Manifest 后，主计划与研发之所以并行 `READY`、一线经理之所以 `BLOCKED`，来自两个 Policy 的编译结果，不是 UI 或 Service 中的硬编码剧情。
+页面中的“查看执行层与能力快照”会读取 `GET /api/cases/CM-2026-014/capabilities`，展示本轮实际冻结的三类资产。批准 Manifest 后，主计划与研发因没有前置依赖而并行进入 `PENDING` 并投递到各自 Inbox；本人批准后才转为 `READY`。一线经理起初为 `BLOCKED`，仅在两项前置节点都 `READY` 后转为 `PENDING`。这些依赖来自两个 Policy 的编译结果，不是 UI 中的硬编码剧情。
 
 ## 4. 开发者接入自己的本地能力
 

@@ -106,5 +106,5 @@ curl -sS -X POST http://localhost:8000/api/cases/CM-2026-014/manifest/approve \
 - Manifest 包含 `MaterialSubstitution`、`SupplyExpediting`、`OrderSplit`；
 - 前端默认只勾选 `MaterialSubstitution`，也允许多选；
 - 三条 Path 分别冻结自己的 Policy、execution Skill 与 Knowledge 快照；提拉、替代、拆分分别命中 `supply-expediting-analysis`、`material-substitution-analysis`、`order-split-analysis`；
-- Owner 批准后 `SUPPLY`、`TECH` 为 `READY`，`CUSTOMER` 因依赖两者而为 `BLOCKED`；
+- Owner 批准后 `SUPPLY`、`TECH` 为 `PENDING` 并进入各自角色 Inbox；本人批准后才为 `READY`，`CUSTOMER` 在两者均 `READY` 前保持 `BLOCKED`；
 - Planner 发明 Path 或返回非法结构时，Case 与事件表均无副作用。
