@@ -36,6 +36,28 @@ class CaseService:
     def ensure_demo_data(self) -> None:
         if not self.repository.list_cases():
             self.repository.reset(demo_cases())
+            return
+        for case in self.repository.list_cases():
+            if (
+                case.phase is OrchestrationPhase.PATH_EXPLORATION
+                and case.commitment_nodes
+                and not self.repository.has_event(case.id, "commitment.approved")
+                and any(
+                    node.status is NodeStatus.READY and not node.depends_on
+                    for node in case.commitment_nodes
+                )
+            ):
+                case.commitment_nodes = [
+                    replace(node, status=NodeStatus.PENDING)
+                    if node.status is NodeStatus.READY and not node.depends_on
+                    else node
+                    for node in case.commitment_nodes
+                ]
+                case.version += 1
+                case.updated_at = datetime.now(timezone.utc).isoformat()
+                self.repository.save(case, "commitment.pending_migration", {
+                    "reason": "introduce explicit role Inbox approval before READY",
+                })
 
     def list_cases(self):
         return self.repository.list_cases()
@@ -125,7 +147,7 @@ class CaseService:
                     id=item["id"],
                     role=item["role"],
                     node_type=item["node_type"],
-                    status=NodeStatus.BLOCKED if item.get("depends_on") else NodeStatus.READY,
+                    status=NodeStatus.BLOCKED if item.get("depends_on") else NodeStatus.PENDING,
                     reviews=tuple(item["reviews"]),
                     depends_on=tuple(item.get("depends_on", [])),
                     path_id=path.id,
@@ -143,6 +165,77 @@ class CaseService:
             "actor": case.owner,
             "path_attempt_ids": [attempt["id"] for attempt in attempts],
             "selected_path_ids": [path.id for path in selected_paths],
+        })
+        return case
+
+    def get_inbox(self, role: str) -> list[dict]:
+        items: list[dict] = []
+        for case in self.repository.list_cases():
+            path_titles = {
+                path.id: path.title for path in (case.manifest.paths if case.manifest else ())
+            }
+            for node in case.commitment_nodes:
+                if node.role == role and node.status is NodeStatus.PENDING:
+                    items.append({
+                        "case_id": case.id,
+                        "case_title": case.title,
+                        "path_id": node.path_id,
+                        "path_title": path_titles.get(node.path_id, node.path_id),
+                        "node": node,
+                    })
+        return items
+
+    def approve_commitment(
+        self,
+        case_id: str,
+        path_id: str,
+        node_id: str,
+        *,
+        actor: str,
+        role: str,
+    ):
+        case = self.get_case(case_id)
+        if case.phase is not OrchestrationPhase.PATH_EXPLORATION:
+            raise InvalidTransitionError("Case is not exploring a Path")
+        target_index = next(
+            (
+                index for index, node in enumerate(case.commitment_nodes)
+                if node.path_id == path_id and node.id == node_id
+            ),
+            None,
+        )
+        if target_index is None:
+            raise InvalidTransitionError(f"Unknown Commitment node: {path_id}/{node_id}")
+        target = case.commitment_nodes[target_index]
+        if target.role != role:
+            raise InvalidTransitionError(f"Commitment requires role {target.role}")
+        if target.status is not NodeStatus.PENDING:
+            raise InvalidTransitionError("Commitment is not awaiting Inbox approval")
+        if not actor.strip():
+            raise InvalidTransitionError("Commitment approval requires an actor")
+
+        nodes = list(case.commitment_nodes)
+        nodes[target_index] = replace(target, status=NodeStatus.READY)
+        ready_ids = {
+            node.id for node in nodes
+            if node.path_id == path_id and node.status is NodeStatus.READY
+        }
+        nodes = [
+            replace(node, status=NodeStatus.PENDING)
+            if node.path_id == path_id
+            and node.status is NodeStatus.BLOCKED
+            and set(node.depends_on).issubset(ready_ids)
+            else node
+            for node in nodes
+        ]
+        case.commitment_nodes = nodes
+        case.version += 1
+        case.updated_at = datetime.now(timezone.utc).isoformat()
+        self.repository.save(case, "commitment.approved", {
+            "path_id": path_id,
+            "node_id": node_id,
+            "actor": actor,
+            "role": role,
         })
         return case
 

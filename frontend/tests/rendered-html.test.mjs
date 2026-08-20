@@ -20,8 +20,13 @@ test("server-renders the Case workspace", async () => {
   const html = await response.text();
   assert.match(html, /Agentic Case Management/);
   assert.match(html, /订单预计延期/);
-  assert.match(html, /Case Owner Proposal/);
-  assert.match(html, /陈澄 · 订单履行经理（Case Owner）/);
+  assert.match(html, /Case 完整流转 Thread/);
+  assert.match(html, /Human Proposal/);
+  assert.match(html, /陈澄于今天 08:46 创建/);
+  assert.match(html, /平台完成 Case 受理/);
+  assert.match(html, /专业承诺汇合/);
+  assert.match(html, /Case Owner 最终决策/);
+  assert.match(html, /受控行动与结果验证/);
   assert.doesNotMatch(html, /王淼 · 主计划/);
   assert.doesNotMatch(html, /切换至该角色/);
   assert.match(html, /Demo identity simulation/);
@@ -29,15 +34,30 @@ test("server-renders the Case workspace", async () => {
   assert.doesNotMatch(html, /codex-preview|SkeletonPreview/);
 });
 
-test("client bundle uses the configured API port", async () => {
+test("client bundle uses the configured API base URL", async () => {
   const chunksDirectory = fileURLToPath(new URL("../dist/client/_next/static/chunks/", import.meta.url));
   const chunkNames = await readdir(chunksDirectory);
   const chunks = await Promise.all(
     chunkNames.filter((name) => name.endsWith(".js")).map((name) => readFile(`${chunksDirectory}/${name}`, "utf8")),
   );
   const pageChunk = chunks.find((contents) => contents.includes("/api/cases/CM-2026-014"));
-  const expectedPort = process.env.AGENTIC_CM_API_PORT ?? "8000";
+  const localEnv = await readFile(new URL("../.env.local", import.meta.url), "utf8").catch(() => "");
+  const localApiBase = localEnv.match(/^NEXT_PUBLIC_API_BASE_URL=(.+)$/m)?.[1]?.trim();
+  const expectedApiBase = process.env.NEXT_PUBLIC_API_BASE_URL
+    ?? localApiBase
+    ?? `http://localhost:${process.env.AGENTIC_CM_API_PORT ?? "8000"}`;
 
   assert.ok(pageChunk, "could not find the Case page client bundle");
-  assert.match(pageChunk, new RegExp(`http://localhost:${expectedPort}\\b`));
+  assert.ok(pageChunk.includes(expectedApiBase), `client bundle does not use ${expectedApiBase}`);
+  assert.match(pageChunk, /commitments\/.*\/approve/);
+  assert.match(pageChunk, /批准并设为 READY/);
+  assert.match(pageChunk, /等待本人批准/);
+});
+
+test("downstream DAG placement is independent from node status", async () => {
+  const pageSource = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+
+  assert.match(pageSource, /node\.depends_on\.length \? "downstream" : "upstream"/);
+  assert.match(styles, /\.dagNode\.downstream\{grid-column:1\/-1;width:48%;justify-self:center\}/);
 });

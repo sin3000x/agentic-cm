@@ -49,6 +49,14 @@ class CaseRepository:
             row = connection.execute("SELECT payload FROM cases WHERE id = ?", (case_id,)).fetchone()
         return self._decode(json.loads(row["payload"])) if row else None
 
+    def has_event(self, case_id: str, event_type: str) -> bool:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM domain_events WHERE case_id = ? AND event_type = ? LIMIT 1",
+                (case_id, event_type),
+            ).fetchone()
+        return row is not None
+
     def save(self, case: Case, event_type: str, event_payload: dict[str, Any]) -> None:
         serialized = json.dumps(case.to_dict(), ensure_ascii=False)
         with self._connect() as connection:
