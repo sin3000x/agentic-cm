@@ -273,11 +273,6 @@ class CapabilityRegistry:
             raise CapabilityConfigurationError(f"Skill assets must use a SKILL.md folder, not JSON: {path}")
         if data["status"] != "published":
             raise CapabilityConfigurationError(f"Only published assets can be loaded: {path}")
-        legacy_selector = {"policy": "match", "knowledge": "scope"}[data["kind"]]
-        if legacy_selector in data:
-            raise CapabilityConfigurationError(
-                f"{legacy_selector} was replaced by selector in {path}"
-            )
         selector = data.get("selector")
         if (
             not isinstance(selector, dict)

@@ -322,39 +322,6 @@ def test_path_scoped_capability_requires_case_type(tmp_path: Path) -> None:
         raise AssertionError("Path-scoped capabilities must also scope case_type")
 
 
-def test_policy_and_knowledge_reject_legacy_selector_names(tmp_path: Path) -> None:
-    for kind, directory, legacy_name in (
-        ("policy", "policies", "match"),
-        ("knowledge", "knowledge", "scope"),
-    ):
-        asset_dir = tmp_path / directory
-        asset_dir.mkdir()
-        asset = {
-            "schema_version": 1,
-            "kind": kind,
-            "id": f"LEGACY-{kind.upper()}",
-            "version": "1",
-            "title": "legacy selector fixture",
-            "status": "published",
-            legacy_name: {"case_type": ["ORDER_DELIVERY_RISK"]},
-        }
-        if kind == "policy":
-            asset["requirements"] = {"commitments": []}
-        else:
-            asset["source"] = {}
-            asset["content"] = {}
-        (asset_dir / "legacy.json").write_text(json.dumps(asset))
-
-        try:
-            CapabilityRegistry.from_directories(tmp_path, None)
-        except CapabilityConfigurationError as exc:
-            assert f"{legacy_name} was replaced by selector" in str(exc)
-        else:
-            raise AssertionError(f"Legacy {legacy_name} must be rejected")
-
-        (asset_dir / "legacy.json").unlink()
-
-
 def test_manifest_cannot_be_approved_twice(tmp_path: Path) -> None:
     service = make_service(tmp_path)
     orchestrate(service)
