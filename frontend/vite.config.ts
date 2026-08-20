@@ -11,10 +11,10 @@ const { d1, r2 } = hostingConfig;
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
 
-function parsePort(value: string | undefined): number {
-  const port = Number(value ?? "3000");
+function parsePort(value: string | undefined, fallback: number, variableName: string): number {
+  const port = Number(value ?? fallback);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error(`AGENTIC_CM_WEB_PORT must be an integer between 1 and 65535; received: ${value}`);
+    throw new Error(`${variableName} must be an integer between 1 and 65535; received: ${value}`);
   }
   return port;
 }
@@ -44,7 +44,8 @@ const localBindingConfig = {
 export default defineConfig(async ({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "AGENTIC_CM_");
   const host = env.AGENTIC_CM_WEB_HOST || "127.0.0.1";
-  const port = parsePort(env.AGENTIC_CM_WEB_PORT);
+  const port = parsePort(env.AGENTIC_CM_WEB_PORT, 3000, "AGENTIC_CM_WEB_PORT");
+  const apiPort = parsePort(env.AGENTIC_CM_API_PORT, 8000, "AGENTIC_CM_API_PORT");
 
   // Keep Wrangler and Miniflare state project-local. These are non-secret tool
   // settings; application environment belongs in ignored `.env*` files.
@@ -56,6 +57,9 @@ export default defineConfig(async ({ mode }) => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
+    define: {
+      "process.env.AGENTIC_CM_API_PORT": JSON.stringify(apiPort),
+    },
     server: {
       host,
       port,

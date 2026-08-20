@@ -7,7 +7,17 @@ npm ci
 npm run dev
 ```
 
-默认连接 `http://localhost:8000`。如需修改，复制 `.env.example` 为 `.env.local` 并设置 `NEXT_PUBLIC_API_BASE_URL`。
+默认连接 `http://localhost:8000`。如后端使用其他端口，复制 `.env.example` 为 `.env.local` 并修改 `AGENTIC_CM_API_PORT`：
+
+```dotenv
+AGENTIC_CM_API_PORT=8001
+```
+
+如需修改协议、主机名或完整路径，则设置 `NEXT_PUBLIC_API_BASE_URL`；该配置优先于端口配置：
+
+```dotenv
+NEXT_PUBLIC_API_BASE_URL=http://localhost:8001
+```
 
 本地监听地址和端口也通过 `.env.local` 配置：
 

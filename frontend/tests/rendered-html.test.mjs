@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { readFile, readdir } from "node:fs/promises";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 async function render() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
@@ -25,4 +27,17 @@ test("server-renders the Case workspace", async () => {
   assert.match(html, /Demo identity simulation/);
   assert.match(html, /不连接或修改 ERP/);
   assert.doesNotMatch(html, /codex-preview|SkeletonPreview/);
+});
+
+test("client bundle uses the configured API port", async () => {
+  const chunksDirectory = fileURLToPath(new URL("../dist/client/_next/static/chunks/", import.meta.url));
+  const chunkNames = await readdir(chunksDirectory);
+  const chunks = await Promise.all(
+    chunkNames.filter((name) => name.endsWith(".js")).map((name) => readFile(`${chunksDirectory}/${name}`, "utf8")),
+  );
+  const pageChunk = chunks.find((contents) => contents.includes("/api/cases/CM-2026-014"));
+  const expectedPort = process.env.AGENTIC_CM_API_PORT ?? "8000";
+
+  assert.ok(pageChunk, "could not find the Case page client bundle");
+  assert.match(pageChunk, new RegExp(`http://localhost:${expectedPort}\\b`));
 });
