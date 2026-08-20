@@ -2,11 +2,10 @@
   "schema_version": 1,
   "kind": "policy",
   "id": "POL-MY-COMPANY-REGION-001",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "title": "目标地区认证检查要求",
   "status": "published",
   "selector": {
-    "organization": ["demo-supply-chain"],
     "case_type": ["ORDER_DELIVERY_RISK"],
     "path_definition": ["MaterialSubstitution"]
   },

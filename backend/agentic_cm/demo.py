@@ -3,7 +3,6 @@ from .domain import Case, CaseStatus, OrchestrationPhase
 
 def demo_cases() -> list[Case]:
     classification = {
-        "organization": "demo-supply-chain",
         "case_type": "ORDER_DELIVERY_RISK",
     }
     primary = Case(

@@ -66,8 +66,8 @@ def test_orchestrator_builds_manifest_from_open_delay_case(tmp_path: Path) -> No
         "MaterialSubstitution", "SupplyExpediting", "OrderSplit"
     ]
     assert set(case.manifest.policy_refs) == {
-        "POL-SUBSTITUTION-3@3.1.0", "POL-CUSTOMER-2@2.2.0",
-        "POL-EXPEDITING-1@1.1.0", "POL-ORDER-SPLIT-1@1.1.0",
+        "POL-SUBSTITUTION-3@3.2.0", "POL-CUSTOMER-2@2.3.0",
+        "POL-EXPEDITING-1@1.2.0", "POL-ORDER-SPLIT-1@1.2.0",
     }
     assert {item["id"] for item in case.manifest.capability_snapshot["compiled_policy"]["commitments"]} == {
         "SUPPLY", "TECH", "CUSTOMER"
@@ -124,7 +124,7 @@ def test_paths_owning_skill_requires_one_case_type_binding(tmp_path: Path) -> No
     }))
     (builtin / "skill-bindings.json").write_text(json.dumps({
         "schema_version": 1,
-        "bindings": {"unscoped-planning": {"selector": {"organization": ["demo"]}}},
+        "bindings": {"unscoped-planning": {"selector": {"case_type": ["ONE", "TWO"]}}},
     }))
 
     try:
@@ -174,7 +174,6 @@ def test_local_asset_replaces_builtin_without_editing_builtin(tmp_path: Path) ->
 
     registry = CapabilityRegistry.from_directories(DEFAULT_BUILTIN_ROOT, tmp_path / "local")
     resolution = registry.resolve({
-        "organization": "demo-supply-chain",
         "case_type": "ORDER_DELIVERY_RISK",
         "path_definition": "MaterialSubstitution",
     })
@@ -186,7 +185,6 @@ def test_local_asset_replaces_builtin_without_editing_builtin(tmp_path: Path) ->
     local_copy.write_text(content.replace("Analyze strictly only", "Analyze cautiously only"))
     reloaded = CapabilityRegistry.from_directories(DEFAULT_BUILTIN_ROOT, tmp_path / "local")
     assert reloaded.resolve({
-        "organization": "demo-supply-chain",
         "case_type": "ORDER_DELIVERY_RISK",
         "path_definition": "MaterialSubstitution",
     }).skills[0].version != local_version
@@ -201,7 +199,6 @@ def test_developer_can_add_new_local_assets_with_unrelated_filenames() -> None:
     local_examples = repository_root / "examples" / "local-capabilities"
     registry = CapabilityRegistry.from_directories(DEFAULT_BUILTIN_ROOT, local_examples)
     resolution = registry.resolve({
-        "organization": "demo-supply-chain",
         "case_type": "ORDER_DELIVERY_RISK",
         "path_definition": "MaterialSubstitution",
     })
@@ -320,6 +317,29 @@ def test_path_scoped_capability_requires_case_type(tmp_path: Path) -> None:
         assert "without case_type" in str(exc)
     else:
         raise AssertionError("Path-scoped capabilities must also scope case_type")
+
+
+def test_selector_rejects_fields_outside_initial_contract(tmp_path: Path) -> None:
+    policy_dir = tmp_path / "builtin" / "policies"
+    policy_dir.mkdir(parents=True)
+    policy = {
+        "schema_version": 1,
+        "kind": "policy",
+        "id": "POL-UNSUPPORTED-SELECTOR",
+        "version": "1",
+        "title": "unsupported selector fixture",
+        "status": "published",
+        "selector": {"business_unit": ["demo"]},
+        "requirements": {"commitments": []},
+    }
+    (policy_dir / "unsupported.json").write_text(json.dumps(policy))
+
+    try:
+        CapabilityRegistry.from_directories(tmp_path / "builtin", None)
+    except CapabilityConfigurationError as exc:
+        assert "Unsupported selector fields ['business_unit']" in str(exc)
+    else:
+        raise AssertionError("Initial selectors must use only case_type and path_definition")
 
 
 def test_manifest_cannot_be_approved_twice(tmp_path: Path) -> None:

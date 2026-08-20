@@ -2,11 +2,10 @@
   "schema_version": 1,
   "kind": "policy",
   "id": "POL-SUBSTITUTION-3",
-  "version": "3.1.0",
+  "version": "3.2.0",
   "title": "替代物料供应与技术可行性",
   "status": "published",
   "selector": {
-    "organization": ["demo-supply-chain"],
     "case_type": ["ORDER_DELIVERY_RISK"],
     "path_definition": ["MaterialSubstitution"]
   },
