@@ -29,7 +29,7 @@
 
 ### 2.1 Policy
 
-Policy 初版只包含结构化 `match` 和 `requirements.commitments`。`match` 的每个字段都必须命中；缺少字段视为不适用，不交给 LLM 猜测。
+Policy 初版只包含结构化 `selector` 和 `requirements.commitments`。`selector` 的每个字段都必须命中；缺少字段视为不适用，不交给 LLM 猜测。Policy、Skill 与 Knowledge 统一使用同一种 `selector` 契约，差异只在命中后的能力与约束。
 
 当前 Demo 的两个实例是：
 
@@ -74,7 +74,7 @@ Demo 的 `shortage-response-planning/paths.json` 是提拉、替代、拆分三�
 
 Knowledge 包含：
 
-- `scope`：组织、Case 类型、Path 等适用范围；
+- `selector`：组织、Case 类型、Path 等适用范围；
 - `source`：来源类型、原 Case、观察时间和审核者；
 - `confidence`：置信标记；
 - `content`：摘要与观察内容。
@@ -180,7 +180,7 @@ cp -R examples/local-capabilities/. .agentic-cm/capabilities/
   "version": "1.0.0",
   "title": "目标地区认证检查要求",
   "status": "published",
-  "match": {
+  "selector": {
     "organization": ["demo-supply-chain"],
     "case_type": ["ORDER_DELIVERY_RISK"],
     "path_definition": ["MaterialSubstitution"]
@@ -191,11 +191,11 @@ cp -R examples/local-capabilities/. .agentic-cm/capabilities/
 }
 ```
 
-只要 `match` 命中，新增 Policy 就会与内置 Policy 一起编译。责任节点依赖缺失、DAG 成环或同一节点定义冲突都会 fail closed。
+只要 `selector` 命中，新增 Policy 就会与内置 Policy 一起编译。责任节点依赖缺失、DAG 成环或同一节点定义冲突都会 fail closed。
 
 ### 4.3 接入自己的 Knowledge
 
-在本地 `knowledge/` 下放置任意文件名的 JSON，并使用新的 `id`。必须保留 `scope`、`source`、`confidence` 和 `content`，确保 Agent 能区分适用范围、证据来源和可信程度。
+在本地 `knowledge/` 下放置任意文件名的 JSON，并使用新的 `id`。必须保留 `selector`、`source`、`confidence` 和 `content`，确保 Agent 能区分适用范围、证据来源和可信程度。
 
 Knowledge 命中后会加入 Agent 上下文，但永远不会生成强制责任节点，也不能替代当前 Case 事实。
 

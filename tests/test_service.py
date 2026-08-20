@@ -66,8 +66,8 @@ def test_orchestrator_builds_manifest_from_open_delay_case(tmp_path: Path) -> No
         "MaterialSubstitution", "SupplyExpediting", "OrderSplit"
     ]
     assert set(case.manifest.policy_refs) == {
-        "POL-SUBSTITUTION-3@3.0.0", "POL-CUSTOMER-2@2.1.0",
-        "POL-EXPEDITING-1@1.0.0", "POL-ORDER-SPLIT-1@1.0.0",
+        "POL-SUBSTITUTION-3@3.1.0", "POL-CUSTOMER-2@2.2.0",
+        "POL-EXPEDITING-1@1.1.0", "POL-ORDER-SPLIT-1@1.1.0",
     }
     assert {item["id"] for item in case.manifest.capability_snapshot["compiled_policy"]["commitments"]} == {
         "SUPPLY", "TECH", "CUSTOMER"
@@ -240,7 +240,7 @@ def test_incompatible_commitment_policy_conflict_fails_closed(tmp_path: Path) ->
         "version": "1",
         "title": "conflict fixture",
         "status": "published",
-        "match": {
+        "selector": {
             "case_type": ["ORDER_DELIVERY_RISK"],
             "path_definition": ["MaterialSubstitution"],
         },
@@ -283,7 +283,7 @@ def test_initial_policy_rejects_unconsumed_generic_fields(tmp_path: Path) -> Non
         "version": "1",
         "title": "unused constraint fixture",
         "status": "published",
-        "match": {
+        "selector": {
             "case_type": ["ORDER_DELIVERY_RISK"],
             "path_definition": ["MaterialSubstitution"],
         },
@@ -309,7 +309,7 @@ def test_path_scoped_capability_requires_case_type(tmp_path: Path) -> None:
         "version": "1",
         "title": "unscoped path fixture",
         "status": "published",
-        "match": {"path_definition": ["ManualReview"]},
+        "selector": {"path_definition": ["ManualReview"]},
         "requirements": {"commitments": []},
     }
     (policy_dir / "unscoped.json").write_text(json.dumps(policy))
