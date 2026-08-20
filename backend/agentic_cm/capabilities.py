@@ -13,6 +13,7 @@ import yaml
 
 
 ASSET_KINDS = ("policy", "skill", "knowledge")
+SELECTOR_FIELDS = frozenset({"case_type", "path_definition"})
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BUILTIN_ROOT = REPOSITORY_ROOT / "capabilities" / "builtin"
 DEFAULT_LOCAL_ROOT = REPOSITORY_ROOT / ".agentic-cm" / "capabilities"
@@ -94,6 +95,26 @@ class CapabilityRegistry:
         return cls(merged)
 
     @staticmethod
+    def _validate_selector(selector: Any, label: str, path: Path) -> None:
+        if (
+            not isinstance(selector, dict)
+            or not selector
+            or any(not isinstance(values, list) or not values for values in selector.values())
+        ):
+            raise CapabilityConfigurationError(
+                f"{label} selector must map fields to non-empty lists: {path}"
+            )
+        unsupported = set(selector) - SELECTOR_FIELDS
+        if unsupported:
+            raise CapabilityConfigurationError(
+                f"Unsupported selector fields {sorted(unsupported)} for {label}: {path}"
+            )
+        if "path_definition" in selector and "case_type" not in selector:
+            raise CapabilityConfigurationError(
+                f"{label} selector selects path_definition without case_type: {path}"
+            )
+
+    @staticmethod
     def _load_skill_bindings(root: Path, *, required: bool) -> dict[str, dict[str, Any]]:
         if not root.exists():
             if required:
@@ -115,12 +136,7 @@ class CapabilityRegistry:
                 raise CapabilityConfigurationError(
                     f"Skill binding {name!r} may contain only selector: {path}"
                 )
-            if not isinstance(selector, dict) or any(not isinstance(values, list) or not values for values in selector.values()):
-                raise CapabilityConfigurationError(f"Invalid selector for skill {name!r}: {path}")
-            if "path_definition" in selector and "case_type" not in selector:
-                raise CapabilityConfigurationError(
-                    f"Skill {name!r} selects path_definition without case_type: {path}"
-                )
+            CapabilityRegistry._validate_selector(selector, f"Skill {name!r}", path)
             bindings[name] = {"selector": selector}
         return bindings
 
@@ -274,16 +290,7 @@ class CapabilityRegistry:
         if data["status"] != "published":
             raise CapabilityConfigurationError(f"Only published assets can be loaded: {path}")
         selector = data.get("selector")
-        if (
-            not isinstance(selector, dict)
-            or not selector
-            or any(not isinstance(values, list) or not values for values in selector.values())
-        ):
-            raise CapabilityConfigurationError(f"selector must map fields to non-empty lists: {path}")
-        if "path_definition" in selector and "case_type" not in selector:
-            raise CapabilityConfigurationError(
-                f"selector selects path_definition without case_type in {path}"
-            )
+        CapabilityRegistry._validate_selector(selector, data["kind"].title(), path)
         if data["kind"] == "policy" and not isinstance(data.get("requirements"), dict):
             raise CapabilityConfigurationError(f"Policy requirements must be an object: {path}")
         if data["kind"] == "policy":
@@ -459,7 +466,6 @@ def _main() -> None:
         print(json.dumps({"status": "ok", "assets": registry.list_refs()}, ensure_ascii=False, indent=2))
         return
     context = {
-        "organization": "demo-supply-chain",
         "case_type": "ORDER_DELIVERY_RISK",
         "path_definition": "MaterialSubstitution",
     }

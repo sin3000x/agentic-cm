@@ -3,7 +3,6 @@
   "bindings": {
     "shortage-response-planning": {
       "selector": {
-        "organization": ["demo-supply-chain"],
         "case_type": ["ORDER_DELIVERY_RISK"]
       }
     },
