@@ -12,16 +12,18 @@
 - [领域模型、状态机与 CommitmentDAG](docs/02-domain-lifecycle.md)
 - [Agent Adapter 契约](docs/03-agent-adapter-contract.md)
 - [Demo 剧情与 MVP 验收标准](docs/04-demo-acceptance.md)
+- [初版能力底座：Policy、Skill 与 Knowledge](docs/05-capability-foundation.md)
 
 ## 初版实现
 
 当前仓库包含一个刻意收敛的首版框架：
 
 - `backend/agentic_cm`：Python 模块化单体，领域对象、SQLite Repository、Case Service 与 FastAPI；
+- `capabilities/builtin`：可版本化的 Policy、Skill 与 Knowledge 默认资产；
 - `frontend`：React + TypeScript 工作台，使用 Vite 驱动的 vinext 构建；
-- `tests`：Manifest 批准、并行节点开放和安全 Reset 的领域测试。
+- `tests`：Manifest 能力快照、Policy 编译、并行节点、本地资产覆盖和安全 Reset 的领域测试。
 
-首个可运行切片只覆盖：查看订单延期 Case、审查 Manifest、Owner 批准 Path，以及创建包含主计划/研发并行节点的 CommitmentDAG。后续审批、修订、局部重审和最终关闭仍按验收文档逐步补齐。
+首个可运行切片覆盖：查看订单延期 Case、审查 Manifest 与冻结的能力快照、Owner 批准 Path，以及按编译后的 Policy 创建包含主计划/研发并行节点的 CommitmentDAG。后续审批、修订、局部重审和最终关闭仍按验收文档逐步补齐。
 
 ### 本地启动
 
@@ -40,6 +42,18 @@ npm run dev
 ```
 
 前端默认监听 `127.0.0.1:3000`，可在 `frontend/.env.local` 中通过 `AGENTIC_CM_WEB_HOST` 和 `AGENTIC_CM_WEB_PORT` 修改。API 文档位于 `http://localhost:8000/docs`。
+
+### 接入自己的本地能力
+
+`.agentic-cm/capabilities/` 是不入仓的本地扩展层。开发者可以新增任意自己的 Skill、Policy 和 Knowledge，不需要复制或采用仓库中的文件名：
+
+```bash
+mkdir -p .agentic-cm/capabilities
+cp -R examples/local-capabilities/. .agentic-cm/capabilities/
+PYTHONPATH=backend .venv/bin/python -m agentic_cm.capabilities validate
+```
+
+详细契约与替换规则见[能力底座文档](docs/05-capability-foundation.md)。
 
 ### 技术选择
 

@@ -8,6 +8,7 @@ htmlcov/
 .env
 .env.*
 !.env.example
+.agentic-cm/
 data/*.db
 data/*.db-*
 data/*.db-journal

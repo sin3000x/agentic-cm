@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "kind": "policy",
+  "id": "POL-SUBSTITUTION-3",
+  "version": "3.0.0",
+  "title": "替代物料供应与技术可行性",
+  "status": "published",
+  "match": {
+    "organization": ["demo-supply-chain"],
+    "case_type": ["ORDER_DELIVERY_RISK"],
+    "path_definition": ["MaterialSubstitution"]
+  },
+  "requirements": {
+    "commitments": [
+      {
+        "id": "SUPPLY",
+        "role": "主计划",
+        "node_type": "APPROVAL",
+        "reviews": ["supply"],
+        "depends_on": []
+      },
+      {
+        "id": "TECH",
+        "role": "研发",
+        "node_type": "APPROVAL",
+        "reviews": ["technical"],
+        "depends_on": []
+      }
+    ]
+  }
+}

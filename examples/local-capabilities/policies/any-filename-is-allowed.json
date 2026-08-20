@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "kind": "policy",
+  "id": "POL-MY-COMPANY-REGION-001",
+  "version": "1.0.0",
+  "title": "目标地区认证检查要求",
+  "status": "published",
+  "match": {
+    "organization": ["demo-supply-chain"],
+    "case_type": ["ORDER_DELIVERY_RISK"],
+    "path_definition": ["MaterialSubstitution"]
+  },
+  "requirements": {
+    "commitments": [
+      {
+        "id": "REGION-COMPLIANCE",
+        "role": "合规专员",
+        "node_type": "REVIEW",
+        "reviews": ["customer"],
+        "depends_on": ["TECH"]
+      }
+    ]
+  }
+}

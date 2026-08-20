@@ -13,10 +13,63 @@ const cases = [
 
 const stages = ["Case 受理", "Manifest 评审", "Path 探索", "最终决策"];
 
+type CapabilityAsset = {
+  id?: string;
+  title?: string;
+  version?: string;
+  purpose?: string;
+  instructions?: string[];
+  requirements?: { commitments?: Array<{ role: string }> };
+  content?: { summary?: string };
+  resolved_ref: { id: string; version: string; source: string; digest: string };
+};
+
+type CapabilityDetails = {
+  snapshot_status: string;
+  assets: {
+    policies: CapabilityAsset[];
+    skills: CapabilityAsset[];
+    knowledge: CapabilityAsset[];
+  };
+};
+
+function CapabilityPanel({ details }: { details: CapabilityDetails }) {
+  const groups = [
+    { key: "policies" as const, label: "POLICY · 强制责任", note: "由平台结构化匹配并编译为 CommitmentDAG 责任节点" },
+    { key: "skills" as const, label: "SKILL · 认知方法", note: "由 Agent Adapter 使用，不能代替业务审批" },
+    { key: "knowledge" as const, label: "KNOWLEDGE · 建议材料", note: "带来源的历史观察，不是当前 Case 事实" },
+  ];
+  return (
+    <section className="capabilityPanel" aria-label="Manifest 能力快照">
+      <div className="capabilityHeader">
+        <span><strong>Execution Layer · 能力快照</strong><small>{details.snapshot_status === "frozen" ? "已随 Manifest 冻结" : "当前预览"}</small></span>
+        <em>版本 + SHA-256</em>
+      </div>
+      <div className="capabilityGroups">
+        {groups.map((group) => (
+          <div className="capabilityGroup" key={group.key}>
+            <div><strong>{group.label}</strong><small>{group.note}</small></div>
+            {details.assets[group.key].map((asset) => (
+              <article key={asset.resolved_ref.id}>
+                <span><b>{asset.title ?? asset.resolved_ref.id}</b><small>{asset.resolved_ref.id} · v{asset.resolved_ref.version}</small></span>
+                <span className={`assetSource ${asset.resolved_ref.source}`}>{asset.resolved_ref.source}</span>
+                <code>{asset.resolved_ref.digest.slice(7, 19)}</code>
+                <p>{asset.purpose ?? asset.content?.summary ?? asset.instructions?.[0] ?? `${asset.requirements?.commitments?.length ?? 0} 个强制责任节点`}</p>
+              </article>
+            ))}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export default function Home() {
   const [approved, setApproved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [capabilities, setCapabilities] = useState<CapabilityDetails | null>(null);
+  const [showCapabilities, setShowCapabilities] = useState(false);
 
   useEffect(() => {
     fetch(`${API_BASE}/api/cases/CM-2026-014`)
@@ -49,11 +102,30 @@ export default function Home() {
       });
       if (!response.ok) throw new Error("reset failed");
       setApproved(false);
+      setCapabilities(null);
+      setShowCapabilities(false);
       setMessage("Golden Path 演示数据已重置。 ");
     } catch {
       setMessage("重置失败：本地 API 未连接。 ");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function toggleCapabilities() {
+    if (showCapabilities) {
+      setShowCapabilities(false);
+      return;
+    }
+    setShowCapabilities(true);
+    if (capabilities) return;
+    try {
+      const response = await fetch(`${API_BASE}/api/cases/CM-2026-014/capabilities`);
+      if (!response.ok) throw new Error("capabilities failed");
+      setCapabilities(await response.json());
+    } catch {
+      setShowCapabilities(false);
+      setMessage("能力快照读取失败：请确认本地 API 已启动。 ");
     }
   }
 
@@ -134,6 +206,8 @@ export default function Home() {
                     <span><strong>0</strong><small>preserved commitments</small></span>
                     <span><strong>0</strong><small>re-review avoided</small></span>
                   </div>
+                  <button className="linkButton capabilityToggle" onClick={toggleCapabilities}>{showCapabilities ? "收起能力快照 ↑" : "查看本次能力快照 →"}</button>
+                  {showCapabilities && capabilities && <CapabilityPanel details={capabilities} />}
                 </>
               ) : (
                 <>
@@ -152,8 +226,9 @@ export default function Home() {
                   <span><small>强制 Policy</small><strong>2</strong></span>
                   <span><small>历史 Experience</small><strong>1</strong></span>
                 </div>
-                <button className="linkButton">查看执行层与审批 DAG →</button>
+                <button className="linkButton" onClick={toggleCapabilities}>{showCapabilities ? "收起执行层 ↑" : "查看执行层与能力快照 →"}</button>
               </article>
+              {showCapabilities && capabilities && <CapabilityPanel details={capabilities} />}
               <div className="approvalBox">
                 <span><strong>批准范围</strong><small>批准 Decision Layer 中保留的全部 Path；不代表逐项审批底层 Skill 或 Tool。</small></span>
                 <button className="primary" disabled={busy} onClick={approveManifest}>{busy ? "处理中…" : "批准并启动 Path"}</button>

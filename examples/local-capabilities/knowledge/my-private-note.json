@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "kind": "knowledge",
+  "id": "KNOW-MY-COMPANY-REGION-001",
+  "version": "1.0.0",
+  "title": "目标地区认证资料位置",
+  "status": "published",
+  "knowledge_type": "reference_note",
+  "scope": {
+    "organization": ["demo-supply-chain"],
+    "case_type": ["ORDER_DELIVERY_RISK"],
+    "path_definition": ["MaterialSubstitution"]
+  },
+  "source": {
+    "type": "internal_reference",
+    "reference": "demo://regional-certification-catalog",
+    "reviewed_at": "2026-08-19",
+    "reviewed_by": "本地开发者"
+  },
+  "confidence": "medium",
+  "content": {
+    "summary": "演示环境中的目标地区认证参考资料；实际结论仍需当前 Case 责任人确认。",
+    "observations": [
+      "资料只用于提示检查范围，不能直接生成合规承诺。"
+    ]
+  }
+}

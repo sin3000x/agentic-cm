@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "kind": "knowledge",
+  "id": "KNOW-2025-041",
+  "version": "1.0.0",
+  "title": "同地区替代料确认历史观察",
+  "status": "published",
+  "knowledge_type": "experience",
+  "scope": {
+    "organization": ["demo-supply-chain"],
+    "case_type": ["ORDER_DELIVERY_RISK"],
+    "path_definition": ["MaterialSubstitution"]
+  },
+  "source": {
+    "type": "closed_case",
+    "case_id": "CM-2026-006",
+    "observed_at": "2026-05-18",
+    "reviewed_by": "供应链知识管理员"
+  },
+  "confidence": "medium",
+  "content": {
+    "summary": "同类替代中，客户地区认证差异曾成为最后阶段返工的主要原因。",
+    "observations": [
+      "在供应与技术评审时同时覆盖 A/B，可在客户拒绝 A 后保留对 B 仍有效的上游承诺。",
+      "客户接受度仍必须由当前 Case 的一线经理确认，历史案例不能代替本次承诺。"
+    ]
+  }
+}

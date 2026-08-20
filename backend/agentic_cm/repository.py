@@ -80,7 +80,11 @@ class CaseRepository:
             manifest = Manifest(
                 id=manifest_data["id"], revision=manifest_data["revision"], status=manifest_data["status"],
                 paths=tuple(ManifestPath(**item) for item in manifest_data["paths"]),
-                policy_refs=tuple(manifest_data["policy_refs"]), experience_refs=tuple(manifest_data["experience_refs"]),
+                policy_refs=tuple(manifest_data["policy_refs"]),
+                skill_refs=tuple(manifest_data.get("skill_refs", [])),
+                knowledge_refs=tuple(manifest_data.get("knowledge_refs", manifest_data.get("experience_refs", []))),
+                experience_refs=tuple(manifest_data.get("experience_refs", [])),
+                capability_snapshot=manifest_data.get("capability_snapshot"),
             )
         nodes = [
             CommitmentNode(
@@ -92,6 +96,7 @@ class CaseRepository:
         return Case(
             id=data["id"], title=data["title"], description=data["description"], status=CaseStatus(data["status"]),
             phase=OrchestrationPhase(data["phase"]), owner=data["owner"], owner_role=data["owner_role"],
-            business_payload=data["business_payload"], human_proposal=data.get("human_proposal"), manifest=manifest,
+            business_payload=data["business_payload"], human_proposal=data.get("human_proposal"),
+            classification=data.get("classification", {}), manifest=manifest,
             path_attempt=data.get("path_attempt"), commitment_nodes=nodes, version=data["version"], updated_at=data["updated_at"],
         )

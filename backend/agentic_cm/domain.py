@@ -52,7 +52,10 @@ class Manifest:
     status: str
     paths: tuple[ManifestPath, ...]
     policy_refs: tuple[str, ...]
+    skill_refs: tuple[str, ...]
+    knowledge_refs: tuple[str, ...]
     experience_refs: tuple[str, ...]
+    capability_snapshot: dict[str, Any] | None
 
 
 @dataclass
@@ -66,6 +69,7 @@ class Case:
     owner_role: str
     business_payload: dict[str, Any]
     human_proposal: dict[str, Any] | None
+    classification: dict[str, str] = field(default_factory=dict)
     manifest: Manifest | None = None
     path_attempt: dict[str, Any] | None = None
     commitment_nodes: list[CommitmentNode] = field(default_factory=list)
