@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "kind": "policy",
+  "id": "POL-ORDER-SPLIT-1",
+  "version": "1.0.0",
+  "title": "订单拆分履约确认",
+  "status": "published",
+  "match": {
+    "organization": ["demo-supply-chain"],
+    "case_type": ["ORDER_DELIVERY_RISK"],
+    "path_definition": ["OrderSplit"]
+  },
+  "requirements": {
+    "commitments": [
+      {
+        "id": "SPLIT-PLAN",
+        "role": "主计划",
+        "node_type": "APPROVAL",
+        "reviews": ["available_quantity", "shipment_batches"],
+        "depends_on": []
+      },
+      {
+        "id": "SPLIT-CUSTOMER",
+        "role": "一线经理",
+        "node_type": "REVIEW",
+        "reviews": ["customer_acceptance", "remaining_commitment"],
+        "depends_on": ["SPLIT-PLAN"]
+      }
+    ]
+  }
+}

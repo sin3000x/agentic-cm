@@ -60,6 +60,7 @@ export default defineConfig(async ({ mode }) => {
       host,
       port,
       strictPort: true,
+      allowedHosts: true,
       ...(isCodexSeatbeltSandbox
         ? { watch: { useFsEvents: false, usePolling: true } }
         : {}),

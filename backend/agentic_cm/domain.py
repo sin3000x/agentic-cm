@@ -34,6 +34,7 @@ class CommitmentNode:
     status: NodeStatus
     reviews: tuple[str, ...]
     depends_on: tuple[str, ...] = ()
+    path_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,9 @@ class Manifest:
     knowledge_refs: tuple[str, ...]
     experience_refs: tuple[str, ...]
     capability_snapshot: dict[str, Any] | None
+    planner_profile: str = "unknown"
+    generated_from_case_version: int = 0
+    capability_snapshots: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass
@@ -72,6 +76,7 @@ class Case:
     classification: dict[str, str] = field(default_factory=dict)
     manifest: Manifest | None = None
     path_attempt: dict[str, Any] | None = None
+    path_attempts: list[dict[str, Any]] = field(default_factory=list)
     commitment_nodes: list[CommitmentNode] = field(default_factory=list)
     version: int = 1
     updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())

@@ -58,16 +58,17 @@ material-substitution-analysis/
 └── assets/           # 可选；模板或输出资源
 ```
 
-这样可以直接复用已有 Skill 文件夹，也能让不同 Agent Runtime 使用同一份能力。平台不向 `SKILL.md` frontmatter 注入私有字段。
+这样可以直接复用已有 Skill 文件夹，也能让不同 Agent Runtime 使用同一份能力。`SKILL.md` frontmatter 始终只包含标准的 `name` 和 `description`。
 
-Path 与 Skill 的确定性关系单独放在 `capabilities/builtin/skill-bindings.json`。Manifest 解析时：
+Path 与 Skill 的确定性关系单独放在 `capabilities/builtin/skill-bindings.json`。它有两种用途：
 
 - 读取标准 `SKILL.md` 的 `name` 和 `description`；
-- 用平台侧 binding 匹配 `path_definition`；
+- Case-level orchestration Skill 用 binding selector 精确命中一个 `case_type`，并在同一 Skill 文件夹的 `paths.json` 中拥有可以探索的 `1..N` 条 Path；
+- Path-level execution Skill 用同时包含 `case_type` 与 `path_definition` 的 selector 注入某一条 Path；
 - 对整个 Skill 文件夹计算 SHA-256，任一脚本、参考资料或资产变化都会产生新版本摘要；
 - 冻结 `SKILL.md` 正文和文件清单，供审计与 Adapter 消费。
 
-Demo 的 `material-substitution-analysis/SKILL.md` 明确只分析已批准候选 A/B，把缺证据判断标成待确认，并禁止替任何业务角色作承诺。
+Demo 的 `shortage-response-planning/paths.json` 是提拉、替代、拆分三条定义的唯一来源，`SKILL.md` 只说明如何根据当前 Case 解释和排序它们。`material-substitution-analysis`、`supply-expediting-analysis` 与 `order-split-analysis` 分别负责三条 Path 获批后的具体分析。Policy 只负责强制人类责任与依赖，不代替执行 Skill。
 
 ### 2.3 Knowledge
 
@@ -83,11 +84,13 @@ Demo 的 `KNOW-2025-041` 来自已关闭 Case，提示“地区认证可能导�
 ## 3. Demo 请求链
 
 ```text
-Case classification + selected Path
+Case classification
   -> CapabilityRegistry 合并 builtin 与 local 层
-  -> Policy 结构化匹配并编译 CommitmentDAG 责任节点
-  -> Skill / Knowledge 按 selector/scope 解析
-  -> Manifest 冻结资产正文、ID、version、source、SHA-256 和 compiled_policy
+  -> 按 case_type 命中 orchestration Skill，并读取其 paths.json
+  -> Planner 为 Skill 声明的全部 Path 生成 rationale 和排序
+  -> 每条 Path 必须匹配 Path-level execution Skill 与强制 Policy
+  -> 再解析该 Path 的全部 Skill / Policy / Knowledge
+  -> Manifest 按 Path 冻结资产正文、版本、摘要和 compiled_policy
   -> Owner 批准 Decision Layer
   -> CaseService 只按 frozen compiled_policy 创建 CommitmentDAG
 ```
@@ -131,22 +134,39 @@ cp -R examples/local-capabilities/. .agentic-cm/capabilities/
 3. `SKILL.md` 至少包含字符串类型的 `name` 和 `description`；
 4. 可原样保留已有的 `scripts/`、`references/`、`assets/`、`agents/` 等资源。
 
-平台不会根据自然语言描述猜测它属于哪个业务 Path。请在本地 `skill-bindings.json` 中显式绑定：
+平台不会仅根据正文自然语言猜测业务 Path。一个能为缺料 Case 提出多条 Path 的 orchestration Skill，应在 Skill 文件夹中增加 `paths.json`：
+
+```json
+{
+  "schema_version": 1,
+  "paths": [
+    {
+      "id": "SupplyExpediting",
+      "title": "供应提拉",
+      "description": "评估供应与物流加速方案。"
+    }
+  ]
+}
+```
+
+`skill-bindings.json` 只负责说明什么 Case 会命中这个 Skill：
 
 ```json
 {
   "schema_version": 1,
   "bindings": {
-    "regional-certification-check": {
+    "my-shortage-planning": {
       "selector": {
-        "path_definition": ["MaterialSubstitution"]
+        "case_type": ["ORDER_DELIVERY_RISK"]
       }
     }
   }
 }
 ```
 
-未绑定的 Skill 仍会被加载和校验，但不会自动加入 Manifest。这样可以复用第三方 Skill，同时避免错误注入业务流程。
+拥有 `paths.json` 的 Skill 必须通过 binding 精确绑定一个 `case_type`，所以不同 Case 类型自然拥有不同 Path 集合。`paths.json` 写一条，Manifest 就只有一条；写三条，Manifest 必须包含三条。真正进入探索的子集由 Owner 在 Manifest Review 中单选或多选。
+
+每条声明的 Path 还必须命中至少一个 Path-level execution Skill 和至少一个能编译出 Commitment 的 Policy；任意一条缺失都会让本次编排整体 fail closed，避免 Skill 声明三条但 Manifest 静默缩水。Path-level Skill、Policy 和 Knowledge 引用 Path 时都必须同时声明 `case_type` 与 `path_definition`，避免不同 Case 类型的同名 Path 串用能力。
 
 ### 4.2 接入自己的 Policy
 

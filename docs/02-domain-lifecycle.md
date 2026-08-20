@@ -72,13 +72,13 @@ Manifest 记录采用、部分采用或未采用的 HumanProposal 版本及理�
 
 ### 2.3 PathDefinition 与 PathAttempt
 
-`PathDefinition` 表达组织已知解决思路，例如 `MaterialSubstitution`。它可以包含：
+`PathDefinition` 表达组织针对某个 `case_type` 认可的解决思路，例如 `ORDER_DELIVERY_RISK` 下的 `MaterialSubstitution`。不同 Case 类型由各自的编排 Skill 拥有独立集合。初版定义刻意只包含：
 
-- 目标；
-- 适用条件；
-- 默认 CapabilityBundle；
-- 默认 CommitmentDAG 模板；
-- 成功证据定义。
+- `id`；
+- `title`；
+- `description`。
+
+本次 Case 为什么值得探索该 Path 是 Planner 产生的 Manifest `rationale`，不属于静态定义。执行方法来自 Path-level Skill，强制责任与依赖来自 Policy，均不塞入 PathDefinition。
 
 `PathAttempt` 是某个定义在具体 Case 中的一次探索。相同 PathDefinition 可以再次尝试，但必须创建新的 PathAttempt，不能覆盖前次失败记录。
 

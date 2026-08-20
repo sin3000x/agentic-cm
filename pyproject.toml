@@ -5,13 +5,15 @@ description = "Case-driven supply-chain exception collaboration demo"
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.116,<1",
+  "httpx>=0.28,<1",
   "pydantic>=2.11,<3",
+  "python-dotenv>=1.1,<2",
   "PyYAML>=6.0,<7",
   "uvicorn[standard]>=0.35,<1",
 ]
 
 [project.optional-dependencies]
-dev = ["httpx>=0.28,<1", "pytest>=8.4,<9"]
+dev = ["pytest>=8.4,<9"]
 
 [build-system]
 requires = ["setuptools>=80"]
