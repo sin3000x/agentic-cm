@@ -2,10 +2,10 @@
   "schema_version": 1,
   "kind": "policy",
   "id": "POL-EXPEDITING-1",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "title": "供应提拉可行性确认",
   "status": "published",
-  "match": {
+  "selector": {
     "organization": ["demo-supply-chain"],
     "case_type": ["ORDER_DELIVERY_RISK"],
     "path_definition": ["SupplyExpediting"]

@@ -66,8 +66,8 @@ def test_orchestrator_builds_manifest_from_open_delay_case(tmp_path: Path) -> No
         "MaterialSubstitution", "SupplyExpediting", "OrderSplit"
     ]
     assert set(case.manifest.policy_refs) == {
-        "POL-SUBSTITUTION-3@3.0.0", "POL-CUSTOMER-2@2.1.0",
-        "POL-EXPEDITING-1@1.0.0", "POL-ORDER-SPLIT-1@1.0.0",
+        "POL-SUBSTITUTION-3@3.1.0", "POL-CUSTOMER-2@2.2.0",
+        "POL-EXPEDITING-1@1.1.0", "POL-ORDER-SPLIT-1@1.1.0",
     }
     assert {item["id"] for item in case.manifest.capability_snapshot["compiled_policy"]["commitments"]} == {
         "SUPPLY", "TECH", "CUSTOMER"
@@ -240,7 +240,7 @@ def test_incompatible_commitment_policy_conflict_fails_closed(tmp_path: Path) ->
         "version": "1",
         "title": "conflict fixture",
         "status": "published",
-        "match": {
+        "selector": {
             "case_type": ["ORDER_DELIVERY_RISK"],
             "path_definition": ["MaterialSubstitution"],
         },
@@ -283,7 +283,7 @@ def test_initial_policy_rejects_unconsumed_generic_fields(tmp_path: Path) -> Non
         "version": "1",
         "title": "unused constraint fixture",
         "status": "published",
-        "match": {
+        "selector": {
             "case_type": ["ORDER_DELIVERY_RISK"],
             "path_definition": ["MaterialSubstitution"],
         },
@@ -309,7 +309,7 @@ def test_path_scoped_capability_requires_case_type(tmp_path: Path) -> None:
         "version": "1",
         "title": "unscoped path fixture",
         "status": "published",
-        "match": {"path_definition": ["ManualReview"]},
+        "selector": {"path_definition": ["ManualReview"]},
         "requirements": {"commitments": []},
     }
     (policy_dir / "unscoped.json").write_text(json.dumps(policy))
@@ -320,6 +320,39 @@ def test_path_scoped_capability_requires_case_type(tmp_path: Path) -> None:
         assert "without case_type" in str(exc)
     else:
         raise AssertionError("Path-scoped capabilities must also scope case_type")
+
+
+def test_policy_and_knowledge_reject_legacy_selector_names(tmp_path: Path) -> None:
+    for kind, directory, legacy_name in (
+        ("policy", "policies", "match"),
+        ("knowledge", "knowledge", "scope"),
+    ):
+        asset_dir = tmp_path / directory
+        asset_dir.mkdir()
+        asset = {
+            "schema_version": 1,
+            "kind": kind,
+            "id": f"LEGACY-{kind.upper()}",
+            "version": "1",
+            "title": "legacy selector fixture",
+            "status": "published",
+            legacy_name: {"case_type": ["ORDER_DELIVERY_RISK"]},
+        }
+        if kind == "policy":
+            asset["requirements"] = {"commitments": []}
+        else:
+            asset["source"] = {}
+            asset["content"] = {}
+        (asset_dir / "legacy.json").write_text(json.dumps(asset))
+
+        try:
+            CapabilityRegistry.from_directories(tmp_path, None)
+        except CapabilityConfigurationError as exc:
+            assert f"{legacy_name} was replaced by selector" in str(exc)
+        else:
+            raise AssertionError(f"Legacy {legacy_name} must be rejected")
+
+        (asset_dir / "legacy.json").unlink()
 
 
 def test_manifest_cannot_be_approved_twice(tmp_path: Path) -> None:

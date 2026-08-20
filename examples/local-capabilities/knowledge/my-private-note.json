@@ -2,11 +2,11 @@
   "schema_version": 1,
   "kind": "knowledge",
   "id": "KNOW-MY-COMPANY-REGION-001",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "title": "目标地区认证资料位置",
   "status": "published",
   "knowledge_type": "reference_note",
-  "scope": {
+  "selector": {
     "organization": ["demo-supply-chain"],
     "case_type": ["ORDER_DELIVERY_RISK"],
     "path_definition": ["MaterialSubstitution"]

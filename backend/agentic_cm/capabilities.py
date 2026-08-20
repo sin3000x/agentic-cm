@@ -273,13 +273,21 @@ class CapabilityRegistry:
             raise CapabilityConfigurationError(f"Skill assets must use a SKILL.md folder, not JSON: {path}")
         if data["status"] != "published":
             raise CapabilityConfigurationError(f"Only published assets can be loaded: {path}")
-        selector_name = {"policy": "match", "knowledge": "scope"}[data["kind"]]
-        selector = data.get(selector_name, {})
-        if not isinstance(selector, dict) or any(not isinstance(values, list) or not values for values in selector.values()):
-            raise CapabilityConfigurationError(f"{selector_name} must map fields to non-empty lists: {path}")
+        legacy_selector = {"policy": "match", "knowledge": "scope"}[data["kind"]]
+        if legacy_selector in data:
+            raise CapabilityConfigurationError(
+                f"{legacy_selector} was replaced by selector in {path}"
+            )
+        selector = data.get("selector")
+        if (
+            not isinstance(selector, dict)
+            or not selector
+            or any(not isinstance(values, list) or not values for values in selector.values())
+        ):
+            raise CapabilityConfigurationError(f"selector must map fields to non-empty lists: {path}")
         if "path_definition" in selector and "case_type" not in selector:
             raise CapabilityConfigurationError(
-                f"{selector_name} selects path_definition without case_type in {path}"
+                f"selector selects path_definition without case_type in {path}"
             )
         if data["kind"] == "policy" and not isinstance(data.get("requirements"), dict):
             raise CapabilityConfigurationError(f"Policy requirements must be an object: {path}")
@@ -384,8 +392,7 @@ class CapabilityRegistry:
 
     @staticmethod
     def _asset_matches(asset: _LoadedAsset, context: dict[str, str]) -> bool:
-        selector_name = {"policy": "match", "skill": "selector", "knowledge": "scope"}[asset.ref.kind]
-        selector = asset.data.get(selector_name)
+        selector = asset.data.get("selector")
         return isinstance(selector, dict) and bool(selector) and CapabilityRegistry._matches(selector, context)
 
     @staticmethod

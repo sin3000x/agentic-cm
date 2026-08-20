@@ -2,11 +2,11 @@
   "schema_version": 1,
   "kind": "knowledge",
   "id": "KNOW-2025-041",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "title": "同地区替代料确认历史观察",
   "status": "published",
   "knowledge_type": "experience",
-  "scope": {
+  "selector": {
     "organization": ["demo-supply-chain"],
     "case_type": ["ORDER_DELIVERY_RISK"],
     "path_definition": ["MaterialSubstitution"]
