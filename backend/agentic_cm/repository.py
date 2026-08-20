@@ -77,26 +77,37 @@ class CaseRepository:
         manifest_data = data.get("manifest")
         manifest = None
         if manifest_data:
+            paths = tuple(ManifestPath(**item) for item in manifest_data["paths"])
+            snapshots = manifest_data.get("capability_snapshots", {})
+            if not snapshots and manifest_data.get("capability_snapshot") and paths:
+                snapshots = {paths[0].id: manifest_data["capability_snapshot"]}
             manifest = Manifest(
                 id=manifest_data["id"], revision=manifest_data["revision"], status=manifest_data["status"],
-                paths=tuple(ManifestPath(**item) for item in manifest_data["paths"]),
+                paths=paths,
                 policy_refs=tuple(manifest_data["policy_refs"]),
                 skill_refs=tuple(manifest_data.get("skill_refs", [])),
                 knowledge_refs=tuple(manifest_data.get("knowledge_refs", manifest_data.get("experience_refs", []))),
                 experience_refs=tuple(manifest_data.get("experience_refs", [])),
                 capability_snapshot=manifest_data.get("capability_snapshot"),
+                planner_profile=manifest_data.get("planner_profile", "unknown"),
+                generated_from_case_version=manifest_data.get("generated_from_case_version", 0),
+                capability_snapshots=snapshots,
             )
         nodes = [
             CommitmentNode(
                 id=item["id"], role=item["role"], node_type=item["node_type"],
                 status=NodeStatus(item["status"]), reviews=tuple(item["reviews"]),
                 depends_on=tuple(item.get("depends_on", [])),
+                path_id=item.get("path_id", ""),
             ) for item in data.get("commitment_nodes", [])
         ]
+        legacy_attempt = data.get("path_attempt")
+        path_attempts = data.get("path_attempts") or ([legacy_attempt] if legacy_attempt else [])
         return Case(
             id=data["id"], title=data["title"], description=data["description"], status=CaseStatus(data["status"]),
             phase=OrchestrationPhase(data["phase"]), owner=data["owner"], owner_role=data["owner_role"],
             business_payload=data["business_payload"], human_proposal=data.get("human_proposal"),
             classification=data.get("classification", {}), manifest=manifest,
-            path_attempt=data.get("path_attempt"), commitment_nodes=nodes, version=data["version"], updated_at=data["updated_at"],
+            path_attempt=legacy_attempt, path_attempts=path_attempts,
+            commitment_nodes=nodes, version=data["version"], updated_at=data["updated_at"],
         )

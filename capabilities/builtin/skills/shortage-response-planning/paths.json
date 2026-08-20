@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "paths": [
+    {
+      "id": "MaterialSubstitution",
+      "title": "物料替代",
+      "description": "评估已批准候选物料的供应、技术与客户接受度，形成可审查的交付建议。"
+    },
+    {
+      "id": "SupplyExpediting",
+      "title": "供应提拉",
+      "description": "确认供应商能否提前齐套、加急生产或调整运输，以缩小订单交付缺口。"
+    },
+    {
+      "id": "OrderSplit",
+      "title": "订单拆分",
+      "description": "评估按可用数量、批次或交期拆分履约，在客户确认下形成分批交付建议。"
+    }
+  ]
+}

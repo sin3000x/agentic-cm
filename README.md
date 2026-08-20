@@ -13,6 +13,7 @@
 - [Agent Adapter 契约](docs/03-agent-adapter-contract.md)
 - [Demo 剧情与 MVP 验收标准](docs/04-demo-acceptance.md)
 - [初版能力底座：Policy、Skill 与 Knowledge](docs/05-capability-foundation.md)
+- [Orchestrator 架构、兼容模型接入与验收](docs/06-orchestrator.md)
 
 ## 初版实现
 
@@ -23,7 +24,7 @@
 - `frontend`：React + TypeScript 工作台，使用 Vite 驱动的 vinext 构建；
 - `tests`：Manifest 能力快照、Policy 编译、并行节点、本地资产覆盖和安全 Reset 的领域测试。
 
-首个可运行切片覆盖：查看订单延期 Case、审查 Manifest 与冻结的能力快照、Owner 批准 Path，以及按编译后的 Policy 创建包含主计划/研发并行节点的 CommitmentDAG。后续审批、修订、局部重审和最终关闭仍按验收文档逐步补齐。
+首个可运行切片覆盖：从 `INTAKE` 的订单延期 Case 触发 Orchestrator、由命中的 `ORDER_DELIVERY_RISK` 编排 Skill 提供提拉/替代/拆分三条 Path、逐 Path 匹配执行 Skill 与 Policy 并冻结能力快照，以及由 Owner 在前端单选或多选本轮探索子集。不同 `case_type` 命中各自拥有 `paths.json` 的编排 Skill。Demo 默认只勾选“替代”，批准后平台只为获批 Path 创建 PathAttempt 与 Commitment 节点；后续审批、修订、局部重审和最终关闭仍按验收文档逐步补齐。
 
 ### 本地启动
 
@@ -58,3 +59,49 @@ PYTHONPATH=backend .venv/bin/python -m agentic_cm.capabilities validate
 ### 技术选择
 
 前端采用 React + TypeScript：审批 DAG、角色切换和方案修订需要明确的交互状态，React 足够直接；首版不引入额外状态管理、通用 DAG 编辑器或组件平台。后端保持 Python 单体与标准 SQLite，Agent Adapter 仍是可替换边界，不进入领域层。
+
+### 使用兼容模型规划 Manifest
+
+项目启动时会自动读取根目录 `.env`，但不会覆盖终端中已经存在的环境变量。先复制示例：
+
+```bash
+cp .env.example .env
+```
+
+不配置模型时使用可复现的 deterministic Planner。需要使用模型时，在 `.env` 中填写：
+
+```dotenv
+AGENTIC_CM_ORCHESTRATOR_ADAPTER=openai-compatible
+AGENTIC_CM_LLM_BASE_URL=https://your-provider.example/v1
+AGENTIC_CM_LLM_API_KEY=your-key
+AGENTIC_CM_LLM_MODEL=your-model-id
+```
+
+然后正常启动，无需额外 `export`：
+
+```bash
+.venv/bin/python -m uvicorn agentic_cm.api:app --app-dir backend --reload --port 8000
+```
+
+不要把 Key 写入仓库、Capability 文件或 Case payload。具体请求链与失败边界见 [Orchestrator 实现](docs/06-orchestrator.md)。
+
+### 生成并检查 Manifest
+
+将 Demo 恢复到 `INTAKE`，调用 Orchestrator，再单独读取 Manifest：
+
+```bash
+curl -sS -X POST http://localhost:8000/api/demo/reset \
+  -H 'Content-Type: application/json' \
+  -d '{"dataset_id":"supply-chain-golden-path-v1"}'
+curl -sS -X POST http://localhost:8000/api/cases/CM-2026-014/orchestrate
+curl -sS http://localhost:8000/api/cases/CM-2026-014/manifest | python3 -m json.tool
+```
+
+也可以打开前端，点击“生成 Manifest”，然后查看 Path、Planner profile 与冻结的 Policy/Skill/Knowledge 能力快照。
+
+当 Manifest 含多条 Path 时，每条 Path 都有独立的 `capability_snapshots[path_id]`。可以单独检查：
+
+```bash
+curl -sS 'http://localhost:8000/api/cases/CM-2026-014/capabilities?path_id=PATH-02' \
+  | python3 -m json.tool
+```

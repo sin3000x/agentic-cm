@@ -57,6 +57,14 @@ class CapabilityResolution:
 
 
 @dataclass(frozen=True)
+class SkillPathDefinition:
+    id: str
+    title: str
+    description: str
+    skill_refs: tuple[AssetRef, ...]
+
+
+@dataclass(frozen=True)
 class _LoadedAsset:
     data: dict[str, Any]
     ref: AssetRef
@@ -86,7 +94,7 @@ class CapabilityRegistry:
         return cls(merged)
 
     @staticmethod
-    def _load_skill_bindings(root: Path, *, required: bool) -> dict[str, dict[str, list[str]]]:
+    def _load_skill_bindings(root: Path, *, required: bool) -> dict[str, dict[str, Any]]:
         if not root.exists():
             if required:
                 raise CapabilityConfigurationError(f"Capability directory does not exist: {root}")
@@ -100,12 +108,20 @@ class CapabilityRegistry:
             raise CapabilityConfigurationError(f"Cannot load skill bindings {path}: {exc}") from exc
         if data.get("schema_version") != 1 or not isinstance(data.get("bindings"), dict):
             raise CapabilityConfigurationError(f"Invalid skill bindings contract: {path}")
-        bindings: dict[str, dict[str, list[str]]] = {}
+        bindings: dict[str, dict[str, Any]] = {}
         for name, binding in data["bindings"].items():
             selector = binding.get("selector") if isinstance(binding, dict) else None
+            if not isinstance(binding, dict) or set(binding) != {"selector"}:
+                raise CapabilityConfigurationError(
+                    f"Skill binding {name!r} may contain only selector: {path}"
+                )
             if not isinstance(selector, dict) or any(not isinstance(values, list) or not values for values in selector.values()):
                 raise CapabilityConfigurationError(f"Invalid selector for skill {name!r}: {path}")
-            bindings[name] = selector
+            if "path_definition" in selector and "case_type" not in selector:
+                raise CapabilityConfigurationError(
+                    f"Skill {name!r} selects path_definition without case_type: {path}"
+                )
+            bindings[name] = {"selector": selector}
         return bindings
 
     @classmethod
@@ -114,7 +130,7 @@ class CapabilityRegistry:
         root: Path,
         source: str,
         target: dict[tuple[str, str], _LoadedAsset],
-        skill_bindings: dict[str, dict[str, list[str]]],
+        skill_bindings: dict[str, dict[str, Any]],
         *,
         required: bool,
     ) -> None:
@@ -156,7 +172,7 @@ class CapabilityRegistry:
     def _load_skill(
         skill_path: Path,
         source: str,
-        selector: dict[str, list[str]] | None,
+        binding: dict[str, Any] | None,
     ) -> _LoadedAsset:
         entrypoint = skill_path / "SKILL.md"
         if not entrypoint.is_file():
@@ -169,10 +185,43 @@ class CapabilityRegistry:
             frontmatter = yaml.safe_load(frontmatter_text)
         except yaml.YAMLError as exc:
             raise CapabilityConfigurationError(f"Invalid SKILL.md frontmatter {entrypoint}: {exc}") from exc
-        if not isinstance(frontmatter, dict) or not all(isinstance(frontmatter.get(key), str) for key in ("name", "description")):
+        if (
+            not isinstance(frontmatter, dict)
+            or set(frontmatter) != {"name", "description"}
+            or not all(isinstance(frontmatter.get(key), str) for key in ("name", "description"))
+        ):
             raise CapabilityConfigurationError(f"SKILL.md requires string name and description: {entrypoint}")
         if frontmatter["name"] != skill_path.name:
             raise CapabilityConfigurationError(f"Skill name must match its folder: {entrypoint}")
+        paths_file = skill_path / "paths.json"
+        declared_paths: list[dict[str, str]] = []
+        if paths_file.is_file():
+            try:
+                paths_payload = json.loads(paths_file.read_text())
+            except (OSError, json.JSONDecodeError) as exc:
+                raise CapabilityConfigurationError(f"Cannot load Skill paths {paths_file}: {exc}") from exc
+            if (
+                not isinstance(paths_payload, dict)
+                or set(paths_payload) != {"schema_version", "paths"}
+                or paths_payload.get("schema_version") != 1
+                or not isinstance(paths_payload.get("paths"), list)
+                or not paths_payload["paths"]
+            ):
+                raise CapabilityConfigurationError(f"Invalid Skill paths contract: {paths_file}")
+            for item in paths_payload["paths"]:
+                if not isinstance(item, dict) or set(item) != {"id", "title", "description"} or not all(
+                    isinstance(item[field], str) and item[field].strip()
+                    for field in ("id", "title", "description")
+                ):
+                    raise CapabilityConfigurationError(f"Invalid Skill PathDefinition: {paths_file}")
+                declared_paths.append({field: item[field].strip() for field in ("id", "title", "description")})
+            if len({item["id"] for item in declared_paths}) != len(declared_paths):
+                raise CapabilityConfigurationError(f"Skill PathDefinition ids must be unique: {paths_file}")
+            selector = binding.get("selector", {}) if binding else {}
+            if len(selector.get("case_type", [])) != 1 or "path_definition" in selector:
+                raise CapabilityConfigurationError(
+                    f"A Skill owning paths.json must bind exactly one case_type and not path_definition: {paths_file}"
+                )
 
         digest = hashlib.sha256()
         inventory: list[dict[str, Any]] = []
@@ -192,7 +241,8 @@ class CapabilityRegistry:
             "version": digest_hex[:12],
             "title": frontmatter["name"],
             "status": "published",
-            "selector": deepcopy(selector),
+            "selector": deepcopy(binding.get("selector")) if binding else None,
+            "paths": deepcopy(declared_paths),
             "description": frontmatter["description"],
             "purpose": frontmatter["description"],
             "entrypoint": "SKILL.md",
@@ -227,6 +277,10 @@ class CapabilityRegistry:
         selector = data.get(selector_name, {})
         if not isinstance(selector, dict) or any(not isinstance(values, list) or not values for values in selector.values()):
             raise CapabilityConfigurationError(f"{selector_name} must map fields to non-empty lists: {path}")
+        if "path_definition" in selector and "case_type" not in selector:
+            raise CapabilityConfigurationError(
+                f"{selector_name} selects path_definition without case_type in {path}"
+            )
         if data["kind"] == "policy" and not isinstance(data.get("requirements"), dict):
             raise CapabilityConfigurationError(f"Policy requirements must be an object: {path}")
         if data["kind"] == "policy":
@@ -272,6 +326,34 @@ class CapabilityRegistry:
                 for group, kind in (("policies", "policy"), ("skills", "skill"), ("knowledge", "knowledge"))
             },
         )
+
+    def resolve_path_candidates(self, context: dict[str, str]) -> tuple[SkillPathDefinition, ...]:
+        """Expand PathDefinitions owned by orchestration Skills matching this Case."""
+        candidates: dict[str, SkillPathDefinition] = {}
+        matched_skills = sorted(
+            (
+                asset
+                for (kind, _), asset in self._assets.items()
+                if kind == "skill" and self._asset_matches(asset, context)
+            ),
+            key=lambda asset: asset.ref.id,
+        )
+        for asset in matched_skills:
+            for definition in asset.data.get("paths", []):
+                current = candidates.get(definition["id"])
+                if current and (current.title, current.description) != (
+                    definition["title"], definition["description"]
+                ):
+                    raise CapabilityConflictError(
+                        f"Matched orchestration Skills disagree on PathDefinition {definition['id']}"
+                    )
+                candidates[definition["id"]] = SkillPathDefinition(
+                    id=definition["id"],
+                    title=definition["title"],
+                    description=definition["description"],
+                    skill_refs=(current.skill_refs if current else ()) + (asset.ref,),
+                )
+        return tuple(candidates.values())
 
     def describe_snapshot(self, snapshot: dict[str, Any]) -> dict[str, Any]:
         groups: dict[str, list[dict[str, Any]]] = {}

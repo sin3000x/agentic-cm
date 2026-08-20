@@ -3,6 +3,7 @@
   "bindings": {
     "regional-certification-check": {
       "selector": {
+        "case_type": ["ORDER_DELIVERY_RISK"],
         "path_definition": ["MaterialSubstitution"]
       }
     }

@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "kind": "policy",
+  "id": "POL-EXPEDITING-1",
+  "version": "1.0.0",
+  "title": "供应提拉可行性确认",
+  "status": "published",
+  "match": {
+    "organization": ["demo-supply-chain"],
+    "case_type": ["ORDER_DELIVERY_RISK"],
+    "path_definition": ["SupplyExpediting"]
+  },
+  "requirements": {
+    "commitments": [
+      {
+        "id": "EXPEDITE-SUPPLY",
+        "role": "采购与供应协同",
+        "node_type": "APPROVAL",
+        "reviews": ["supplier_capacity", "expedite_date"],
+        "depends_on": []
+      },
+      {
+        "id": "EXPEDITE-DELIVERY",
+        "role": "物流",
+        "node_type": "REVIEW",
+        "reviews": ["transport_option", "arrival_date"],
+        "depends_on": ["EXPEDITE-SUPPLY"]
+      }
+    ]
+  }
+}

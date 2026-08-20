@@ -19,8 +19,7 @@
 负责：
 
 - 理解 Case 与 HumanProposal；
-- 推荐和解释候选 Path；
-- 推荐 CapabilityBundle；
+- 对命中 orchestration Skill 声明的全部 Path 生成 Case-specific 解释和相关性排序；
 - 检索相关 Experience；
 - 在编译后的 Policy 约束下生成 Manifest 草案。
 
@@ -31,7 +30,7 @@
 - 替人作出 Commitment；
 - 直接创建生效的新能力、Policy 或 Experience。
 
-Policy 匹配、权限检查、角色资格、DAG 校验和版本固定由确定性平台组件处理。LLM 负责理解、排序、解释和建议。
+Path 声明、execution Skill 与 Policy 匹配、权限检查、角色资格、DAG 校验和版本固定由确定性平台组件处理。LLM 负责理解、排序与解释，不能省略或发明 Path，也不能决定 CapabilityBundle。
 
 ### 2.2 Path Agent
 
@@ -236,3 +235,9 @@ Agent 输出不合法时：
 - 一个可注入模型客户端的简单 Adapter。
 
 测试重点是输入隔离、schema 校验、非法输出无副作用、Tool 审计和 Artifact 可追溯，而不是不同框架产生相同自然语言答案。
+
+## 13. 当前已实现的 Orchestrator 切片
+
+当前代码已实现 `DeterministicPlannerAdapter` 与 `OpenAICompatiblePlannerAdapter`。两者消费同一 `PlanningContext + PlanningCandidate[]`，只返回候选 Path ID 与 rationale；Policy 匹配、Policy 编译、Manifest 冻结、Case 状态推进与事件持久化留在平台内核。详见 [Orchestrator 实现](06-orchestrator.md)。
+
+这比概念性的通用 `run(context, tool_provider, event_sink)` 更窄，是 Orchestration 任务的首个可运行子协议。后续若用 LangGraph、Deep Agents 或其他 Runtime，只允许在该 Adapter 内实现这个协议，不得把框架状态提升为 Case 权威状态。

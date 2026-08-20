@@ -33,6 +33,21 @@ type CapabilityDetails = {
   };
 };
 
+type ManifestPath = {
+  id: string;
+  definition: string;
+  title: string;
+  rationale: string;
+  selected: boolean;
+};
+
+type CapabilitySnapshot = {
+  policies: Array<{ id: string }>;
+  skills: Array<{ id: string }>;
+  knowledge: Array<{ id: string }>;
+  compiled_policy: { commitments: Array<{ id: string; depends_on?: string[] }> };
+};
+
 function CapabilityPanel({ details }: { details: CapabilityDetails }) {
   const groups = [
     { key: "policies" as const, label: "POLICY · 强制责任", note: "由平台结构化匹配并编译为 CommitmentDAG 责任节点" },
@@ -65,26 +80,70 @@ function CapabilityPanel({ details }: { details: CapabilityDetails }) {
 }
 
 export default function Home() {
+  const [phase, setPhase] = useState("INTAKE");
   const [approved, setApproved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [capabilities, setCapabilities] = useState<CapabilityDetails | null>(null);
   const [showCapabilities, setShowCapabilities] = useState(false);
+  const [manifestPaths, setManifestPaths] = useState<ManifestPath[]>([]);
+  const [capabilitySnapshots, setCapabilitySnapshots] = useState<Record<string, CapabilitySnapshot>>({});
+  const [selectedPathIds, setSelectedPathIds] = useState<string[]>([]);
+
+  function loadManifest(manifest: { paths?: ManifestPath[]; capability_snapshots?: Record<string, CapabilitySnapshot> } | null) {
+    const paths = manifest?.paths ?? [];
+    setManifestPaths(paths);
+    setCapabilitySnapshots(manifest?.capability_snapshots ?? {});
+    const substitution = paths.find((path) => path.definition === "MaterialSubstitution");
+    setSelectedPathIds(substitution ? [substitution.id] : paths.slice(0, 1).map((path) => path.id));
+  }
 
   useEffect(() => {
     fetch(`${API_BASE}/api/cases/CM-2026-014`)
       .then((response) => response.ok ? response.json() : Promise.reject())
-      .then((data) => setApproved(data.phase === "PATH_EXPLORATION"))
+      .then((data) => {
+        setPhase(data.phase);
+        setApproved(data.phase === "PATH_EXPLORATION");
+        loadManifest(data.manifest);
+        if (data.phase === "PATH_EXPLORATION") {
+          setSelectedPathIds((data.manifest?.paths ?? []).filter((path: ManifestPath) => path.selected).map((path: ManifestPath) => path.id));
+        }
+      })
       .catch(() => setMessage("API 尚未连接，当前展示固定演示数据。"));
   }, []);
+
+  async function generateManifest() {
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch(`${API_BASE}/api/cases/CM-2026-014/orchestrate`, { method: "POST" });
+      if (!response.ok) throw new Error("orchestrate failed");
+      const data = await response.json();
+      setPhase("MANIFEST_REVIEW");
+      loadManifest(data.manifest);
+      setCapabilities(null);
+      setMessage("Orchestrator 已根据 Case 与现有能力生成 Manifest，并冻结适用 Policy。 ");
+    } catch {
+      setMessage("Manifest 生成失败：请确认本地 API 与 Planner 配置。 ");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function approveManifest() {
     setBusy(true);
     setMessage("");
     try {
-      const response = await fetch(`${API_BASE}/api/cases/CM-2026-014/manifest/approve`, { method: "POST" });
+      const response = await fetch(`${API_BASE}/api/cases/CM-2026-014/manifest/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ selected_path_ids: selectedPathIds }),
+      });
       if (!response.ok) throw new Error("approve failed");
+      const data = await response.json();
+      setManifestPaths(data.manifest.paths);
       setApproved(true);
+      setPhase("PATH_EXPLORATION");
       setMessage("Manifest 已批准；主计划与研发评审已并行开放。 ");
     } catch {
       setMessage("无法连接本地 API，请先启动 Python 服务。 ");
@@ -102,14 +161,24 @@ export default function Home() {
       });
       if (!response.ok) throw new Error("reset failed");
       setApproved(false);
+      setPhase("INTAKE");
       setCapabilities(null);
       setShowCapabilities(false);
+      setManifestPaths([]);
+      setCapabilitySnapshots({});
+      setSelectedPathIds([]);
       setMessage("Golden Path 演示数据已重置。 ");
     } catch {
       setMessage("重置失败：本地 API 未连接。 ");
     } finally {
       setBusy(false);
     }
+  }
+
+  function togglePath(pathId: string) {
+    setSelectedPathIds((current) => current.includes(pathId)
+      ? current.filter((id) => id !== pathId)
+      : [...current, pathId]);
   }
 
   async function toggleCapabilities() {
@@ -174,13 +243,13 @@ export default function Home() {
           </div>
           <div className="metaRow">
             <div><small>CASE OWNER</small><strong>陈澄</strong><span>订单履行经理</span></div>
-            <div><small>当前阶段</small><strong>{approved ? "Path 探索" : "Manifest 评审"}</strong><span>{approved ? "等待并行评审" : "等待 Owner 决策"}</span></div>
+            <div><small>当前阶段</small><strong>{approved ? "Path 探索" : phase === "INTAKE" ? "Case 受理" : "Manifest 评审"}</strong><span>{approved ? "等待并行评审" : phase === "INTAKE" ? "等待 Orchestrator" : "等待 Owner 决策"}</span></div>
             <div><small>目标交付日</small><strong>2026-08-24</strong><span className="danger">预计延期 12 天</span></div>
             <div><small>最后更新</small><strong>今天 10:42</strong><span>Orchestrator</span></div>
           </div>
           <ol className="stageBar" aria-label="Case 当前进度">
             {stages.map((stage, index) => (
-              <li className={index < (approved ? 3 : 2) ? "done" : ""} key={stage}>
+              <li className={index < (approved ? 3 : phase === "INTAKE" ? 1 : 2) ? "done" : ""} key={stage}>
                 <span>{index < 1 ? "✓" : index + 1}</span><strong>{stage}</strong>
               </li>
             ))}
@@ -209,29 +278,62 @@ export default function Home() {
                   <button className="linkButton capabilityToggle" onClick={toggleCapabilities}>{showCapabilities ? "收起能力快照 ↑" : "查看本次能力快照 →"}</button>
                   {showCapabilities && capabilities && <CapabilityPanel details={capabilities} />}
                 </>
+              ) : phase === "INTAKE" ? (
+                <>
+                  <div className="panelTitle">
+                    <div><span className="agentIcon">✦</span><span><small>ORCHESTRATOR</small><h2>从 Case 组装 Manifest</h2></span></div>
+                    <span className="version">等待规划</span>
+                  </div>
+                  <p className="lead">平台根据命中的 Skill 枚举其声明的全部 PathDefinition，确定性匹配 Policy、Skill 与 Knowledge，再由 Planner 为每条 Path 排序并解释。</p>
+                  <article className="pathCard">
+                    <div className="pathHeading"><span className="pathBadge">CASE READY</span></div>
+                    <h3>订单延期 · SO-48392</h3>
+                    <p>关键物料 MCU-X7 存在 18,400 pcs 缺口。Agent 只能提出探索路径，不会执行 ERP、库存、订单或客户系统操作。</p>
+                  </article>
+                  <div className="approvalBox">
+                    <span><strong>规划边界</strong><small>Policy 由平台结构化匹配；Planner 无权发明 Path、删除强制责任或作出业务承诺。</small></span>
+                    <button className="primary" disabled={busy} onClick={generateManifest}>{busy ? "组装中…" : "生成 Manifest"}</button>
+                  </div>
+                </>
               ) : (
                 <>
               <div className="panelTitle">
                 <div><span className="agentIcon">✦</span><span><small>ORCHESTRATOR 建议</small><h2>审查 Path Manifest</h2></span></div>
                 <span className="version">v1 · 待批准</span>
               </div>
-              <p className="lead">结合当前 Case、强制 Policy 与历史 Experience，建议先探索一条最小可行路径。</p>
-              <article className="pathCard">
-                <div className="pathHeading"><span className="pathBadge">PATH 01</span><span className="recommended">推荐</span><button aria-label="移除该 Path">×</button></div>
-                <h3>Material Substitution <span>物料替代</span></h3>
-                <p>评估已经过预筛的替代物料 A / B，通过供应、技术与客户接受度的并行确认，形成可审查的交付建议。</p>
-                <div className="pathStats">
-                  <span><small>责任角色</small><strong>3</strong></span>
-                  <span><small>并行评审分支</small><strong>2</strong></span>
-                  <span><small>强制 Policy</small><strong>2</strong></span>
-                  <span><small>历史 Experience</small><strong>1</strong></span>
-                </div>
-                <button className="linkButton" onClick={toggleCapabilities}>{showCapabilities ? "收起执行层 ↑" : "查看执行层与能力快照 →"}</button>
-              </article>
+              <p className="lead">命中的缺料处理 Skill 支持以下三条 Path。Owner 可以单选或多选本轮真正进入探索的 Path；Demo 默认只选择“替代”。</p>
+              <div className="pathChoices">
+                {manifestPaths.map((path, index) => {
+                  const snapshot = capabilitySnapshots[path.id];
+                  const selected = selectedPathIds.includes(path.id);
+                  const commitments = snapshot?.compiled_policy.commitments ?? [];
+                  return (
+                    <article className={`pathCard ${selected ? "selected" : ""}`} key={path.id}>
+                      <div className="pathHeading">
+                        <span className="pathBadge">PATH {String(index + 1).padStart(2, "0")}</span>
+                        {path.definition === "MaterialSubstitution" && <span className="recommended">DEMO</span>}
+                        <label className="pathSelector">
+                          <input type="checkbox" checked={selected} onChange={() => togglePath(path.id)} />
+                          <span>{selected ? "本轮探索" : "暂不探索"}</span>
+                        </label>
+                      </div>
+                      <h3>{path.definition} <span>{path.title}</span></h3>
+                      <p>{path.rationale}</p>
+                      <div className="pathStats">
+                        <span><small>责任节点</small><strong>{commitments.length}</strong></span>
+                        <span><small>并行起点</small><strong>{commitments.filter((item) => !(item.depends_on?.length)).length}</strong></span>
+                        <span><small>强制 Policy</small><strong>{snapshot?.policies.length ?? 0}</strong></span>
+                        <span><small>命中 Skill</small><strong>{snapshot?.skills.length ?? 0}</strong></span>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+              <button className="linkButton capabilityToggle" onClick={toggleCapabilities}>{showCapabilities ? "收起替代 Path 能力快照 ↑" : "查看替代 Path 能力快照 →"}</button>
               {showCapabilities && capabilities && <CapabilityPanel details={capabilities} />}
               <div className="approvalBox">
-                <span><strong>批准范围</strong><small>批准 Decision Layer 中保留的全部 Path；不代表逐项审批底层 Skill 或 Tool。</small></span>
-                <button className="primary" disabled={busy} onClick={approveManifest}>{busy ? "处理中…" : "批准并启动 Path"}</button>
+                <span><strong>批准范围 · 已选 {selectedPathIds.length} 条</strong><small>只为勾选的 Path 创建 PathAttempt；不代表逐项审批底层 Skill 或 Tool。</small></span>
+                <button className="primary" disabled={busy || selectedPathIds.length === 0} onClick={approveManifest}>{busy ? "处理中…" : "批准并启动所选 Path"}</button>
               </div>
                 </>
               )}
