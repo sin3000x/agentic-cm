@@ -1,0 +1,82 @@
+"use client";
+
+import Link from "next/link";
+import { useState } from "react";
+
+export type SidebarIdentity = { name: string; role: string; avatar: string };
+
+type AppSidebarProps = {
+  active: "overview" | "workspace" | "inbox" | "activity";
+  identity: SidebarIdentity;
+  identities: SidebarIdentity[];
+  inboxCount?: number;
+  busy?: boolean;
+  onInboxOpen?: () => void;
+  onIdentitySelect?: (index: number) => void;
+};
+
+export default function AppSidebar({
+  active,
+  identity,
+  identities,
+  inboxCount = 3,
+  busy = false,
+  onInboxOpen,
+  onIdentitySelect,
+}: AppSidebarProps) {
+  const [showIdentityMenu, setShowIdentityMenu] = useState(false);
+
+  function selectIdentity(index: number) {
+    onIdentitySelect?.(index);
+    setShowIdentityMenu(false);
+  }
+
+  return (
+    <aside className="sidebar">
+      <div className="brand">
+        <span className="brandMark">AC</span>
+        <span><strong>Agentic CM</strong><small>Case Management</small></span>
+      </div>
+
+      <nav className="primaryNav" aria-label="主导航">
+        <p>工作区</p>
+        <Link className={`navLink ${active === "overview" ? "active" : ""}`} href="/"><span className="navIcon">⌂</span>Case 总览</Link>
+        <Link className={`navLink ${active === "workspace" ? "active" : ""}`} href="/cases/CM-2026-014"><span className="navIcon">◇</span>Case 工作台</Link>
+        {onInboxOpen ? (
+          <button className={`navLink ${active === "inbox" ? "active" : ""}`} type="button" onClick={onInboxOpen} style={{width:"100%",border:0,textAlign:"left"}}>
+            <span className="navIcon">✓</span>我的待办<b>{inboxCount}</b>
+          </button>
+        ) : (
+          <a className={`navLink ${active === "inbox" ? "active" : ""}`} href="#attention"><span className="navIcon">✓</span>我的待办<b>{inboxCount}</b></a>
+        )}
+        <a className={`navLink ${active === "activity" ? "active" : ""}`} href="#activity"><span className="navIcon">↗</span>协作动态</a>
+
+        <p>组织资产</p>
+        <a className="navLink" href="#paths"><span className="navIcon">◇</span>Paths</a>
+        <a className="navLink" href="#capabilities"><span className="navIcon">✦</span>能力库</a>
+        <a className="navLink" href="#audit"><span className="navIcon">≡</span>审计记录</a>
+      </nav>
+
+      <div className="sidebarFoot">
+        <div className="systemStatus"><i/>系统运行正常 <span>v0.1</span></div>
+        <button className="identityButton" type="button" disabled={busy} onClick={() => setShowIdentityMenu((value) => !value)} aria-expanded={showIdentityMenu}>
+          <span className={`avatar avatar-${identity.avatar}`}>{identity.avatar}</span>
+          <span><strong>{identity.name}</strong><small>{identity.role}</small></span>
+          <b>⌄</b>
+        </button>
+        {showIdentityMenu && (
+          <div className="identityMenu">
+            <small>Demo identity simulation</small>
+            {identities.map((item, index) => (
+              <button type="button" key={`${item.name}-${item.role}`} onClick={() => selectIdentity(index)} aria-current={item.name === identity.name ? "true" : undefined}>
+                <span className={`avatar avatar-${item.avatar}`}>{item.avatar}</span>
+                <span>{item.name}<small>{item.role}</small></span>
+              </button>
+            ))}
+            <p>仅模拟查看权限，不连接或修改 ERP</p>
+          </div>
+        )}
+      </div>
+    </aside>
+  );
+}
