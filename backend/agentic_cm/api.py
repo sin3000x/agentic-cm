@@ -59,6 +59,11 @@ def list_cases(actor: str | None = None, role: str | None = None):
     return [service.get_case_view(case.id, actor=actor, role=role) for case in service.list_cases()]
 
 
+@app.get("/api/capabilities")
+def list_capabilities():
+    return service.list_capabilities()
+
+
 @app.get("/api/cases/{case_id}")
 def get_case(case_id: str, actor: str | None = None, role: str | None = None):
     try:

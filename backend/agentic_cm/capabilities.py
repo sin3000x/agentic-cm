@@ -448,6 +448,21 @@ class CapabilityRegistry:
     def list_refs(self) -> list[dict[str, str]]:
         return [asdict(self._assets[key].ref) for key in sorted(self._assets)]
 
+    def list_assets(self) -> dict[str, list[dict[str, Any]]]:
+        """Return the effective organization library after local overrides are applied."""
+        return {
+            group: [
+                deepcopy(asset.data) | {"resolved_ref": asdict(asset.ref)}
+                for (asset_kind, _), asset in sorted(self._assets.items())
+                if asset_kind == kind
+            ]
+            for group, kind in (
+                ("policies", "policy"),
+                ("skills", "skill"),
+                ("knowledge", "knowledge"),
+            )
+        }
+
 
 def default_registry() -> CapabilityRegistry:
     builtin_root = Path(os.getenv("AGENTIC_CM_BUILTIN_CAPABILITIES_DIR", DEFAULT_BUILTIN_ROOT))
