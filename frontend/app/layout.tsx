@@ -6,8 +6,8 @@ const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Agentic Case Management",
-  description: "供应链异常 Case 的可审查、多角色、多 Agent 协同平台。",
+  title: "Case 总览 · Agentic Case Management",
+  description: "集中查看供应链异常 Case 的状态、风险、责任与决策进度。",
   icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
 };
 
