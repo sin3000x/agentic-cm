@@ -83,8 +83,24 @@ test("overview and Case workspace use the same global Sidebar", async () => {
   assert.match(sidebarSource, /Case 总览/);
   assert.match(sidebarSource, /Case 工作台/);
   assert.match(sidebarSource, /identityButton/);
+  assert.match(sidebarSource, /\/assets\/skills/);
+  assert.match(sidebarSource, /\/assets\/policies/);
+  assert.match(sidebarSource, /\/assets\/knowledge/);
   assert.doesNotMatch(workspaceSource, /className="caseList"|className="navItem"|className="identity"/);
   assert.doesNotMatch(workspaceStyles, /^\.sidebar\{|^\.brand\{|^\.nav\{|^\.identity\{/m);
+});
+
+test("organization asset pages read all three effective asset kinds from the backend", async () => {
+  const source = await readFile(new URL("../app/assets/asset-library.tsx", import.meta.url), "utf8");
+  assert.match(source, /\/api\/capabilities/);
+  assert.match(source, /group === "skills"/);
+  assert.match(source, /group === "policies"/);
+  assert.match(source, /content\?\.observations/);
+  for (const path of ["skills", "policies", "knowledge"]) {
+    const response = await render(`/assets/${path}`);
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), new RegExp(path[0].toUpperCase() + path.slice(1)));
+  }
 });
 
 test("homepage has desktop, tablet, mobile, and reduced-motion styles", async () => {

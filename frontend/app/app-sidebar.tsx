@@ -6,7 +6,7 @@ import { useState } from "react";
 export type SidebarIdentity = { name: string; role: string; avatar: string };
 
 type AppSidebarProps = {
-  active: "overview" | "workspace" | "inbox" | "activity";
+  active: "overview" | "workspace" | "inbox" | "activity" | "skills" | "policies" | "knowledge";
   identity: SidebarIdentity;
   identities: SidebarIdentity[];
   inboxCount?: number;
@@ -52,8 +52,9 @@ export default function AppSidebar({
         <a className={`navLink ${active === "activity" ? "active" : ""}`} href="#activity"><span className="navIcon">↗</span>协作动态</a>
 
         <p>组织资产</p>
-        <a className="navLink" href="#paths"><span className="navIcon">◇</span>Paths</a>
-        <a className="navLink" href="#capabilities"><span className="navIcon">✦</span>能力库</a>
+        <Link className={`navLink ${active === "skills" ? "active" : ""}`} href="/assets/skills"><span className="navIcon">✦</span>Skills</Link>
+        <Link className={`navLink ${active === "policies" ? "active" : ""}`} href="/assets/policies"><span className="navIcon">⌘</span>Policies</Link>
+        <Link className={`navLink ${active === "knowledge" ? "active" : ""}`} href="/assets/knowledge"><span className="navIcon">◫</span>Knowledge</Link>
         <a className="navLink" href="#audit"><span className="navIcon">≡</span>审计记录</a>
       </nav>
 

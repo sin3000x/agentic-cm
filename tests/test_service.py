@@ -207,6 +207,14 @@ def test_manifest_http_endpoints_enforce_owner_boundary(tmp_path: Path, monkeypa
         "/api/cases/CM-2026-014/orchestrate", json=owner
     ).status_code == 200
 
+    library = client.get("/api/capabilities")
+    assert library.status_code == 200
+    assert library.json()["counts"] == {"policies": 4, "skills": 4, "knowledge": 1}
+    assert {asset["id"] for asset in library.json()["assets"]["skills"]} == {
+        "shortage-response-planning", "material-substitution-analysis",
+        "supply-expediting-analysis", "order-split-analysis",
+    }
+
     other_view = client.get(
         "/api/cases/CM-2026-014", params={"actor": "王淼", "role": "主计划"}
     )

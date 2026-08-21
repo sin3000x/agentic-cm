@@ -66,6 +66,13 @@ class CaseService:
     def list_cases(self):
         return self.repository.list_cases()
 
+    def list_capabilities(self) -> dict:
+        assets = self.capabilities.list_assets()
+        return {
+            "assets": assets,
+            "counts": {group: len(items) for group, items in assets.items()},
+        }
+
     def get_case(self, case_id: str):
         case = self.repository.get(case_id)
         if case is None:
