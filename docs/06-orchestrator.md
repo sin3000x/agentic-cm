@@ -93,13 +93,19 @@ curl -sS -X POST http://localhost:8000/api/demo/reset \
   -H 'Content-Type: application/json' \
   -d '{"dataset_id":"supply-chain-golden-path-v1"}'
 
-curl -sS -X POST http://localhost:8000/api/cases/CM-2026-014/orchestrate
-curl -sS http://localhost:8000/api/cases/CM-2026-014/manifest | python3 -m json.tool
-curl -sS http://localhost:8000/api/cases/CM-2026-014/capabilities
+curl -sS -X POST http://localhost:8000/api/cases/CM-2026-014/orchestrate \
+  -H 'Content-Type: application/json' \
+  -d '{"actor":"陈澄","role":"订单履行经理"}'
+curl -sS 'http://localhost:8000/api/cases/CM-2026-014/manifest?actor=陈澄&role=订单履行经理' | python3 -m json.tool
+curl -sS 'http://localhost:8000/api/cases/CM-2026-014/capabilities?actor=陈澄&role=订单履行经理'
 curl -sS -X POST http://localhost:8000/api/cases/CM-2026-014/manifest/approve \
   -H 'Content-Type: application/json' \
-  -d '{"selected_path_ids":["PATH-01"]}'
+  -d '{"selected_path_ids":["PATH-01"],"actor":"陈澄","role":"订单履行经理"}'
 ```
+
+Manifest 的具体内容及其能力快照是 Owner-only 数据。非 Owner 的 Case 视图返回 `manifest: null`，直接读取、生成或审批返回 `403`。当前 `actor` / `role` 仅服务于 Demo 身份模拟；生产环境应从可信认证主体映射身份。
+
+Case Thread 读取 `GET /api/cases/{case_id}/timeline`。该接口从 append-only `domain_events` 投影 Manifest 生成、Owner 批准和各角色 Commitment 批准事件，并返回数据库记录的 UTC 时间；前端按浏览器本地时区显示到秒。投影只包含 Thread 所需字段，不暴露原始事件中的 Manifest Path、Policy 或能力快照。
 
 预期：
 

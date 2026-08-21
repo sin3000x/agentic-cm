@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? `http://localhost:${process.env.AGENTIC_CM_API_PORT ?? 8000}`;
 
@@ -70,6 +70,33 @@ type CommitmentNode = {
   path_id: string;
 };
 
+type TimelineEvent = {
+  id: number;
+  event_type: "manifest.proposed" | "manifest.approved" | "commitment.approved";
+  created_at: string;
+  details: {
+    revision?: number;
+    actor?: string;
+    role?: string;
+    node_id?: string;
+    path_id?: string;
+  };
+};
+
+const threadTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+});
+
+function formatThreadTime(value: string | null) {
+  return value ? threadTimeFormatter.format(new Date(value)) : "时间读取中";
+}
+
 function CapabilityPanel({ details }: { details: CapabilityDetails }) {
   const groups = [
     { key: "policies" as const, label: "POLICY · 强制责任", note: "由平台结构化匹配并编译为 CommitmentDAG 责任节点" },
@@ -112,7 +139,11 @@ export default function Home() {
   const [capabilitySnapshots, setCapabilitySnapshots] = useState<Record<string, CapabilitySnapshot>>({});
   const [selectedPathIds, setSelectedPathIds] = useState<string[]>([]);
   const [commitmentNodes, setCommitmentNodes] = useState<CommitmentNode[]>([]);
+  const [timelineEvents, setTimelineEvents] = useState<TimelineEvent[]>([]);
+  const [caseCreatedAt, setCaseCreatedAt] = useState<string | null>(null);
+  const [canViewManifest, setCanViewManifest] = useState(true);
   const [identityIndex, setIdentityIndex] = useState(0);
+  const identityIndexRef = useRef(0);
   const [showInbox, setShowInbox] = useState(false);
   const currentIdentity = demoIdentities[identityIndex];
 
@@ -125,30 +156,60 @@ export default function Home() {
   }
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/cases/CM-2026-014`)
-      .then((response) => response.ok ? response.json() : Promise.reject())
-      .then((data) => {
+    const identity = demoIdentities[identityIndex];
+    const query = new URLSearchParams({ actor: identity.name, role: identity.role });
+    const controller = new AbortController();
+    Promise.all([
+      fetch(`${API_BASE}/api/cases/CM-2026-014?${query}`, { signal: controller.signal }),
+      fetch(`${API_BASE}/api/cases/CM-2026-014/timeline`, { signal: controller.signal }),
+    ])
+      .then(([caseResponse, timelineResponse]) => {
+        if (!caseResponse.ok || !timelineResponse.ok) return Promise.reject();
+        return Promise.all([caseResponse.json(), timelineResponse.json()]);
+      })
+      .then(([data, timeline]) => {
         setPhase(data.phase);
         setApproved(data.phase === "PATH_EXPLORATION");
         setCommitmentNodes(data.commitment_nodes ?? []);
+        setTimelineEvents(timeline);
+        setCaseCreatedAt(data.created_at);
+        setCanViewManifest(data.permissions?.can_view_manifest === true);
         loadManifest(data.manifest);
         if (data.phase === "PATH_EXPLORATION") {
           setSelectedPathIds((data.manifest?.paths ?? []).filter((path: ManifestPath) => path.selected).map((path: ManifestPath) => path.id));
         }
       })
-      .catch(() => setMessage("API 尚未连接，当前展示固定演示数据。"));
-  }, []);
+      .catch((error) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setMessage("API 尚未连接，当前展示固定演示数据。");
+      });
+    return () => controller.abort();
+  }, [identityIndex]);
+
+  async function refreshTimeline() {
+    try {
+      const response = await fetch(`${API_BASE}/api/cases/CM-2026-014/timeline`);
+      if (response.ok) setTimelineEvents(await response.json());
+    } catch {
+      // The business action has already succeeded; the next Case refresh will reload the Thread.
+    }
+  }
 
   async function generateManifest() {
     setBusy(true);
     setMessage("");
     try {
-      const response = await fetch(`${API_BASE}/api/cases/CM-2026-014/orchestrate`, { method: "POST" });
+      const response = await fetch(`${API_BASE}/api/cases/CM-2026-014/orchestrate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ actor: currentIdentity.name, role: currentIdentity.role }),
+      });
       if (!response.ok) throw new Error("orchestrate failed");
       const data = await response.json();
       setPhase("MANIFEST_REVIEW");
       loadManifest(data.manifest);
       setCapabilities(null);
+      await refreshTimeline();
       setMessage("Orchestrator 已根据 Case 与现有能力生成 Manifest，并冻结适用 Policy。 ");
     } catch {
       setMessage("Manifest 生成失败：请确认本地 API 与 Planner 配置。 ");
@@ -164,7 +225,11 @@ export default function Home() {
       const response = await fetch(`${API_BASE}/api/cases/CM-2026-014/manifest/approve`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ selected_path_ids: selectedPathIds }),
+        body: JSON.stringify({
+          selected_path_ids: selectedPathIds,
+          actor: currentIdentity.name,
+          role: currentIdentity.role,
+        }),
       });
       if (!response.ok) throw new Error("approve failed");
       const data = await response.json();
@@ -172,6 +237,7 @@ export default function Home() {
       setCommitmentNodes(data.commitment_nodes ?? []);
       setApproved(true);
       setPhase("PATH_EXPLORATION");
+      await refreshTimeline();
       setMessage("Manifest 已批准；主计划与研发任务已分别投递到各自 Inbox，等待本人批准。 ");
     } catch {
       setMessage("无法连接本地 API，请先启动 Python 服务。 ");
@@ -196,6 +262,10 @@ export default function Home() {
       setCapabilitySnapshots({});
       setSelectedPathIds([]);
       setCommitmentNodes([]);
+      setTimelineEvents([]);
+      setCaseCreatedAt(new Date().toISOString());
+      setCanViewManifest(true);
+      identityIndexRef.current = 0;
       setIdentityIndex(0);
       setShowInbox(false);
       setMessage("Golden Path 演示数据已重置。 ");
@@ -220,9 +290,13 @@ export default function Home() {
     setShowCapabilities(true);
     if (capabilities) return;
     try {
-      const response = await fetch(`${API_BASE}/api/cases/CM-2026-014/capabilities`);
+      const requestIdentityIndex = identityIndex;
+      const query = new URLSearchParams({ actor: currentIdentity.name, role: currentIdentity.role });
+      const response = await fetch(`${API_BASE}/api/cases/CM-2026-014/capabilities?${query}`);
       if (!response.ok) throw new Error("capabilities failed");
-      setCapabilities(await response.json());
+      const data = await response.json();
+      if (identityIndexRef.current !== requestIdentityIndex) return;
+      setCapabilities(data);
     } catch {
       setShowCapabilities(false);
       setMessage("能力快照读取失败：请确认本地 API 已启动。 ");
@@ -244,6 +318,7 @@ export default function Home() {
       if (!response.ok) throw new Error("commitment approval failed");
       const data = await response.json();
       setCommitmentNodes(data.commitment_nodes ?? []);
+      await refreshTimeline();
       setMessage(`${currentIdentity.name} 已在 ${currentIdentity.role} Inbox 批准 ${node.id}，节点现为 READY。`);
     } catch {
       setMessage("Inbox 批准失败：请确认当前身份与本地 API 状态。 ");
@@ -254,7 +329,9 @@ export default function Home() {
 
   const activeStageIndex = approved ? 2 : phase === "INTAKE" ? 0 : 1;
   const currentStage = stages[activeStageIndex];
-  const selectedAttemptPathId = manifestPaths.find((path) => path.selected)?.id ?? selectedPathIds[0];
+  const selectedAttemptPathId = manifestPaths.find((path) => path.selected)?.id
+    ?? selectedPathIds[0]
+    ?? commitmentNodes[0]?.path_id;
   const activeCommitments = commitmentNodes.filter((node) => node.path_id === selectedAttemptPathId);
   const inboxItems = commitmentNodes.filter(
     (node) => node.role === currentIdentity.role && node.status === "PENDING",
@@ -269,7 +346,9 @@ export default function Home() {
       depends_on: nodeId === "CUSTOMER" ? ["SUPPLY", "TECH"] : [],
       path_id: selectedAttemptPathId ?? "PATH-01",
     };
-    const statusLabel = node.status === "PENDING" ? "待本人批准" : node.status;
+    const statusLabel = node.status === "PENDING"
+      ? node.role === currentIdentity.role ? "待本人批准" : `待${node.role}批准`
+      : node.status;
     return (
       <article className={`dagNode ${node.depends_on.length ? "downstream" : "upstream"} ${node.status.toLowerCase()}`}>
         <span>{statusLabel}</span>
@@ -279,7 +358,20 @@ export default function Home() {
     );
   }
 
-  const orchestrationCard = approved ? (
+  const orchestrationCard = phase === "MANIFEST_REVIEW" && !canViewManifest ? (
+    <>
+      <div className="panelTitle">
+        <div><span className="agentIcon">⌁</span><span><small>OWNER-ONLY REVIEW</small><h2>Manifest 正在等待 Case Owner 审批</h2></span></div>
+        <span className="version">内容已隐藏</span>
+      </div>
+      <p className="lead">Manifest 的 Path、理由、Policy、Skill 和能力快照仅 Case Owner 可见。当前身份不能查看内容，也不能执行审批。</p>
+      <article className="pathCard compactPath">
+        <div className="pathHeading"><span className="pathBadge">ACCESS RESTRICTED</span></div>
+        <h3>等待陈澄完成评审</h3>
+        <p>审批完成后，平台只会向相关角色的 Inbox 投递其本人需要处理的责任节点。</p>
+      </article>
+    </>
+  ) : approved ? (
     <>
       <div className="panelTitle">
         <div><span className="agentIcon">✓</span><span><small>PATH ATTEMPT · ATTEMPT-01</small><h2>物料替代 · 审批 DAG</h2></span></div>
@@ -384,7 +476,17 @@ export default function Home() {
         <div className="identity">
           <span className="avatar">{currentIdentity.avatar}</span>
           <span><small>当前角色</small><strong>{currentIdentity.name} · {currentIdentity.role}</strong></span>
-          <button aria-label="切换演示身份" onClick={() => setIdentityIndex((current) => (current + 1) % demoIdentities.length)}>⌄</button>
+          <button aria-label="切换演示身份" disabled={busy} onClick={() => {
+            const nextIdentityIndex = (identityIndexRef.current + 1) % demoIdentities.length;
+            identityIndexRef.current = nextIdentityIndex;
+            setCanViewManifest(false);
+            setManifestPaths([]);
+            setCapabilitySnapshots({});
+            setSelectedPathIds([]);
+            setCapabilities(null);
+            setShowCapabilities(false);
+            setIdentityIndex(nextIdentityIndex);
+          }}>⌄</button>
           <em>Demo identity simulation</em>
         </div>
       </aside>
@@ -399,7 +501,7 @@ export default function Home() {
             <div>
               <div className="eyebrow">SUPPLY CHAIN CASE <span>·</span> 高优先级</div>
               <h1>订单预计延期 <span>#CM-2026-014</span></h1>
-              <p><span className="openBadge">● Open</span> 陈澄于今天 08:46 创建 · 当前由 <strong>陈澄</strong> 负责</p>
+              <p><span className="openBadge">● Open</span> 陈澄于 {formatThreadTime(caseCreatedAt)} 创建 · 当前由 <strong>陈澄</strong> 负责</p>
             </div>
             <button className="primary">继续处理 <span>→</span></button>
           </header>
@@ -411,7 +513,7 @@ export default function Home() {
               <article className="threadItem commentItem">
                 <div className="threadAvatar humanAvatar">陈</div>
                 <div className="commentBox">
-                  <header><strong>陈澄</strong><span>Case Owner · 今天 08:46</span><b>创建 Case</b></header>
+                  <header><strong>陈澄</strong><span>Case Owner · {formatThreadTime(caseCreatedAt)}</span><b>创建 Case</b></header>
                   <div className="commentBody">
                     <p>订单 SO-48392 的关键物料预计晚于承诺日期 12 天，可能影响客户交付。</p>
                     <h3>Human Proposal</h3>
@@ -423,22 +525,36 @@ export default function Home() {
 
               <div className="threadEvent completedEvent">
                 <span className="eventIcon">✓</span>
-                <p><strong>平台完成 Case 受理</strong><span>事实已固化，责任人为陈澄 · 今天 08:47</span></p>
+                <p><strong>平台完成 Case 受理</strong><span>事实已固化，责任人为陈澄 · {formatThreadTime(caseCreatedAt)}</span></p>
               </div>
 
-              {phase !== "INTAKE" && (
-                <div className="threadEvent completedEvent">
-                  <span className="eventIcon botEvent">✦</span>
-                  <p><strong>Orchestrator 生成 Manifest v1</strong><span>匹配组织能力并冻结 Policy / Skill / Knowledge 快照 · 今天 09:02</span></p>
-                </div>
-              )}
-
-              {approved && (
-                <div className="threadEvent completedEvent">
-                  <span className="eventIcon humanEvent">陈</span>
-                  <p><strong>陈澄批准 Manifest</strong><span>启动物料替代 PathAttempt，最终业务决定尚未作出 · 今天 09:18</span></p>
-                </div>
-              )}
+              {timelineEvents.map((event) => {
+                if (event.event_type === "manifest.proposed") {
+                  return (
+                    <div className="threadEvent completedEvent" key={event.id}>
+                      <span className="eventIcon botEvent">✦</span>
+                      <p><strong>Orchestrator 生成 Manifest v{event.details.revision ?? 1}</strong><span>匹配组织能力并冻结 Policy / Skill / Knowledge 快照 · {formatThreadTime(event.created_at)}</span></p>
+                    </div>
+                  );
+                }
+                if (event.event_type === "manifest.approved") {
+                  return (
+                    <div className="threadEvent completedEvent" key={event.id}>
+                      <span className="eventIcon humanEvent">{event.details.actor?.slice(0, 1) ?? "人"}</span>
+                      <p><strong>{event.details.actor ?? "Case Owner"} 批准 Manifest</strong><span>启动已批准的 PathAttempt，最终业务决定尚未作出 · {formatThreadTime(event.created_at)}</span></p>
+                    </div>
+                  );
+                }
+                if (event.event_type === "commitment.approved") {
+                  return (
+                    <div className="threadEvent completedEvent" key={event.id}>
+                      <span className="eventIcon humanEvent">{event.details.actor?.slice(0, 1) ?? "人"}</span>
+                      <p><strong>{event.details.actor}（{event.details.role}）批准 {event.details.node_id}</strong><span>{commitmentCopy[event.details.node_id ?? ""] ?? "专业责任节点"}已确认，节点变为 READY · {formatThreadTime(event.created_at)}</span></p>
+                    </div>
+                  );
+                }
+                return null;
+              })}
 
               <article className="threadItem commentItem currentThreadItem">
                 <div className="threadAvatar botAvatar">AC</div>

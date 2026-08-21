@@ -21,7 +21,7 @@ from agentic_cm.orchestrator import (
     PlannerOutputError,
 )
 from agentic_cm.repository import CaseRepository
-from agentic_cm.service import CaseService, InvalidTransitionError
+from agentic_cm.service import AuthorizationError, CaseService, InvalidTransitionError
 
 
 def make_service(tmp_path: Path) -> CaseService:
@@ -31,7 +31,9 @@ def make_service(tmp_path: Path) -> CaseService:
 
 
 def orchestrate(service: CaseService):
-    return asyncio.run(service.orchestrate_case("CM-2026-014"))
+    return asyncio.run(service.orchestrate_case(
+        "CM-2026-014", actor="陈澄", role="订单履行经理"
+    ))
 
 
 def test_runtime_environment_loads_repository_dotenv(tmp_path: Path, monkeypatch) -> None:
@@ -72,7 +74,9 @@ def test_orchestrator_builds_manifest_from_open_delay_case(tmp_path: Path) -> No
     assert {item["id"] for item in case.manifest.capability_snapshot["compiled_policy"]["commitments"]} == {
         "SUPPLY", "TECH", "CUSTOMER"
     }
-    manifest = service.get_case_manifest("CM-2026-014")
+    manifest = service.get_case_manifest(
+        "CM-2026-014", actor="陈澄", role="订单履行经理"
+    )
     assert manifest["id"] == "MAN-CM-2026-014-1"
     assert manifest["planner_profile"] == "deterministic/v1"
 
@@ -142,7 +146,9 @@ def test_manifest_approval_routes_parallel_nodes_to_role_inboxes(tmp_path: Path)
     assert initial_case.human_proposal is not None
     assert initial_case.human_proposal["author"] == initial_case.owner
     assert initial_case.human_proposal["role"] == initial_case.owner_role
-    case = service.approve_manifest("CM-2026-014", ["PATH-01"])
+    case = service.approve_manifest(
+        "CM-2026-014", ["PATH-01"], actor="陈澄", role="订单履行经理"
+    )
     assert case.phase is OrchestrationPhase.PATH_EXPLORATION
     pending = {node.id for node in case.commitment_nodes if node.status is NodeStatus.PENDING}
     assert pending == {"SUPPLY", "TECH"}
@@ -152,10 +158,101 @@ def test_manifest_approval_routes_parallel_nodes_to_role_inboxes(tmp_path: Path)
     assert case.commitment_nodes[-1].status is NodeStatus.BLOCKED
 
 
+def test_manifest_is_visible_and_actionable_only_by_case_owner(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+    orchestrate(service)
+
+    owner_view = service.get_case_view(
+        "CM-2026-014", actor="陈澄", role="订单履行经理"
+    )
+    other_role_view = service.get_case_view(
+        "CM-2026-014", actor="王淼", role="主计划"
+    )
+    anonymous_view = service.get_case_view("CM-2026-014")
+
+    assert owner_view["manifest"] is not None
+    assert owner_view["permissions"]["can_approve_manifest"] is True
+    assert other_role_view["manifest"] is None
+    assert other_role_view["permissions"]["can_view_manifest"] is False
+    assert anonymous_view["manifest"] is None
+
+    for operation in (
+        lambda: service.get_case_manifest(
+            "CM-2026-014", actor="王淼", role="主计划"
+        ),
+        lambda: service.approve_manifest(
+            "CM-2026-014", ["PATH-01"], actor="王淼", role="主计划"
+        ),
+    ):
+        try:
+            operation()
+        except AuthorizationError:
+            pass
+        else:
+            raise AssertionError("a non-owner must not access or approve the Manifest")
+
+    case = service.get_case("CM-2026-014")
+    assert case.phase is OrchestrationPhase.MANIFEST_REVIEW
+
+
+def test_manifest_http_endpoints_enforce_owner_boundary(tmp_path: Path, monkeypatch) -> None:
+    from fastapi.testclient import TestClient
+    from agentic_cm import api
+
+    monkeypatch.setattr(api, "service", make_service(tmp_path))
+    client = TestClient(api.app)
+    owner = {"actor": "陈澄", "role": "订单履行经理"}
+
+    assert client.post(
+        "/api/cases/CM-2026-014/orchestrate", json=owner
+    ).status_code == 200
+
+    other_view = client.get(
+        "/api/cases/CM-2026-014", params={"actor": "王淼", "role": "主计划"}
+    )
+    assert other_view.status_code == 200
+    assert other_view.json()["manifest"] is None
+    assert other_view.json()["permissions"]["can_view_manifest"] is False
+
+    assert client.get(
+        "/api/cases/CM-2026-014/manifest",
+        params={"actor": "王淼", "role": "主计划"},
+    ).status_code == 403
+    assert client.post(
+        "/api/cases/CM-2026-014/manifest/approve",
+        json={"selected_path_ids": ["PATH-01"], "actor": "王淼", "role": "主计划"},
+    ).status_code == 403
+    assert client.post(
+        "/api/cases/CM-2026-014/manifest/approve",
+        json={"selected_path_ids": ["PATH-01"], **owner},
+    ).status_code == 200
+    timeline = client.get("/api/cases/CM-2026-014/timeline")
+    assert timeline.status_code == 200
+    assert [event["event_type"] for event in timeline.json()] == [
+        "manifest.proposed", "manifest.approved"
+    ]
+    assert "selected_path_ids" not in timeline.json()[-1]["details"]
+
+    approval = client.post(
+        "/api/cases/CM-2026-014/paths/PATH-01/commitments/SUPPLY/approve",
+        json={"actor": "王淼", "role": "主计划"},
+    )
+    assert approval.status_code == 200
+    assert approval.json()["manifest"] is None
+    assert client.get("/api/cases/CM-2026-014/timeline").json()[-1]["details"] == {
+        "actor": "王淼",
+        "role": "主计划",
+        "node_id": "SUPPLY",
+        "path_id": "PATH-01",
+    }
+
+
 def test_role_inbox_approval_makes_node_ready_and_releases_dependents(tmp_path: Path) -> None:
     service = make_service(tmp_path)
     orchestrate(service)
-    service.approve_manifest("CM-2026-014", ["PATH-01"])
+    service.approve_manifest(
+        "CM-2026-014", ["PATH-01"], actor="陈澄", role="订单履行经理"
+    )
 
     try:
         service.approve_commitment(
@@ -186,6 +283,12 @@ def test_role_inbox_approval_makes_node_ready_and_releases_dependents(tmp_path: 
         "CUSTOMER": NodeStatus.PENDING,
     }
     assert {item["node"].id for item in service.get_inbox("一线经理")} == {"CUSTOMER"}
+    timeline = service.get_case_timeline("CM-2026-014")
+    approvals = [event for event in timeline if event["event_type"] == "commitment.approved"]
+    assert [event["details"]["actor"] for event in approvals] == ["王淼", "林乔"]
+    assert [event["details"]["node_id"] for event in approvals] == ["SUPPLY", "TECH"]
+    assert all(event["created_at"].endswith("+00:00") for event in approvals)
+    assert all("reviews" not in event["details"] for event in approvals)
 
 
 def test_demo_manifest_freezes_resolved_capabilities(tmp_path: Path) -> None:
@@ -383,9 +486,13 @@ def test_selector_rejects_fields_outside_initial_contract(tmp_path: Path) -> Non
 def test_manifest_cannot_be_approved_twice(tmp_path: Path) -> None:
     service = make_service(tmp_path)
     orchestrate(service)
-    service.approve_manifest("CM-2026-014")
+    service.approve_manifest(
+        "CM-2026-014", actor="陈澄", role="订单履行经理"
+    )
     try:
-        service.approve_manifest("CM-2026-014")
+        service.approve_manifest(
+            "CM-2026-014", actor="陈澄", role="订单履行经理"
+        )
     except InvalidTransitionError:
         pass
     else:
@@ -452,7 +559,9 @@ def test_skill_declares_three_candidates_and_manifest_supports_all_paths(tmp_pat
         "order-split-analysis",
     }
 
-    approved = service.approve_manifest("CM-2026-014")
+    approved = service.approve_manifest(
+        "CM-2026-014", actor="陈澄", role="订单履行经理"
+    )
     assert [attempt["definition"] for attempt in approved.path_attempts] == expected_definitions
     assert {node.path_id for node in approved.commitment_nodes} == {"PATH-01", "PATH-02", "PATH-03"}
     assert {node.id for node in approved.commitment_nodes if node.path_id == "PATH-02"} == {

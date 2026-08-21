@@ -93,8 +93,11 @@ AGENTIC_CM_LLM_MODEL=your-model-id
 curl -sS -X POST http://localhost:8000/api/demo/reset \
   -H 'Content-Type: application/json' \
   -d '{"dataset_id":"supply-chain-golden-path-v1"}'
-curl -sS -X POST http://localhost:8000/api/cases/CM-2026-014/orchestrate
-curl -sS http://localhost:8000/api/cases/CM-2026-014/manifest | python3 -m json.tool
+curl -sS -X POST http://localhost:8000/api/cases/CM-2026-014/orchestrate \
+  -H 'Content-Type: application/json' \
+  -d '{"actor":"陈澄","role":"订单履行经理"}'
+curl -sS 'http://localhost:8000/api/cases/CM-2026-014/manifest?actor=陈澄&role=订单履行经理' \
+  | python3 -m json.tool
 ```
 
 也可以打开前端，点击“生成 Manifest”，然后查看 Path、Planner profile 与冻结的 Policy/Skill/Knowledge 能力快照。
@@ -102,6 +105,8 @@ curl -sS http://localhost:8000/api/cases/CM-2026-014/manifest | python3 -m json.
 当 Manifest 含多条 Path 时，每条 Path 都有独立的 `capability_snapshots[path_id]`。可以单独检查：
 
 ```bash
-curl -sS 'http://localhost:8000/api/cases/CM-2026-014/capabilities?path_id=PATH-02' \
+curl -sS 'http://localhost:8000/api/cases/CM-2026-014/capabilities?actor=陈澄&role=订单履行经理&path_id=PATH-02' \
   | python3 -m json.tool
 ```
+
+Manifest、能力快照、生成和审批仅 Case Owner 可访问；其他身份读取 Case 时 `manifest` 会被脱敏为 `null`。这里的 `actor` / `role` 是 Demo 身份模拟，生产环境必须由可信认证层注入，不能信任客户端自报身份。

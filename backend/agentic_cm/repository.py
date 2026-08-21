@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +57,25 @@ class CaseRepository:
                 (case_id, event_type),
             ).fetchone()
         return row is not None
+
+    def list_events(self, case_id: str) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT id, event_type, payload, created_at "
+                "FROM domain_events WHERE case_id = ? ORDER BY id",
+                (case_id,),
+            ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "event_type": row["event_type"],
+                "payload": json.loads(row["payload"]),
+                "created_at": datetime.fromisoformat(
+                    row["created_at"].replace(" ", "T")
+                ).replace(tzinfo=timezone.utc).isoformat(),
+            }
+            for row in rows
+        ]
 
     def save(self, case: Case, event_type: str, event_payload: dict[str, Any]) -> None:
         serialized = json.dumps(case.to_dict(), ensure_ascii=False)
@@ -117,5 +137,6 @@ class CaseRepository:
             business_payload=data["business_payload"], human_proposal=data.get("human_proposal"),
             classification=data.get("classification", {}), manifest=manifest,
             path_attempt=legacy_attempt, path_attempts=path_attempts,
-            commitment_nodes=nodes, version=data["version"], updated_at=data["updated_at"],
+            commitment_nodes=nodes, version=data["version"],
+            created_at=data.get("created_at", data["updated_at"]), updated_at=data["updated_at"],
         )
