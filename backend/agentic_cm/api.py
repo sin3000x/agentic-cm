@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from .config import load_runtime_environment
 from .orchestrator import OrchestrationError
 from .repository import CaseRepository
-from .service import CaseNotFoundError, CaseService, InvalidTransitionError
+from .service import AuthorizationError, CaseNotFoundError, CaseService, InvalidTransitionError
 
 
 load_runtime_environment()
@@ -35,6 +35,13 @@ class ResetRequest(BaseModel):
 
 class ManifestApprovalRequest(BaseModel):
     selected_path_ids: list[str]
+    actor: str
+    role: str
+
+
+class OwnerActionRequest(BaseModel):
+    actor: str
+    role: str
 
 
 class CommitmentApprovalRequest(BaseModel):
@@ -48,60 +55,83 @@ def health() -> dict[str, str]:
 
 
 @app.get("/api/cases")
-def list_cases():
-    return [case.to_dict() for case in service.list_cases()]
+def list_cases(actor: str | None = None, role: str | None = None):
+    return [service.get_case_view(case.id, actor=actor, role=role) for case in service.list_cases()]
 
 
 @app.get("/api/cases/{case_id}")
-def get_case(case_id: str):
+def get_case(case_id: str, actor: str | None = None, role: str | None = None):
     try:
-        return service.get_case(case_id).to_dict()
+        return service.get_case_view(case_id, actor=actor, role=role)
     except CaseNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Case not found") from exc
 
 
 @app.get("/api/cases/{case_id}/capabilities")
-def get_case_capabilities(case_id: str, path_id: str | None = None):
+def get_case_capabilities(case_id: str, actor: str, role: str, path_id: str | None = None):
     try:
+        service.get_case_manifest(case_id, actor=actor, role=role)
         return service.get_case_capabilities(case_id, path_id)
     except CaseNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Case not found") from exc
     except InvalidTransitionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except AuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @app.get("/api/cases/{case_id}/manifest")
-def get_case_manifest(case_id: str):
+def get_case_manifest(case_id: str, actor: str, role: str):
     try:
-        manifest = service.get_case_manifest(case_id)
+        manifest = service.get_case_manifest(case_id, actor=actor, role=role)
         return manifest
     except CaseNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Case not found") from exc
     except InvalidTransitionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except AuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@app.get("/api/cases/{case_id}/timeline")
+def get_case_timeline(case_id: str):
+    try:
+        return service.get_case_timeline(case_id)
+    except CaseNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Case not found") from exc
 
 
 @app.post("/api/cases/{case_id}/orchestrate")
-async def orchestrate_case(case_id: str):
+async def orchestrate_case(case_id: str, request: OwnerActionRequest):
     try:
-        return (await service.orchestrate_case(case_id)).to_dict()
+        return (await service.orchestrate_case(
+            case_id,
+            actor=request.actor,
+            role=request.role,
+        )).to_dict()
     except CaseNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Case not found") from exc
     except OrchestrationError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except AuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @app.post("/api/cases/{case_id}/manifest/approve")
-def approve_manifest(case_id: str, request: ManifestApprovalRequest | None = None):
+def approve_manifest(case_id: str, request: ManifestApprovalRequest):
     try:
         return service.approve_manifest(
             case_id,
-            request.selected_path_ids if request else None,
+            request.selected_path_ids,
+            actor=request.actor,
+            role=request.role,
         ).to_dict()
     except CaseNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Case not found") from exc
     except InvalidTransitionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except AuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @app.get("/api/inbox")
@@ -117,13 +147,14 @@ def approve_commitment(
     request: CommitmentApprovalRequest,
 ):
     try:
-        return service.approve_commitment(
+        service.approve_commitment(
             case_id,
             path_id,
             node_id,
             actor=request.actor,
             role=request.role,
-        ).to_dict()
+        )
+        return service.get_case_view(case_id, actor=request.actor, role=request.role)
     except CaseNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Case not found") from exc
     except InvalidTransitionError as exc:

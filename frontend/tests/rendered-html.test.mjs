@@ -22,7 +22,8 @@ test("server-renders the Case workspace", async () => {
   assert.match(html, /订单预计延期/);
   assert.match(html, /Case 完整流转 Thread/);
   assert.match(html, /Human Proposal/);
-  assert.match(html, /陈澄于今天 08:46 创建/);
+  assert.match(html, /陈澄于.*时间读取中.*创建/);
+  assert.doesNotMatch(html, /今天 08:46|今天 08:47|今天 09:02|今天 09:18/);
   assert.match(html, /平台完成 Case 受理/);
   assert.match(html, /专业承诺汇合/);
   assert.match(html, /Case Owner 最终决策/);
@@ -60,4 +61,19 @@ test("downstream DAG placement is independent from node status", async () => {
 
   assert.match(pageSource, /node\.depends_on\.length \? "downstream" : "upstream"/);
   assert.match(styles, /\.dagNode\.downstream\{grid-column:1\/-1;width:48%;justify-self:center\}/);
+});
+
+test("redacted Manifest views still render shared Commitment state", async () => {
+  const pageSource = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+
+  assert.match(pageSource, /\?\? commitmentNodes\[0\]\?\.path_id/);
+  assert.match(pageSource, /node\.role === currentIdentity\.role \? "待本人批准" : `待\$\{node\.role\}批准`/);
+});
+
+test("Case Thread renders approval events with backend timestamps", async () => {
+  const pageSource = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+
+  assert.match(pageSource, /api\/cases\/CM-2026-014\/timeline/);
+  assert.match(pageSource, /event\.event_type === "commitment\.approved"/);
+  assert.match(pageSource, /formatThreadTime\(event\.created_at\)/);
 });

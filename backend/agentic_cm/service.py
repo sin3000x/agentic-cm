@@ -18,6 +18,10 @@ class InvalidTransitionError(ValueError):
     pass
 
 
+class AuthorizationError(PermissionError):
+    pass
+
+
 class CaseService:
     def __init__(
         self,
@@ -68,15 +72,67 @@ class CaseService:
             raise CaseNotFoundError(case_id)
         return case
 
-    def get_case_manifest(self, case_id: str) -> dict:
+    @staticmethod
+    def _is_case_owner(case, *, actor: str | None, role: str | None) -> bool:
+        return actor == case.owner and role == case.owner_role
+
+    def _require_case_owner(self, case, *, actor: str, role: str) -> None:
+        if not self._is_case_owner(case, actor=actor, role=role):
+            raise AuthorizationError("Only the Case Owner can view or approve the Manifest")
+
+    def get_case_view(
+        self,
+        case_id: str,
+        *,
+        actor: str | None = None,
+        role: str | None = None,
+    ) -> dict:
         case = self.get_case(case_id)
+        can_view_manifest = self._is_case_owner(case, actor=actor, role=role)
+        view = case.to_dict()
+        if not can_view_manifest:
+            view["manifest"] = None
+        view["permissions"] = {
+            "can_view_manifest": can_view_manifest,
+            "can_approve_manifest": can_view_manifest,
+        }
+        return view
+
+    def get_case_manifest(self, case_id: str, *, actor: str, role: str) -> dict:
+        case = self.get_case(case_id)
+        self._require_case_owner(case, actor=actor, role=role)
         manifest = case.to_dict()["manifest"]
         if manifest is None:
             raise InvalidTransitionError("Manifest has not been generated")
         return manifest
 
-    async def orchestrate_case(self, case_id: str):
+    def get_case_timeline(self, case_id: str) -> list[dict]:
+        self.get_case(case_id)
+        public_fields = {
+            "manifest.proposed": ("revision",),
+            "manifest.approved": ("actor",),
+            "commitment.approved": ("actor", "role", "node_id", "path_id"),
+        }
+        timeline: list[dict] = []
+        for event in self.repository.list_events(case_id):
+            fields = public_fields.get(event["event_type"])
+            if fields is None:
+                continue
+            timeline.append({
+                "id": event["id"],
+                "event_type": event["event_type"],
+                "created_at": event["created_at"],
+                "details": {
+                    field: event["payload"][field]
+                    for field in fields
+                    if field in event["payload"]
+                },
+            })
+        return timeline
+
+    async def orchestrate_case(self, case_id: str, *, actor: str, role: str):
         case = self.get_case(case_id)
+        self._require_case_owner(case, actor=actor, role=role)
         manifest = await self.orchestrator.compose_manifest(case)
         case.manifest = manifest
         case.phase = OrchestrationPhase.MANIFEST_REVIEW
@@ -95,8 +151,16 @@ class CaseService:
         )
         return case
 
-    def approve_manifest(self, case_id: str, selected_path_ids: list[str] | None = None):
+    def approve_manifest(
+        self,
+        case_id: str,
+        selected_path_ids: list[str] | None = None,
+        *,
+        actor: str,
+        role: str,
+    ):
         case = self.get_case(case_id)
+        self._require_case_owner(case, actor=actor, role=role)
         if case.phase is not OrchestrationPhase.MANIFEST_REVIEW or not case.manifest:
             raise InvalidTransitionError("Case is not awaiting Manifest approval")
         if selected_path_ids is not None:
@@ -162,7 +226,7 @@ class CaseService:
         self.repository.save(case, "manifest.approved", {
             "manifest_id": case.manifest.id,
             "revision": case.manifest.revision,
-            "actor": case.owner,
+            "actor": actor,
             "path_attempt_ids": [attempt["id"] for attempt in attempts],
             "selected_path_ids": [path.id for path in selected_paths],
         })
