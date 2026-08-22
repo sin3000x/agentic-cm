@@ -37,8 +37,156 @@ class CaseRepository:
                     payload TEXT NOT NULL,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
+                CREATE TABLE IF NOT EXISTS agent_runs (
+                    id TEXT PRIMARY KEY,
+                    case_id TEXT NOT NULL,
+                    agent_type TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    adapter_profile TEXT NOT NULL,
+                    initiated_by TEXT NOT NULL,
+                    started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    completed_at TEXT,
+                    error_type TEXT,
+                    error_message TEXT
+                );
+                CREATE TABLE IF NOT EXISTS agent_trace_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL,
+                    sequence INTEGER NOT NULL,
+                    step TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    details TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(run_id, sequence),
+                    FOREIGN KEY(run_id) REFERENCES agent_runs(id)
+                );
                 """
             )
+
+    def create_agent_run(
+        self,
+        run_id: str,
+        case_id: str,
+        *,
+        agent_type: str,
+        adapter_profile: str,
+        initiated_by: str,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO agent_runs "
+                "(id, case_id, agent_type, status, adapter_profile, initiated_by, started_at) "
+                "VALUES (?, ?, ?, 'RUNNING', ?, ?, ?)",
+                (run_id, case_id, agent_type, adapter_profile, initiated_by, self._now()),
+            )
+
+    def append_agent_trace(
+        self,
+        run_id: str,
+        *,
+        step: str,
+        status: str,
+        summary: str,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence "
+                "FROM agent_trace_events WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            connection.execute(
+                "INSERT INTO agent_trace_events "
+                "(run_id, sequence, step, status, summary, details, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    run_id,
+                    row["next_sequence"],
+                    step,
+                    status,
+                    summary,
+                    json.dumps(details or {}, ensure_ascii=False),
+                    self._now(),
+                ),
+            )
+
+    def finish_agent_run(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        adapter_profile: str | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE agent_runs SET status = ?, "
+                "adapter_profile = COALESCE(?, adapter_profile), completed_at = ?, "
+                "error_type = ?, error_message = ? WHERE id = ?",
+                (
+                    status,
+                    adapter_profile,
+                    self._now(),
+                    type(error).__name__ if error else None,
+                    str(error) if error else None,
+                    run_id,
+                ),
+            )
+
+    def list_agent_runs(self, case_id: str, *, agent_type: str | None = None) -> list[dict[str, Any]]:
+        query = (
+            "SELECT id, agent_type, status, adapter_profile, initiated_by, started_at, "
+            "completed_at, error_type, error_message FROM agent_runs WHERE case_id = ?"
+        )
+        parameters: list[Any] = [case_id]
+        if agent_type is not None:
+            query += " AND agent_type = ?"
+            parameters.append(agent_type)
+        query += " ORDER BY started_at DESC, rowid DESC"
+        with self._connect() as connection:
+            runs = connection.execute(query, parameters).fetchall()
+            result: list[dict[str, Any]] = []
+            for run in runs:
+                events = connection.execute(
+                    "SELECT id, sequence, step, status, summary, details, created_at "
+                    "FROM agent_trace_events WHERE run_id = ? ORDER BY sequence",
+                    (run["id"],),
+                ).fetchall()
+                result.append({
+                    "id": run["id"],
+                    "agent_type": run["agent_type"],
+                    "status": run["status"],
+                    "adapter_profile": run["adapter_profile"],
+                    "initiated_by": run["initiated_by"],
+                    "started_at": self._utc_timestamp(run["started_at"]),
+                    "completed_at": self._utc_timestamp(run["completed_at"]),
+                    "error_type": run["error_type"],
+                    "error_message": run["error_message"],
+                    "events": [
+                        {
+                            "id": event["id"],
+                            "sequence": event["sequence"],
+                            "step": event["step"],
+                            "status": event["status"],
+                            "summary": event["summary"],
+                            "details": json.loads(event["details"]),
+                            "created_at": self._utc_timestamp(event["created_at"]),
+                        }
+                        for event in events
+                    ],
+                })
+        return result
+
+    @staticmethod
+    def _utc_timestamp(value: str | None) -> str | None:
+        if value is None:
+            return None
+        return datetime.fromisoformat(value.replace(" ", "T")).replace(tzinfo=timezone.utc).isoformat()
+
+    @staticmethod
+    def _now() -> str:
+        return datetime.now(timezone.utc).isoformat()
 
     def list_cases(self) -> list[Case]:
         with self._connect() as connection:
@@ -94,6 +242,8 @@ class CaseRepository:
         with self._connect() as connection:
             connection.execute("DELETE FROM cases")
             connection.execute("DELETE FROM domain_events")
+            connection.execute("DELETE FROM agent_trace_events")
+            connection.execute("DELETE FROM agent_runs")
             for case in cases:
                 connection.execute(
                     "INSERT INTO cases (id, payload, version) VALUES (?, ?, ?)",

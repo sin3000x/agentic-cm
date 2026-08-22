@@ -79,6 +79,29 @@ type TimelineEvent = {
   };
 };
 
+type AgentTraceEvent = {
+  id: number;
+  sequence: number;
+  step: string;
+  status: "STARTED" | "COMPLETED" | "FAILED";
+  summary: string;
+  details: Record<string, unknown>;
+  created_at: string;
+};
+
+type AgentRun = {
+  id: string;
+  agent_type: "orchestrator" | "path" | "synthesis";
+  status: "RUNNING" | "SUCCEEDED" | "FAILED";
+  adapter_profile: string;
+  initiated_by: string;
+  started_at: string;
+  completed_at: string | null;
+  error_type: string | null;
+  error_message: string | null;
+  events: AgentTraceEvent[];
+};
+
 const threadTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
   year: "numeric",
   month: "2-digit",
@@ -124,6 +147,45 @@ function CapabilityPanel({ details }: { details: CapabilityDetails }) {
   );
 }
 
+function AgentTracePanel({ runs }: { runs: AgentRun[] }) {
+  return (
+    <section className="agentTracePanel" aria-label="Orchestrator Agent Trace">
+      <div className="traceHeader">
+        <span><strong>ORCHESTRATOR TRACE</strong><small>可审计步骤；不记录 API Key 或隐藏思维链</small></span>
+        <em>{runs.length} RUNS</em>
+      </div>
+      {runs.length === 0 ? (
+        <p className="emptyTrace">尚无 Orchestrator 运行记录。生成 Manifest 后将在这里显示逐步 trace。</p>
+      ) : runs.map((run, runIndex) => (
+        <details className={`traceRun ${run.status.toLowerCase()}`} open={runIndex === 0} key={run.id}>
+          <summary>
+            <span><b>{run.status}</b><strong>{run.adapter_profile}</strong></span>
+            <small>{formatThreadTime(run.started_at)} · {run.events.length} steps</small>
+          </summary>
+          {run.error_message && <p className="traceError">{run.error_type}: {run.error_message}</p>}
+          <ol className="traceSteps">
+            {run.events.map((event) => (
+              <li className={event.status.toLowerCase()} key={event.id}>
+                <span className="traceSequence">{String(event.sequence).padStart(2, "0")}</span>
+                <div>
+                  <header><code>{event.step}</code><b>{event.status}</b><time>{formatThreadTime(event.created_at)}</time></header>
+                  <p>{event.summary}</p>
+                  {Object.keys(event.details).length > 0 && (
+                    <details className="tracePayload">
+                      <summary>查看输入 / 输出详情</summary>
+                      <pre>{JSON.stringify(event.details, null, 2)}</pre>
+                    </details>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ol>
+        </details>
+      ))}
+    </section>
+  );
+}
+
 export default function Home() {
   const [phase, setPhase] = useState("INTAKE");
   const [approved, setApproved] = useState(false);
@@ -136,6 +198,8 @@ export default function Home() {
   const [selectedPathIds, setSelectedPathIds] = useState<string[]>([]);
   const [commitmentNodes, setCommitmentNodes] = useState<CommitmentNode[]>([]);
   const [timelineEvents, setTimelineEvents] = useState<TimelineEvent[]>([]);
+  const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
+  const [showAgentTrace, setShowAgentTrace] = useState(false);
   const [caseCreatedAt, setCaseCreatedAt] = useState<string | null>(null);
   const [canViewManifest, setCanViewManifest] = useState(true);
   const [identityIndex, setIdentityIndex] = useState(0);
@@ -151,6 +215,8 @@ export default function Home() {
     setSelectedPathIds([]);
     setCapabilities(null);
     setShowCapabilities(false);
+    setAgentRuns([]);
+    setShowAgentTrace(false);
     setIdentityIndex(nextIdentityIndex);
   }
 
@@ -185,6 +251,19 @@ export default function Home() {
         if (data.phase === "PATH_EXPLORATION") {
           setSelectedPathIds((data.manifest?.paths ?? []).filter((path: ManifestPath) => path.selected).map((path: ManifestPath) => path.id));
         }
+        if (data.permissions?.can_view_manifest === true) {
+          const traceQuery = new URLSearchParams({
+            actor: identity.name,
+            role: identity.role,
+            agent_type: "orchestrator",
+          });
+          fetch(`${API_BASE}/api/cases/CM-2026-014/agent-runs?${traceQuery}`, { signal: controller.signal })
+            .then((response) => response.ok ? response.json() : [])
+            .then(setAgentRuns)
+            .catch((error) => {
+              if (!(error instanceof DOMException && error.name === "AbortError")) setAgentRuns([]);
+            });
+        }
       })
       .catch((error) => {
         if (error instanceof DOMException && error.name === "AbortError") return;
@@ -202,6 +281,21 @@ export default function Home() {
     }
   }
 
+  async function refreshAgentRuns() {
+    if (!canViewManifest) return;
+    try {
+      const query = new URLSearchParams({
+        actor: currentIdentity.name,
+        role: currentIdentity.role,
+        agent_type: "orchestrator",
+      });
+      const response = await fetch(`${API_BASE}/api/cases/CM-2026-014/agent-runs?${query}`);
+      if (response.ok) setAgentRuns(await response.json());
+    } catch {
+      // Trace persistence is independent from the business action and can be reloaded later.
+    }
+  }
+
   async function generateManifest() {
     setBusy(true);
     setMessage("");
@@ -211,16 +305,21 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ actor: currentIdentity.name, role: currentIdentity.role }),
       });
-      if (!response.ok) throw new Error("orchestrate failed");
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.detail ?? "orchestrate failed");
+      }
       const data = await response.json();
       setPhase("MANIFEST_REVIEW");
       loadManifest(data.manifest);
       setCapabilities(null);
       await refreshTimeline();
       setMessage("Orchestrator 已根据 Case 与现有能力生成 Manifest，并冻结适用 Policy。 ");
-    } catch {
-      setMessage("Manifest 生成失败：请确认本地 API 与 Planner 配置。 ");
+    } catch (error) {
+      setMessage(`Manifest 生成失败：${error instanceof Error ? error.message : "请确认本地 API 与 Planner 配置"}。`);
     } finally {
+      await refreshAgentRuns();
+      setShowAgentTrace(true);
       setBusy(false);
     }
   }
@@ -270,6 +369,8 @@ export default function Home() {
       setSelectedPathIds([]);
       setCommitmentNodes([]);
       setTimelineEvents([]);
+      setAgentRuns([]);
+      setShowAgentTrace(false);
       setCaseCreatedAt(new Date().toISOString());
       setCanViewManifest(true);
       identityIndexRef.current = 0;
@@ -540,7 +641,17 @@ export default function Home() {
                 <div className="threadAvatar botAvatar">AC</div>
                 <div className="commentBox activeComment">
                   <header><strong>Agentic CM</strong><span>Orchestrator · 当前步骤</span><b className="currentLabel">{currentStage}</b></header>
-                  <div className="commentBody actionBody">{orchestrationCard}</div>
+                  <div className="commentBody actionBody">
+                    {orchestrationCard}
+                    {canViewManifest && (
+                      <>
+                        <button className="linkButton traceToggle" onClick={() => setShowAgentTrace((current) => !current)}>
+                          {showAgentTrace ? "收起 Orchestrator Trace ↑" : `查看 Orchestrator Trace${agentRuns.length ? ` (${agentRuns.length})` : ""} →`}
+                        </button>
+                        {showAgentTrace && <AgentTracePanel runs={agentRuns} />}
+                      </>
+                    )}
+                  </div>
                 </div>
               </article>
 

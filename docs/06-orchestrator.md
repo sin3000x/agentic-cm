@@ -28,6 +28,7 @@ OPEN Case (INTAKE)
 - `PlannerAdapter`：异步 `propose(context, candidates) -> ManifestDraftResult`。读取命中 Skill 的说明，为 Skill 声明的每条 Path 返回 rationale 并可按相关性排序，但不能省略候选。
 - `Orchestrator`：验证 Planner 输出，为每个选中 Path 冻结独立能力快照；失败时不修改 Case、不写业务事件。
 - `CaseService`：成功后才保存 `manifest.proposed` 事件并将 Case 推进至 `MANIFEST_REVIEW`。
+- `AgentRun trace`：每次调用先创建独立技术运行记录，逐步写入 eligibility、Path 发现、逐 Path 能力解析、Planner 输入、模型请求/响应、白名单校验、Manifest 组装和最终状态。失败 trace 也会保留，但不写业务事件、不修改 Case。
 
 当前内置的 `shortage-response-planning/paths.json` 声明三条候选：`SupplyExpediting`（提拉）、`MaterialSubstitution`（替代）、`OrderSplit`（拆分），因此 Manifest 必须包含三条。Owner 在 Manifest Review 中单选或多选本轮探索子集；批准后平台只为勾选的 Path 创建 PathAttempt 和 Commitment 节点。
 
@@ -97,6 +98,7 @@ curl -sS -X POST http://localhost:8000/api/cases/CM-2026-014/orchestrate \
   -H 'Content-Type: application/json' \
   -d '{"actor":"陈澄","role":"订单统筹经理"}'
 curl -sS 'http://localhost:8000/api/cases/CM-2026-014/manifest?actor=陈澄&role=订单统筹经理' | python3 -m json.tool
+curl -sS 'http://localhost:8000/api/cases/CM-2026-014/agent-runs?actor=陈澄&role=订单统筹经理&agent_type=orchestrator' | python3 -m json.tool
 curl -sS 'http://localhost:8000/api/cases/CM-2026-014/capabilities?actor=陈澄&role=订单统筹经理'
 curl -sS -X POST http://localhost:8000/api/cases/CM-2026-014/manifest/approve \
   -H 'Content-Type: application/json' \
@@ -104,6 +106,18 @@ curl -sS -X POST http://localhost:8000/api/cases/CM-2026-014/manifest/approve \
 ```
 
 Manifest 的具体内容及其能力快照是 Owner-only 数据。非 Owner 的 Case 视图返回 `manifest: null`，直接读取、生成或审批返回 `403`。当前 `actor` / `role` 仅服务于 Demo 身份模拟；生产环境应从可信认证主体映射身份。
+
+### Orchestrator trace 契约
+
+`GET /api/cases/{case_id}/agent-runs` 返回运行级元数据与有序 `events[]`。可用 `agent_type=orchestrator` 过滤。每个事件包含 `sequence`、`step`、`status`、`summary`、`details` 和数据库 UTC 时间。OpenAI-compatible Adapter 的 trace 会保存实际请求 JSON、模型响应正文、HTTP 状态、usage 和结构校验结果，但鉴权 Header 只记录 Header 名与“是否配置”，绝不保存 Key 值。该接口与 Manifest 一样仅 Case Owner 可读。
+
+这里的 trace 是可审计执行轨迹，不是模型隐藏思维链。系统保存提供给模型的事实/候选、模型显式返回的 rationale、平台校验和状态转换；不要求模型输出、也不尝试推断 chain-of-thought。
+
+首版状态：
+
+- `orchestrator` Agent trace：已实现并在 Case 工作台可展开查看，成功和失败运行均保留；
+- `path` Agent trace：待 Path execution Adapter 与 `SolutionRevision` 切片实现后，复用同一 `agent_runs / agent_trace_events` 契约；
+- `synthesis` Agent trace：待多 Path 结果汇总与冲突检测切片实现后接入；Synthesis 不得引入未探索 Path 或绕过人类批准。
 
 Case Thread 读取 `GET /api/cases/{case_id}/timeline`。该接口从 append-only `domain_events` 投影 Manifest 生成、Owner 批准和各角色 Commitment 批准事件，并返回数据库记录的 UTC 时间；前端按浏览器本地时区显示到秒。投影只包含 Thread 所需字段，不暴露原始事件中的 Manifest Path、Policy 或能力快照。
 

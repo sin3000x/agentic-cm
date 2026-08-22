@@ -14,6 +14,7 @@ from agentic_cm.capabilities import (
 )
 from agentic_cm.domain import NodeStatus, OrchestrationPhase
 from agentic_cm.orchestrator import (
+    DeterministicPlannerAdapter,
     ManifestDraftResult,
     OpenAICompatiblePlannerAdapter,
     OrchestrationError,
@@ -25,7 +26,10 @@ from agentic_cm.service import AuthorizationError, CaseService, InvalidTransitio
 
 
 def make_service(tmp_path: Path) -> CaseService:
-    service = CaseService(CaseRepository(tmp_path / "test.db"))
+    service = CaseService(
+        CaseRepository(tmp_path / "test.db"),
+        planner=DeterministicPlannerAdapter(),
+    )
     service.ensure_demo_data()
     return service
 
@@ -225,6 +229,17 @@ def test_manifest_http_endpoints_enforce_owner_boundary(tmp_path: Path, monkeypa
     assert client.get(
         "/api/cases/CM-2026-014/manifest",
         params={"actor": "王淼", "role": "主计划"},
+    ).status_code == 403
+
+    trace = client.get(
+        "/api/cases/CM-2026-014/agent-runs",
+        params={**owner, "agent_type": "orchestrator"},
+    )
+    assert trace.status_code == 200
+    assert trace.json()[0]["status"] == "SUCCEEDED"
+    assert client.get(
+        "/api/cases/CM-2026-014/agent-runs",
+        params={"actor": "王淼", "role": "主计划", "agent_type": "orchestrator"},
     ).status_code == 403
     assert client.post(
         "/api/cases/CM-2026-014/manifest/approve",
@@ -518,7 +533,8 @@ def test_reset_is_scoped_to_known_dataset(tmp_path: Path) -> None:
 
 
 class _InventingPlanner:
-    async def propose(self, context, candidates):
+    async def propose(self, context, candidates, trace):
+        trace("planner.response", "COMPLETED", "test response", {"invented": True})
         return ManifestDraftResult(
             paths=(PlannedPath("InventedByModel", "unsupported"),),
             planner_profile="test/inventing",
@@ -526,7 +542,7 @@ class _InventingPlanner:
 
 
 class _OmittingPlanner:
-    async def propose(self, context, candidates):
+    async def propose(self, context, candidates, trace):
         candidate = candidates[0]
         return ManifestDraftResult(
             paths=(PlannedPath(candidate.definition, "only one"),),
@@ -538,7 +554,7 @@ class _AllMatchedSkillPathsPlanner:
     def __init__(self) -> None:
         self.candidates = ()
 
-    async def propose(self, context, candidates):
+    async def propose(self, context, candidates, trace):
         self.candidates = candidates
         return ManifestDraftResult(
             paths=tuple(
@@ -661,6 +677,7 @@ def test_planner_cannot_omit_skill_declared_paths(tmp_path: Path) -> None:
 
 def test_openai_compatible_adapter_accepts_custom_provider_configuration() -> None:
     observed = {}
+    trace_events = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         observed["api_key"] = request.headers["x-api-key"]
@@ -702,6 +719,7 @@ def test_openai_compatible_adapter_accepts_custom_provider_configuration() -> No
                     ("POL-2",), ("skill-1",), (), ("SPLIT",),
                     ({"id": "skill-1", "description": "desc", "instructions_markdown": "guide"},),
                 )),
+                lambda *args, **kwargs: trace_events.append((args, kwargs)),
             )
 
     result = asyncio.run(run())
@@ -710,3 +728,83 @@ def test_openai_compatible_adapter_accepts_custom_provider_configuration() -> No
     assert observed["api_key"] == "secret-key"
     assert observed["url"] == "https://gateway.example/v1/chat/completions"
     assert observed["payload"]["response_format"] == {"type": "json_object"}
+    assert "secret-key" not in json.dumps(trace_events)
+    request_trace = next(args for args, _ in trace_events if args[0] == "planner.request")
+    assert request_trace[3]["authentication"] == {
+        "header": "x-api-key",
+        "credential_present": True,
+        "credential_value_logged": False,
+    }
+
+
+def test_orchestrator_trace_persists_each_governed_step(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+    orchestrate(service)
+
+    runs = service.get_agent_runs(
+        "CM-2026-014",
+        actor="陈澄",
+        role="订单统筹经理",
+        agent_type="orchestrator",
+    )
+
+    assert len(runs) == 1
+    run = runs[0]
+    assert run["status"] == "SUCCEEDED"
+    assert run["adapter_profile"] == "deterministic/v1"
+    steps = [event["step"] for event in run["events"]]
+    assert steps == [
+        "run.started",
+        "case.eligibility",
+        "case.eligibility",
+        "paths.discovery",
+        "capabilities.resolve",
+        "capabilities.resolve",
+        "capabilities.resolve",
+        "planner.input",
+        "planner.request",
+        "planner.response",
+        "planner.output_validation",
+        "manifest.compose",
+        "run.completed",
+    ]
+    request_event = next(event for event in run["events"] if event["step"] == "planner.request")
+    assert request_event["details"]["case"]["case_id"] == "CM-2026-014"
+    assert [item["definition"] for item in request_event["details"]["candidates"]] == [
+        "MaterialSubstitution", "SupplyExpediting", "OrderSplit"
+    ]
+
+
+def test_failed_orchestrator_trace_is_kept_without_business_mutation(tmp_path: Path) -> None:
+    repository = CaseRepository(tmp_path / "test.db")
+    service = CaseService(repository, planner=_InventingPlanner())
+    service.ensure_demo_data()
+
+    try:
+        orchestrate(service)
+    except PlannerOutputError:
+        pass
+    else:
+        raise AssertionError("invented path must fail")
+
+    runs = service.get_agent_runs(
+        "CM-2026-014", actor="陈澄", role="订单统筹经理", agent_type="orchestrator"
+    )
+    assert runs[0]["status"] == "FAILED"
+    assert runs[0]["error_type"] == "PlannerOutputError"
+    assert runs[0]["events"][-1]["step"] == "run.failed"
+    assert repository.list_events("CM-2026-014") == []
+
+
+def test_agent_trace_is_owner_only(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+    orchestrate(service)
+
+    try:
+        service.get_agent_runs(
+            "CM-2026-014", actor="王淼", role="主计划", agent_type="orchestrator"
+        )
+    except AuthorizationError:
+        pass
+    else:
+        raise AssertionError("Agent trace must remain owner-only")
