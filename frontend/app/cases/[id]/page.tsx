@@ -10,10 +10,10 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? `http://localhost:${pro
 const stages = ["Case 受理", "Manifest 评审", "Path 探索", "专业承诺", "最终决策", "结果验证"];
 
 const demoIdentities = [
-  { name: "陈澄", role: "订单履行经理", avatar: "陈" },
+  { name: "陈澄", role: "订单统筹经理", avatar: "陈" },
   { name: "王淼", role: "主计划", avatar: "王" },
   { name: "林乔", role: "研发", avatar: "林" },
-  { name: "赵宁", role: "一线经理", avatar: "赵" },
+  { name: "赵宁", role: "供应经理", avatar: "赵" },
 ];
 
 const commitmentCopy: Record<string, string> = {
@@ -389,7 +389,7 @@ export default function Home() {
         {commitmentNode("SUPPLY", "主计划", "PENDING")}
         {commitmentNode("TECH", "研发", "PENDING")}
         <div className="dagJoin"><i /><i /></div>
-        {commitmentNode("CUSTOMER", "一线经理", "BLOCKED")}
+        {commitmentNode("CUSTOMER", "供应经理", "BLOCKED")}
       </div>
       <div className="metricStrip">
         <span><strong>2</strong><small>parallel review branches</small></span>

@@ -8,20 +8,20 @@ type CaseRisk = "高" | "中" | "低";
 type CaseSummary = { id:string; title:string; description:string; status:CaseStatus; risk:CaseRisk; owner:string; ownerRole:string; ownerInitial:string; customer:string; due:string; dueTone:"danger"|"warning"|"normal"|"muted"; phase:number; phaseLabel:string; updated:string; attention?:string };
 
 const caseData: CaseSummary[] = [
-  {id:"CM-2026-014",title:"订单预计延期",description:"关键物料 MCU-X7 预计晚于承诺日期 12 天",status:"处理中",risk:"高",owner:"陈澄",ownerRole:"订单履行经理",ownerInitial:"陈",customer:"Northstar Mobility",due:"3 天后",dueTone:"danger",phase:3,phaseLabel:"Path 探索",updated:"12 分钟前",attention:"2 项专业承诺待完成"},
+  {id:"CM-2026-014",title:"订单预计延期",description:"关键物料 MCU-X7 预计晚于承诺日期 12 天",status:"处理中",risk:"高",owner:"陈澄",ownerRole:"订单统筹经理",ownerInitial:"陈",customer:"Northstar Mobility",due:"3 天后",dueTone:"danger",phase:3,phaseLabel:"Path 探索",updated:"12 分钟前",attention:"2 项专业承诺待完成"},
   {id:"CM-2026-012",title:"供应商交付异常",description:"一级供应商产线停机，影响两个在途批次",status:"阻塞",risk:"高",owner:"王淼",ownerRole:"主计划",ownerInitial:"王",customer:"Vela Robotics",due:"已逾期 1 天",dueTone:"danger",phase:4,phaseLabel:"专业承诺",updated:"28 分钟前",attention:"等待供应商恢复时间证据"},
   {id:"CM-2026-015",title:"替代料认证缺口",description:"候选替代料缺少客户侧应用认证",status:"待决策",risk:"中",owner:"林乔",ownerRole:"研发",ownerInitial:"林",customer:"Northstar Mobility",due:"5 天后",dueTone:"warning",phase:5,phaseLabel:"最终决策",updated:"1 小时前",attention:"Case Owner 需批准方案 B"},
-  {id:"CM-2026-018",title:"客户需求临时上调",description:"9 月需求上调 22%，需评估产能与库存",status:"待受理",risk:"中",owner:"陈澄",ownerRole:"订单履行经理",ownerInitial:"陈",customer:"Aster Energy",due:"7 天后",dueTone:"normal",phase:1,phaseLabel:"Case 受理",updated:"2 小时前"},
-  {id:"CM-2026-009",title:"备件需求激增",description:"售后备件消耗连续三周高于预测区间",status:"处理中",risk:"中",owner:"赵宁",ownerRole:"一线经理",ownerInitial:"赵",customer:"内部售后",due:"8 天后",dueTone:"normal",phase:3,phaseLabel:"Path 探索",updated:"昨天 16:40"},
+  {id:"CM-2026-018",title:"客户需求临时上调",description:"9 月需求上调 22%，需评估产能与库存",status:"待受理",risk:"中",owner:"陈澄",ownerRole:"订单统筹经理",ownerInitial:"陈",customer:"Aster Energy",due:"7 天后",dueTone:"normal",phase:1,phaseLabel:"Case 受理",updated:"2 小时前"},
+  {id:"CM-2026-009",title:"备件需求激增",description:"售后备件消耗连续三周高于预测区间",status:"处理中",risk:"中",owner:"赵宁",ownerRole:"供应经理",ownerInitial:"赵",customer:"内部售后",due:"8 天后",dueTone:"normal",phase:3,phaseLabel:"Path 探索",updated:"昨天 16:40"},
   {id:"CM-2026-006",title:"华南仓到货差异",description:"WMS 与实物收货数量存在 320 件差异",status:"已关闭",risk:"低",owner:"周屿",ownerRole:"仓储运营",ownerInitial:"周",customer:"内部履约",due:"已完成",dueTone:"muted",phase:6,phaseLabel:"结果验证",updated:"8 月 19 日"},
 ];
 const filters = ["全部","处理中","待决策","阻塞","已关闭"] as const;
 const stages = ["受理","评审","探索","承诺","决策","验证"];
 const demoIdentities = [
-  {name:"陈澄",role:"订单履行经理",avatar:"陈"},
+  {name:"陈澄",role:"订单统筹经理",avatar:"陈"},
   {name:"王淼",role:"主计划",avatar:"王"},
   {name:"林乔",role:"研发",avatar:"林"},
-  {name:"赵宁",role:"一线经理",avatar:"赵"},
+  {name:"赵宁",role:"供应经理",avatar:"赵"},
 ];
 
 function StatusPill({status}:{status:CaseStatus}){return <span className={`statusPill status-${status}`}>{status}</span>}

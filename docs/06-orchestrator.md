@@ -95,12 +95,12 @@ curl -sS -X POST http://localhost:8000/api/demo/reset \
 
 curl -sS -X POST http://localhost:8000/api/cases/CM-2026-014/orchestrate \
   -H 'Content-Type: application/json' \
-  -d '{"actor":"陈澄","role":"订单履行经理"}'
-curl -sS 'http://localhost:8000/api/cases/CM-2026-014/manifest?actor=陈澄&role=订单履行经理' | python3 -m json.tool
-curl -sS 'http://localhost:8000/api/cases/CM-2026-014/capabilities?actor=陈澄&role=订单履行经理'
+  -d '{"actor":"陈澄","role":"订单统筹经理"}'
+curl -sS 'http://localhost:8000/api/cases/CM-2026-014/manifest?actor=陈澄&role=订单统筹经理' | python3 -m json.tool
+curl -sS 'http://localhost:8000/api/cases/CM-2026-014/capabilities?actor=陈澄&role=订单统筹经理'
 curl -sS -X POST http://localhost:8000/api/cases/CM-2026-014/manifest/approve \
   -H 'Content-Type: application/json' \
-  -d '{"selected_path_ids":["PATH-01"],"actor":"陈澄","role":"订单履行经理"}'
+  -d '{"selected_path_ids":["PATH-01"],"actor":"陈澄","role":"订单统筹经理"}'
 ```
 
 Manifest 的具体内容及其能力快照是 Owner-only 数据。非 Owner 的 Case 视图返回 `manifest: null`，直接读取、生成或审批返回 `403`。当前 `actor` / `role` 仅服务于 Demo 身份模拟；生产环境应从可信认证主体映射身份。

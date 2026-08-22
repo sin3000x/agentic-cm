@@ -95,8 +95,8 @@ curl -sS -X POST http://localhost:8000/api/demo/reset \
   -d '{"dataset_id":"supply-chain-golden-path-v1"}'
 curl -sS -X POST http://localhost:8000/api/cases/CM-2026-014/orchestrate \
   -H 'Content-Type: application/json' \
-  -d '{"actor":"陈澄","role":"订单履行经理"}'
-curl -sS 'http://localhost:8000/api/cases/CM-2026-014/manifest?actor=陈澄&role=订单履行经理' \
+  -d '{"actor":"陈澄","role":"订单统筹经理"}'
+curl -sS 'http://localhost:8000/api/cases/CM-2026-014/manifest?actor=陈澄&role=订单统筹经理' \
   | python3 -m json.tool
 ```
 
@@ -105,7 +105,7 @@ curl -sS 'http://localhost:8000/api/cases/CM-2026-014/manifest?actor=陈澄&role
 当 Manifest 含多条 Path 时，每条 Path 都有独立的 `capability_snapshots[path_id]`。可以单独检查：
 
 ```bash
-curl -sS 'http://localhost:8000/api/cases/CM-2026-014/capabilities?actor=陈澄&role=订单履行经理&path_id=PATH-02' \
+curl -sS 'http://localhost:8000/api/cases/CM-2026-014/capabilities?actor=陈澄&role=订单统筹经理&path_id=PATH-02' \
   | python3 -m json.tool
 ```
 

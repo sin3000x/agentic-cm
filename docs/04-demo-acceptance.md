@@ -14,10 +14,10 @@
 
 固定角色与 Actor：
 
-- 订单履行经理：Case Owner；
+- 订单统筹经理：Case Owner；
 - 主计划；
 - 研发；
-- 一线经理；
+- 供应经理；
 - 大调度：Coordinator。
 
 Role Switcher 用于模拟不同 Actor 操作，只能从左下角全局身份头像进入；DAG 节点和任务卡片不得提供角色切换按钮。页面必须持续显示 `Demo identity simulation`。
@@ -48,16 +48,16 @@ CommitmentDAG 中：
 - 主计划确认 A/B 的供应可行性；
 - 研发确认 A/B 的技术可行性；
 - 两个节点没有互相依赖，因此并行开放；
-- 一线经理节点等待两项上游承诺完成。
+- 供应经理节点等待两项上游承诺完成。
 
 ### 2.3 客户反馈与局部重审
 
-一线经理确认：
+供应经理确认：
 
 - A 因客户所在地区的气候、法规或政治约束不可接受；
 - B 可以继续沟通并被客户接受。
 
-一线经理提交 `REQUEST_CHANGES`。Path Agent 生成新 SolutionRevision，将最终推荐从 A 调整为 B。
+供应经理提交 `REQUEST_CHANGES`。Path Agent 生成新 SolutionRevision，将最终推荐从 A 调整为 B。
 
 系统比较 Section：
 
@@ -66,7 +66,7 @@ CommitmentDAG 中：
 - `customer` 变化；
 - `overall_recommendation` 变化。
 
-因此主计划与研发 Commitment 保持有效，仅一线经理重新评审并 `COMMIT`。
+因此主计划与研发 Commitment 保持有效，仅供应经理重新评审并 `COMMIT`。
 
 如果新版本引入未被上游承诺覆盖的物料 C，则必须让主计划与研发重新审批；demo 不得为了展示优化而错误保留旧承诺。
 
@@ -119,7 +119,7 @@ Golden Path 的预期解释是：
 - 主计划与研发并行，而非串行等待；
 - Agent 提前准备 A/B 候选集合；
 - A 被客户拒绝后，B 已在上游承诺范围内；
-- 平台只让受影响的一线经理重新评审。
+- 平台只让受影响的供应经理重新评审。
 
 ## 6. 功能验收清单
 

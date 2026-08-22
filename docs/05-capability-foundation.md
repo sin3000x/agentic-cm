@@ -34,7 +34,7 @@ Policy 初版只包含结构化 `selector` 和 `requirements.commitments`。`sel
 当前 Demo 的两个实例是：
 
 - `POL-SUBSTITUTION-3`：要求主计划与研发分别确认候选 A/B；
-- `POL-CUSTOMER-2`：要求一线经理在供应与技术承诺之后确认地区认证和客户接受度。
+- `POL-CUSTOMER-2`：要求供应经理在供应与技术承诺之后确认地区认证和客户接受度。
 
 编译器只合并责任节点，并校验未知依赖、DAG 环和同一节点的冲突。无法判定时启动失败，即 fail closed。
 
@@ -95,7 +95,7 @@ Case classification
   -> CaseService 只按 frozen compiled_policy 创建 CommitmentDAG
 ```
 
-页面中的“查看执行层与能力快照”会以 Case Owner 身份读取 `GET /api/cases/CM-2026-014/capabilities`，展示本轮实际冻结的三类资产；该内容和 Manifest 本身对其他角色隐藏。批准 Manifest 后，主计划与研发因没有前置依赖而并行进入 `PENDING` 并投递到各自 Inbox；本人批准后才转为 `READY`。一线经理起初为 `BLOCKED`，仅在两项前置节点都 `READY` 后转为 `PENDING`。这些依赖来自两个 Policy 的编译结果，不是 UI 中的硬编码剧情。
+页面中的“查看执行层与能力快照”会以 Case Owner 身份读取 `GET /api/cases/CM-2026-014/capabilities`，展示本轮实际冻结的三类资产；该内容和 Manifest 本身对其他角色隐藏。批准 Manifest 后，主计划与研发因没有前置依赖而并行进入 `PENDING` 并投递到各自 Inbox；本人批准后才转为 `READY`。供应经理起初为 `BLOCKED`，仅在两项前置节点都 `READY` 后转为 `PENDING`。这些依赖来自两个 Policy 的编译结果，不是 UI 中的硬编码剧情。
 
 ## 4. 开发者接入自己的本地能力
 

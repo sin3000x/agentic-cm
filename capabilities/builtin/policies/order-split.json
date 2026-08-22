@@ -20,7 +20,7 @@
       },
       {
         "id": "SPLIT-CUSTOMER",
-        "role": "一线经理",
+        "role": "供应经理",
         "node_type": "REVIEW",
         "reviews": ["customer_acceptance", "remaining_commitment"],
         "depends_on": ["SPLIT-PLAN"]
