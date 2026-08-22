@@ -102,6 +102,15 @@ curl -sS 'http://localhost:8000/api/cases/CM-2026-014/manifest?actor=陈澄&role
 
 也可以打开前端，点击“生成 Manifest”，然后查看 Path、Planner profile 与冻结的 Policy/Skill/Knowledge 能力快照。
 
+Case Owner 还可以在同一工作台展开“Orchestrator Trace”，查看本次运行从 Case 门禁、候选 Path 与能力解析，到模型请求/响应、输出校验和 Manifest 持久化的每一步。失败运行同样保留 trace，但不会修改 Case。也可以直接调用：
+
+```bash
+curl -sS 'http://localhost:8000/api/cases/CM-2026-014/agent-runs?actor=陈澄&role=订单统筹经理&agent_type=orchestrator' \
+  | python3 -m json.tool
+```
+
+Path Agent 与 Synthesis Agent 的 trace 尚未实现；后续会复用同一 AgentRun/TraceEvent 契约，详见 [Orchestrator 实现](docs/06-orchestrator.md)。
+
 当 Manifest 含多条 Path 时，每条 Path 都有独立的 `capability_snapshots[path_id]`。可以单独检查：
 
 ```bash

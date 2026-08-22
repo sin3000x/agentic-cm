@@ -106,6 +106,28 @@ def get_case_timeline(case_id: str):
         raise HTTPException(status_code=404, detail="Case not found") from exc
 
 
+@app.get("/api/cases/{case_id}/agent-runs")
+def get_case_agent_runs(
+    case_id: str,
+    actor: str,
+    role: str,
+    agent_type: str | None = None,
+):
+    try:
+        return service.get_agent_runs(
+            case_id,
+            actor=actor,
+            role=role,
+            agent_type=agent_type,
+        )
+    except CaseNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Case not found") from exc
+    except AuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/api/cases/{case_id}/orchestrate")
 async def orchestrate_case(case_id: str, request: OwnerActionRequest):
     try:

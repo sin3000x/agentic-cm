@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from .capabilities import CapabilityRegistry, default_registry
 from .demo import demo_cases
@@ -137,10 +138,63 @@ class CaseService:
             })
         return timeline
 
+    def get_agent_runs(
+        self,
+        case_id: str,
+        *,
+        actor: str,
+        role: str,
+        agent_type: str | None = None,
+    ) -> list[dict]:
+        case = self.get_case(case_id)
+        self._require_case_owner(case, actor=actor, role=role)
+        if agent_type not in (None, "orchestrator", "path", "synthesis"):
+            raise ValueError(f"Unsupported agent_type: {agent_type}")
+        return self.repository.list_agent_runs(case_id, agent_type=agent_type)
+
     async def orchestrate_case(self, case_id: str, *, actor: str, role: str):
         case = self.get_case(case_id)
         self._require_case_owner(case, actor=actor, role=role)
-        manifest = await self.orchestrator.compose_manifest(case)
+        run_id = f"RUN-{uuid4()}"
+        adapter_profile = getattr(
+            self.orchestrator.planner,
+            "profile",
+            type(self.orchestrator.planner).__name__,
+        )
+        self.repository.create_agent_run(
+            run_id,
+            case.id,
+            agent_type="orchestrator",
+            adapter_profile=adapter_profile,
+            initiated_by=actor,
+        )
+
+        def trace(step: str, status: str, summary: str, details: dict | None = None) -> None:
+            self.repository.append_agent_trace(
+                run_id,
+                step=step,
+                status=status,
+                summary=summary,
+                details=details,
+            )
+
+        trace(
+            "run.started",
+            "STARTED",
+            "Orchestrator AgentRun 已启动",
+            {"agent_type": "orchestrator", "initiated_by": actor, "role": role},
+        )
+        try:
+            manifest = await self.orchestrator.compose_manifest(case, trace)
+        except Exception as exc:
+            trace(
+                "run.failed",
+                "FAILED",
+                "Orchestrator AgentRun 失败；Case 权威状态未修改",
+                {"error_type": type(exc).__name__, "error": str(exc)},
+            )
+            self.repository.finish_agent_run(run_id, status="FAILED", error=exc)
+            raise
         case.manifest = manifest
         case.phase = OrchestrationPhase.MANIFEST_REVIEW
         case.version += 1
@@ -155,6 +209,17 @@ class CaseService:
                 "path_definitions": [path.definition for path in manifest.paths],
                 "policy_refs": list(manifest.policy_refs),
             },
+        )
+        trace(
+            "run.completed",
+            "COMPLETED",
+            "Manifest 已持久化，Case 进入 MANIFEST_REVIEW",
+            {"manifest_id": manifest.id, "case_version": case.version, "phase": case.phase.value},
+        )
+        self.repository.finish_agent_run(
+            run_id,
+            status="SUCCEEDED",
+            adapter_profile=manifest.planner_profile,
         )
         return case
 
