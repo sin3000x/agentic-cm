@@ -61,14 +61,24 @@ type CommitmentNode = {
   id: string;
   role: string;
   node_type: string;
-  status: "BLOCKED" | "PENDING" | "READY" | "COMMITTED" | "STALE";
+  status: "BLOCKED" | "PENDING" | "READY" | "COMMITTED" | "STALE" | "REJECTED";
   depends_on: string[];
   path_id: string;
 };
 
+type CommitmentDecision = "APPROVE" | "REVISE" | "REJECT";
+
+type InboxItem = {
+  case_id: string;
+  case_title: string;
+  path_id: string;
+  path_title: string;
+  node: CommitmentNode;
+};
+
 type TimelineEvent = {
   id: number;
-  event_type: "manifest.proposed" | "manifest.approved" | "commitment.approved";
+  event_type: "manifest.proposed" | "manifest.approved" | "commitment.approved" | "commitment.revision_requested" | "commitment.rejected";
   created_at: string;
   details: {
     revision?: number;
@@ -77,6 +87,29 @@ type TimelineEvent = {
     node_id?: string;
     path_id?: string;
   };
+};
+
+type AgentTraceEvent = {
+  id: number;
+  sequence: number;
+  step: string;
+  status: "STARTED" | "COMPLETED" | "FAILED";
+  summary: string;
+  details: Record<string, unknown>;
+  created_at: string;
+};
+
+type AgentRun = {
+  id: string;
+  agent_type: "orchestrator" | "path" | "synthesis";
+  status: "RUNNING" | "SUCCEEDED" | "FAILED";
+  adapter_profile: string;
+  initiated_by: string;
+  started_at: string;
+  completed_at: string | null;
+  error_type: string | null;
+  error_message: string | null;
+  events: AgentTraceEvent[];
 };
 
 const threadTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
@@ -124,6 +157,45 @@ function CapabilityPanel({ details }: { details: CapabilityDetails }) {
   );
 }
 
+function AgentTracePanel({ runs }: { runs: AgentRun[] }) {
+  return (
+    <section className="agentTracePanel" aria-label="Orchestrator Agent Trace">
+      <div className="traceHeader">
+        <span><strong>ORCHESTRATOR TRACE</strong><small>可审计步骤；不记录 API Key 或隐藏思维链</small></span>
+        <em>{runs.length} RUNS</em>
+      </div>
+      {runs.length === 0 ? (
+        <p className="emptyTrace">尚无 Orchestrator 运行记录。生成 Manifest 后将在这里显示逐步 trace。</p>
+      ) : runs.map((run, runIndex) => (
+        <details className={`traceRun ${run.status.toLowerCase()}`} open={runIndex === 0} key={run.id}>
+          <summary>
+            <span><b>{run.status}</b><strong>{run.adapter_profile}</strong></span>
+            <small>{formatThreadTime(run.started_at)} · {run.events.length} steps</small>
+          </summary>
+          {run.error_message && <p className="traceError">{run.error_type}: {run.error_message}</p>}
+          <ol className="traceSteps">
+            {run.events.map((event) => (
+              <li className={event.status.toLowerCase()} key={event.id}>
+                <span className="traceSequence">{String(event.sequence).padStart(2, "0")}</span>
+                <div>
+                  <header><code>{event.step}</code><b>{event.status}</b><time>{formatThreadTime(event.created_at)}</time></header>
+                  <p>{event.summary}</p>
+                  {Object.keys(event.details).length > 0 && (
+                    <details className="tracePayload">
+                      <summary>查看输入 / 输出详情</summary>
+                      <pre>{JSON.stringify(event.details, null, 2)}</pre>
+                    </details>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ol>
+        </details>
+      ))}
+    </section>
+  );
+}
+
 export default function Home() {
   const [phase, setPhase] = useState("INTAKE");
   const [approved, setApproved] = useState(false);
@@ -136,11 +208,14 @@ export default function Home() {
   const [selectedPathIds, setSelectedPathIds] = useState<string[]>([]);
   const [commitmentNodes, setCommitmentNodes] = useState<CommitmentNode[]>([]);
   const [timelineEvents, setTimelineEvents] = useState<TimelineEvent[]>([]);
+  const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
+  const [showAgentTrace, setShowAgentTrace] = useState(false);
   const [caseCreatedAt, setCaseCreatedAt] = useState<string | null>(null);
   const [canViewManifest, setCanViewManifest] = useState(true);
   const [identityIndex, setIdentityIndex] = useState(0);
   const identityIndexRef = useRef(0);
   const [showInbox, setShowInbox] = useState(false);
+  const [inboxItems, setInboxItems] = useState<InboxItem[]>([]);
   const currentIdentity = demoIdentities[identityIndex];
 
   function selectIdentity(nextIdentityIndex: number) {
@@ -151,6 +226,9 @@ export default function Home() {
     setSelectedPathIds([]);
     setCapabilities(null);
     setShowCapabilities(false);
+    setAgentRuns([]);
+    setShowAgentTrace(false);
+    setInboxItems([]);
     setIdentityIndex(nextIdentityIndex);
   }
 
@@ -169,21 +247,36 @@ export default function Home() {
     Promise.all([
       fetch(`${API_BASE}/api/cases/CM-2026-014?${query}`, { signal: controller.signal }),
       fetch(`${API_BASE}/api/cases/CM-2026-014/timeline`, { signal: controller.signal }),
+      fetch(`${API_BASE}/api/inbox?${new URLSearchParams({ role: identity.role })}`, { signal: controller.signal }),
     ])
-      .then(([caseResponse, timelineResponse]) => {
-        if (!caseResponse.ok || !timelineResponse.ok) return Promise.reject();
-        return Promise.all([caseResponse.json(), timelineResponse.json()]);
+      .then(([caseResponse, timelineResponse, inboxResponse]) => {
+        if (!caseResponse.ok || !timelineResponse.ok || !inboxResponse.ok) return Promise.reject();
+        return Promise.all([caseResponse.json(), timelineResponse.json(), inboxResponse.json()]);
       })
-      .then(([data, timeline]) => {
+      .then(([data, timeline, inbox]) => {
         setPhase(data.phase);
         setApproved(data.phase === "PATH_EXPLORATION");
         setCommitmentNodes(data.commitment_nodes ?? []);
         setTimelineEvents(timeline);
+        setInboxItems(inbox);
         setCaseCreatedAt(data.created_at);
         setCanViewManifest(data.permissions?.can_view_manifest === true);
         loadManifest(data.manifest);
         if (data.phase === "PATH_EXPLORATION") {
           setSelectedPathIds((data.manifest?.paths ?? []).filter((path: ManifestPath) => path.selected).map((path: ManifestPath) => path.id));
+        }
+        if (data.permissions?.can_view_manifest === true) {
+          const traceQuery = new URLSearchParams({
+            actor: identity.name,
+            role: identity.role,
+            agent_type: "orchestrator",
+          });
+          fetch(`${API_BASE}/api/cases/CM-2026-014/agent-runs?${traceQuery}`, { signal: controller.signal })
+            .then((response) => response.ok ? response.json() : [])
+            .then(setAgentRuns)
+            .catch((error) => {
+              if (!(error instanceof DOMException && error.name === "AbortError")) setAgentRuns([]);
+            });
         }
       })
       .catch((error) => {
@@ -202,6 +295,31 @@ export default function Home() {
     }
   }
 
+  async function refreshInbox() {
+    try {
+      const query = new URLSearchParams({ role: currentIdentity.role });
+      const response = await fetch(`${API_BASE}/api/inbox?${query}`);
+      if (response.ok) setInboxItems(await response.json());
+    } catch {
+      // Inbox can be refreshed independently without changing the Case decision.
+    }
+  }
+
+  async function refreshAgentRuns() {
+    if (!canViewManifest) return;
+    try {
+      const query = new URLSearchParams({
+        actor: currentIdentity.name,
+        role: currentIdentity.role,
+        agent_type: "orchestrator",
+      });
+      const response = await fetch(`${API_BASE}/api/cases/CM-2026-014/agent-runs?${query}`);
+      if (response.ok) setAgentRuns(await response.json());
+    } catch {
+      // Trace persistence is independent from the business action and can be reloaded later.
+    }
+  }
+
   async function generateManifest() {
     setBusy(true);
     setMessage("");
@@ -211,16 +329,21 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ actor: currentIdentity.name, role: currentIdentity.role }),
       });
-      if (!response.ok) throw new Error("orchestrate failed");
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.detail ?? "orchestrate failed");
+      }
       const data = await response.json();
       setPhase("MANIFEST_REVIEW");
       loadManifest(data.manifest);
       setCapabilities(null);
       await refreshTimeline();
       setMessage("Orchestrator 已根据 Case 与现有能力生成 Manifest，并冻结适用 Policy。 ");
-    } catch {
-      setMessage("Manifest 生成失败：请确认本地 API 与 Planner 配置。 ");
+    } catch (error) {
+      setMessage(`Manifest 生成失败：${error instanceof Error ? error.message : "请确认本地 API 与 Planner 配置"}。`);
     } finally {
+      await refreshAgentRuns();
+      setShowAgentTrace(true);
       setBusy(false);
     }
   }
@@ -270,11 +393,14 @@ export default function Home() {
       setSelectedPathIds([]);
       setCommitmentNodes([]);
       setTimelineEvents([]);
+      setAgentRuns([]);
+      setShowAgentTrace(false);
       setCaseCreatedAt(new Date().toISOString());
       setCanViewManifest(true);
       identityIndexRef.current = 0;
       setIdentityIndex(0);
       setShowInbox(false);
+      setInboxItems([]);
       setMessage("Golden Path 演示数据已重置。 ");
     } catch {
       setMessage("重置失败：本地 API 未连接。 ");
@@ -310,25 +436,29 @@ export default function Home() {
     }
   }
 
-  async function approveCommitment(node: CommitmentNode) {
+  async function decideCommitment(caseId: string, node: CommitmentNode, decision: CommitmentDecision) {
     setBusy(true);
     setMessage("");
     try {
       const response = await fetch(
-        `${API_BASE}/api/cases/CM-2026-014/paths/${node.path_id}/commitments/${node.id}/approve`,
+        `${API_BASE}/api/cases/${caseId}/paths/${node.path_id}/commitments/${node.id}/decision`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ actor: currentIdentity.name, role: currentIdentity.role }),
+          body: JSON.stringify({ actor: currentIdentity.name, role: currentIdentity.role, decision }),
         },
       );
-      if (!response.ok) throw new Error("commitment approval failed");
+      if (!response.ok) throw new Error("commitment decision failed");
       const data = await response.json();
-      setCommitmentNodes(data.commitment_nodes ?? []);
-      await refreshTimeline();
-      setMessage(`${currentIdentity.name} 已在 ${currentIdentity.role} Inbox 批准 ${node.id}，节点现为 READY。`);
+      if (caseId === "CM-2026-014") {
+        setCommitmentNodes(data.commitment_nodes ?? []);
+        await refreshTimeline();
+      }
+      await refreshInbox();
+      const result = decision === "APPROVE" ? "通过" : decision === "REVISE" ? "要求修改" : "否决";
+      setMessage(`${currentIdentity.name} 已${result} ${caseId} 的 ${node.id} 节点。`);
     } catch {
-      setMessage("Inbox 批准失败：请确认当前身份与本地 API 状态。 ");
+      setMessage("审批操作失败：请确认当前身份、节点状态与本地 API。 ");
     } finally {
       setBusy(false);
     }
@@ -340,9 +470,17 @@ export default function Home() {
     ?? selectedPathIds[0]
     ?? commitmentNodes[0]?.path_id;
   const activeCommitments = commitmentNodes.filter((node) => node.path_id === selectedAttemptPathId);
-  const inboxItems = commitmentNodes.filter(
-    (node) => node.role === currentIdentity.role && node.status === "PENDING",
-  );
+
+  function approvalActions(caseId: string, node: CommitmentNode) {
+    if (node.status !== "PENDING" || node.role !== currentIdentity.role) return null;
+    return (
+      <div className="approvalActions" aria-label={`${node.id} 审批操作`}>
+        <button className="decisionApprove" disabled={busy} onClick={() => decideCommitment(caseId, node, "APPROVE")}>通过</button>
+        <button className="decisionRevise" disabled={busy} onClick={() => decideCommitment(caseId, node, "REVISE")}>修改</button>
+        <button className="decisionReject" disabled={busy} onClick={() => decideCommitment(caseId, node, "REJECT")}>否决</button>
+      </div>
+    );
+  }
 
   function commitmentNode(nodeId: string, fallbackRole: string, fallbackStatus: CommitmentNode["status"]) {
     const node = activeCommitments.find((item) => item.id === nodeId) ?? {
@@ -355,12 +493,17 @@ export default function Home() {
     };
     const statusLabel = node.status === "PENDING"
       ? node.role === currentIdentity.role ? "待本人批准" : `待${node.role}批准`
+      : node.status === "BLOCKED" ? "等待前置审批"
+      : node.status === "READY" ? "已通过"
+      : node.status === "STALE" ? "待方案修改"
+      : node.status === "REJECTED" ? "已否决"
       : node.status;
     return (
       <article className={`dagNode ${node.depends_on.length ? "downstream" : "upstream"} ${node.status.toLowerCase()}`}>
         <span>{statusLabel}</span>
         <h3>{node.role}</h3>
         <p>{commitmentCopy[node.id] ?? "等待责任人确认"}</p>
+        {approvalActions("CM-2026-014", node)}
       </article>
     );
   }
@@ -480,7 +623,7 @@ export default function Home() {
           <header className="issueHeader">
             <div>
               <div className="eyebrow">SUPPLY CHAIN CASE <span>·</span> 高优先级</div>
-              <h1>订单预计延期 <span>#CM-2026-014</span></h1>
+              <h1>Northstar MCU-X7 订单预计延期 12 天 <span>#CM-2026-014</span></h1>
               <p><span className="openBadge">● Open</span> 陈澄于 {formatThreadTime(caseCreatedAt)} 创建 · 当前由 <strong>陈澄</strong> 负责</p>
             </div>
             <button className="primary">继续处理 <span>→</span></button>
@@ -533,6 +676,15 @@ export default function Home() {
                     </div>
                   );
                 }
+                if (event.event_type === "commitment.revision_requested" || event.event_type === "commitment.rejected") {
+                  const isRevision = event.event_type === "commitment.revision_requested";
+                  return (
+                    <div className="threadEvent" key={event.id}>
+                      <span className="eventIcon humanEvent">{event.details.actor?.slice(0, 1) ?? "人"}</span>
+                      <p><strong>{event.details.actor}（{event.details.role}）{isRevision ? "要求修改" : "否决"} {event.details.node_id}</strong><span>{isRevision ? "PathAttempt 进入 REVISING" : "当前 PathAttempt 已结束"} · {formatThreadTime(event.created_at)}</span></p>
+                    </div>
+                  );
+                }
                 return null;
               })}
 
@@ -540,7 +692,17 @@ export default function Home() {
                 <div className="threadAvatar botAvatar">AC</div>
                 <div className="commentBox activeComment">
                   <header><strong>Agentic CM</strong><span>Orchestrator · 当前步骤</span><b className="currentLabel">{currentStage}</b></header>
-                  <div className="commentBody actionBody">{orchestrationCard}</div>
+                  <div className="commentBody actionBody">
+                    {orchestrationCard}
+                    {canViewManifest && (
+                      <>
+                        <button className="linkButton traceToggle" onClick={() => setShowAgentTrace((current) => !current)}>
+                          {showAgentTrace ? "收起 Orchestrator Trace ↑" : `查看 Orchestrator Trace${agentRuns.length ? ` (${agentRuns.length})` : ""} →`}
+                        </button>
+                        {showAgentTrace && <AgentTracePanel runs={agentRuns} />}
+                      </>
+                    )}
+                  </div>
                 </div>
               </article>
 
@@ -587,14 +749,14 @@ export default function Home() {
               <div><small>ROLE INBOX</small><h2>{currentIdentity.role}</h2><p>{currentIdentity.name} · Demo identity simulation</p></div>
               <button aria-label="关闭 Inbox" onClick={() => setShowInbox(false)}>×</button>
             </header>
-            <div className="inboxHint">这里只显示分配给当前角色、且依赖已经满足的待批准节点。请从左下角切换演示身份。</div>
+            <div className="inboxHint">汇总所有 Case 中分配给当前角色、且依赖已经满足的待审批节点。请从左下角切换演示身份。</div>
             <div className="inboxList">
-              {inboxItems.length ? inboxItems.map((node) => (
-                <article key={`${node.path_id}-${node.id}`}>
-                  <div><span>PENDING</span><small>{node.path_id} · {node.id}</small></div>
-                  <h3>{commitmentCopy[node.id] ?? node.role}</h3>
-                  <p>Case CM-2026-014 · {manifestPaths.find((path) => path.id === node.path_id)?.title ?? node.path_id}</p>
-                  <button className="primary" disabled={busy} onClick={() => approveCommitment(node)}>{busy ? "处理中…" : "批准并设为 READY"}</button>
+              {inboxItems.length ? inboxItems.map((item) => (
+                <article key={`${item.case_id}-${item.path_id}-${item.node.id}`}>
+                  <div><span>PENDING</span><small>{item.path_id} · {item.node.id}</small></div>
+                  <h3>{commitmentCopy[item.node.id] ?? item.node.role}</h3>
+                  <p>Case {item.case_id} · {item.case_title} · {item.path_title}</p>
+                  {approvalActions(item.case_id, item.node)}
                 </article>
               )) : (
                 <div className="emptyInbox"><strong>当前没有待批准事项</strong><p>如果 Manifest 已批准，请切换到主计划或研发身份查看各自任务。</p></div>

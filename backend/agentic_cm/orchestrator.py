@@ -59,21 +59,49 @@ class ManifestDraftResult:
     planner_profile: str
 
 
+class AgentTraceSink(Protocol):
+    def __call__(
+        self,
+        step: str,
+        status: str,
+        summary: str,
+        details: dict[str, Any] | None = None,
+    ) -> None: ...
+
+
 class PlannerAdapter(Protocol):
     async def propose(
-        self, context: PlanningContext, candidates: tuple[PlanningCandidate, ...]
+        self,
+        context: PlanningContext,
+        candidates: tuple[PlanningCandidate, ...],
+        trace: AgentTraceSink,
     ) -> ManifestDraftResult: ...
 
 
 class DeterministicPlannerAdapter:
     """Reproducible adapter used for tests and keyless local development."""
 
+    profile = "deterministic/v1"
+
     async def propose(
-        self, context: PlanningContext, candidates: tuple[PlanningCandidate, ...]
+        self,
+        context: PlanningContext,
+        candidates: tuple[PlanningCandidate, ...],
+        trace: AgentTraceSink,
     ) -> ManifestDraftResult:
+        trace(
+            "planner.request",
+            "COMPLETED",
+            "Deterministic Planner 接收候选 Path",
+            {
+                "case": asdict(context),
+                "candidates": [asdict(candidate) for candidate in candidates],
+                "adapter": self.profile,
+            },
+        )
         if not candidates:
             raise OrchestrationError("No compatible PathDefinition has applicable mandatory Policy")
-        return ManifestDraftResult(
+        result = ManifestDraftResult(
             paths=tuple(
                 PlannedPath(
                     candidate.definition,
@@ -82,8 +110,15 @@ class DeterministicPlannerAdapter:
                 )
                 for candidate in candidates
             ),
-            planner_profile="deterministic/v1",
+            planner_profile=self.profile,
         )
+        trace(
+            "planner.response",
+            "COMPLETED",
+            "Deterministic Planner 返回结构化建议",
+            {"paths": [asdict(path) for path in result.paths]},
+        )
+        return result
 
 
 class OpenAICompatiblePlannerAdapter:
@@ -115,8 +150,15 @@ class OpenAICompatiblePlannerAdapter:
         self._timeout = timeout_seconds
         self._client = client
 
+    @property
+    def profile(self) -> str:
+        return f"openai-compatible/{self._model}"
+
     async def propose(
-        self, context: PlanningContext, candidates: tuple[PlanningCandidate, ...]
+        self,
+        context: PlanningContext,
+        candidates: tuple[PlanningCandidate, ...],
+        trace: AgentTraceSink,
     ) -> ManifestDraftResult:
         request = {
             "model": self._model,
@@ -149,6 +191,22 @@ class OpenAICompatiblePlannerAdapter:
             headers[self._api_key_header] = credential
         last_error: Exception | None = None
         for attempt in range(2):
+            trace(
+                "planner.request" if attempt == 0 else "planner.repair_request",
+                "STARTED",
+                "向 OpenAI-compatible Planner 发送结构化请求"
+                if attempt == 0 else "上次响应无效，发送一次结构化修复请求",
+                {
+                    "attempt": attempt + 1,
+                    "endpoint": f"{self._base_url}/chat/completions",
+                    "request": request,
+                    "authentication": {
+                        "header": self._api_key_header,
+                        "credential_present": bool(self._api_key),
+                        "credential_value_logged": False,
+                    },
+                },
+            )
             try:
                 if self._client is not None:
                     response = await self._client.post(
@@ -162,15 +220,40 @@ class OpenAICompatiblePlannerAdapter:
                 response.raise_for_status()
             except httpx.HTTPError as exc:
                 status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else "unavailable"
+                trace(
+                    "planner.request",
+                    "FAILED",
+                    "模型服务请求失败",
+                    {"attempt": attempt + 1, "http_status": status, "error_type": type(exc).__name__},
+                )
                 raise PlannerExecutionError(f"Model planning request failed (status={status})") from exc
             try:
                 envelope = response.json()
                 content = envelope["choices"][0]["message"]["content"]
+                trace(
+                    "planner.response",
+                    "COMPLETED",
+                    "收到模型响应",
+                    {
+                        "attempt": attempt + 1,
+                        "http_status": response.status_code,
+                        "response_id": envelope.get("id"),
+                        "finish_reason": envelope.get("choices", [{}])[0].get("finish_reason"),
+                        "usage": envelope.get("usage"),
+                        "content": content,
+                    },
+                )
                 payload = json.loads(content)
                 paths = _parse_planned_paths(payload)
-                return ManifestDraftResult(paths=paths, planner_profile=f"openai-compatible/{self._model}")
+                return ManifestDraftResult(paths=paths, planner_profile=self.profile)
             except (KeyError, IndexError, TypeError, json.JSONDecodeError, PlannerOutputError) as exc:
                 last_error = exc
+                trace(
+                    "planner.response_validation",
+                    "FAILED",
+                    "模型响应未通过结构化校验",
+                    {"attempt": attempt + 1, "error_type": type(exc).__name__, "error": str(exc)},
+                )
                 if attempt == 0:
                     request["messages"].append({
                         "role": "system",
@@ -206,13 +289,26 @@ class Orchestrator:
         self.capabilities = capabilities
         self.planner = planner
 
-    async def compose_manifest(self, case: Case) -> Manifest:
+    async def compose_manifest(self, case: Case, trace: AgentTraceSink) -> Manifest:
+        trace(
+            "case.eligibility",
+            "STARTED",
+            "检查 Case 是否允许初次编排",
+            {"case_id": case.id, "case_version": case.version, "phase": case.phase.value, "status": case.status.value},
+        )
         if case.phase is not OrchestrationPhase.INTAKE or case.manifest is not None:
             raise OrchestrationError("Case is not eligible for initial orchestration")
         if case.status.value != "OPEN":
             raise OrchestrationError("Only OPEN Cases can be orchestrated")
+        trace("case.eligibility", "COMPLETED", "Case 通过初次编排门禁")
 
         definitions = self.capabilities.resolve_path_candidates(case.classification)
+        trace(
+            "paths.discovery",
+            "COMPLETED",
+            f"编排 Skill 声明了 {len(definitions)} 条候选 Path",
+            {"classification": dict(case.classification), "paths": [asdict(item) for item in definitions]},
+        )
         resolutions: dict[str, Any] = {}
         eligible: list[tuple[Any, Any]] = []
         incomplete: dict[str, list[str]] = {}
@@ -234,6 +330,21 @@ class Orchestrator:
             else:
                 resolutions[definition.id] = resolution
                 eligible.append((definition, resolution))
+            trace(
+                "capabilities.resolve",
+                "FAILED" if missing else "COMPLETED",
+                f"解析 {definition.id} 的执行能力",
+                {
+                    "path_definition": definition.id,
+                    "missing": missing,
+                    "policies": [ref.id for ref in resolution.policies],
+                    "skills": [ref.id for ref in resolution.skills],
+                    "knowledge": [ref.id for ref in resolution.knowledge],
+                    "mandatory_commitments": [
+                        item["id"] for item in resolution.compiled_policy.get("commitments", [])
+                    ],
+                },
+            )
         if incomplete:
             raise OrchestrationError(
                 f"Skill-declared Paths are not executable: {incomplete}"
@@ -263,17 +374,25 @@ class Orchestrator:
         )
         if not candidates:
             raise OrchestrationError("No PathDefinition has both a matched Skill and applicable mandatory Policy")
+        planning_context = PlanningContext(
+            case_id=case.id,
+            case_version=case.version,
+            title=case.title,
+            description=case.description,
+            classification=dict(case.classification),
+            business_payload=dict(case.business_payload),
+            human_proposal=dict(case.human_proposal) if case.human_proposal else None,
+        )
+        trace(
+            "planner.input",
+            "COMPLETED",
+            "构造受限 Planner 输入",
+            {"context": asdict(planning_context), "candidates": [asdict(item) for item in candidates]},
+        )
         result = await self.planner.propose(
-            PlanningContext(
-                case_id=case.id,
-                case_version=case.version,
-                title=case.title,
-                description=case.description,
-                classification=dict(case.classification),
-                business_payload=dict(case.business_payload),
-                human_proposal=dict(case.human_proposal) if case.human_proposal else None,
-            ),
+            planning_context,
             candidates,
+            trace,
         )
         allowed = {item.definition for item in candidates}
         if not result.paths:
@@ -287,6 +406,12 @@ class Orchestrator:
                 f"Planner must return every Skill-declared Path exactly once; "
                 f"missing={sorted(allowed - returned)}, unknown={sorted(returned - allowed)}"
             )
+        trace(
+            "planner.output_validation",
+            "COMPLETED",
+            "Planner 输出通过 Path 白名单与完整性校验",
+            {"allowed": sorted(allowed), "returned_in_order": selected_definitions},
+        )
 
         definitions_by_id = {definition.id: definition for definition in definitions}
         selected = [
@@ -324,7 +449,7 @@ class Orchestrator:
                 value = f"{item.id}@{item.version}"
                 if payload.get("knowledge_type") == "experience" and value not in experience_refs:
                     experience_refs.append(value)
-        return Manifest(
+        manifest = Manifest(
             id=f"MAN-{case.id}-{case.version}",
             revision=1,
             status="DRAFT",
@@ -338,6 +463,22 @@ class Orchestrator:
             generated_from_case_version=case.version,
             capability_snapshots=capability_snapshots,
         )
+        trace(
+            "manifest.compose",
+            "COMPLETED",
+            "组装 Manifest 并冻结逐 Path 能力快照",
+            {
+                "manifest_id": manifest.id,
+                "revision": manifest.revision,
+                "planner_profile": manifest.planner_profile,
+                "paths": [asdict(path) for path in manifest.paths],
+                "policy_refs": list(manifest.policy_refs),
+                "skill_refs": list(manifest.skill_refs),
+                "knowledge_refs": list(manifest.knowledge_refs),
+                "snapshot_path_ids": list(manifest.capability_snapshots),
+            },
+        )
+        return manifest
 
 
 def planner_from_environment() -> PlannerAdapter:

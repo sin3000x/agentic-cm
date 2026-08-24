@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from .capabilities import CapabilityRegistry, default_registry
 from .demo import demo_cases
-from .domain import CommitmentNode, NodeStatus, OrchestrationPhase
+from .domain import CommitmentDecision, CommitmentNode, NodeStatus, OrchestrationPhase
 from .orchestrator import Orchestrator, PlannerAdapter, planner_from_environment
 from .repository import CaseRepository
 
@@ -119,6 +120,8 @@ class CaseService:
             "manifest.proposed": ("revision",),
             "manifest.approved": ("actor",),
             "commitment.approved": ("actor", "role", "node_id", "path_id"),
+            "commitment.revision_requested": ("actor", "role", "node_id", "path_id"),
+            "commitment.rejected": ("actor", "role", "node_id", "path_id"),
         }
         timeline: list[dict] = []
         for event in self.repository.list_events(case_id):
@@ -137,10 +140,63 @@ class CaseService:
             })
         return timeline
 
+    def get_agent_runs(
+        self,
+        case_id: str,
+        *,
+        actor: str,
+        role: str,
+        agent_type: str | None = None,
+    ) -> list[dict]:
+        case = self.get_case(case_id)
+        self._require_case_owner(case, actor=actor, role=role)
+        if agent_type not in (None, "orchestrator", "path", "synthesis"):
+            raise ValueError(f"Unsupported agent_type: {agent_type}")
+        return self.repository.list_agent_runs(case_id, agent_type=agent_type)
+
     async def orchestrate_case(self, case_id: str, *, actor: str, role: str):
         case = self.get_case(case_id)
         self._require_case_owner(case, actor=actor, role=role)
-        manifest = await self.orchestrator.compose_manifest(case)
+        run_id = f"RUN-{uuid4()}"
+        adapter_profile = getattr(
+            self.orchestrator.planner,
+            "profile",
+            type(self.orchestrator.planner).__name__,
+        )
+        self.repository.create_agent_run(
+            run_id,
+            case.id,
+            agent_type="orchestrator",
+            adapter_profile=adapter_profile,
+            initiated_by=actor,
+        )
+
+        def trace(step: str, status: str, summary: str, details: dict | None = None) -> None:
+            self.repository.append_agent_trace(
+                run_id,
+                step=step,
+                status=status,
+                summary=summary,
+                details=details,
+            )
+
+        trace(
+            "run.started",
+            "STARTED",
+            "Orchestrator AgentRun 已启动",
+            {"agent_type": "orchestrator", "initiated_by": actor, "role": role},
+        )
+        try:
+            manifest = await self.orchestrator.compose_manifest(case, trace)
+        except Exception as exc:
+            trace(
+                "run.failed",
+                "FAILED",
+                "Orchestrator AgentRun 失败；Case 权威状态未修改",
+                {"error_type": type(exc).__name__, "error": str(exc)},
+            )
+            self.repository.finish_agent_run(run_id, status="FAILED", error=exc)
+            raise
         case.manifest = manifest
         case.phase = OrchestrationPhase.MANIFEST_REVIEW
         case.version += 1
@@ -155,6 +211,17 @@ class CaseService:
                 "path_definitions": [path.definition for path in manifest.paths],
                 "policy_refs": list(manifest.policy_refs),
             },
+        )
+        trace(
+            "run.completed",
+            "COMPLETED",
+            "Manifest 已持久化，Case 进入 MANIFEST_REVIEW",
+            {"manifest_id": manifest.id, "case_version": case.version, "phase": case.phase.value},
+        )
+        self.repository.finish_agent_run(
+            run_id,
+            status="SUCCEEDED",
+            adapter_profile=manifest.planner_profile,
         )
         return case
 
@@ -265,6 +332,25 @@ class CaseService:
         actor: str,
         role: str,
     ):
+        return self.decide_commitment(
+            case_id,
+            path_id,
+            node_id,
+            decision=CommitmentDecision.APPROVE,
+            actor=actor,
+            role=role,
+        )
+
+    def decide_commitment(
+        self,
+        case_id: str,
+        path_id: str,
+        node_id: str,
+        *,
+        decision: CommitmentDecision,
+        actor: str,
+        role: str,
+    ):
         case = self.get_case(case_id)
         if case.phase is not OrchestrationPhase.PATH_EXPLORATION:
             raise InvalidTransitionError("Case is not exploring a Path")
@@ -283,32 +369,63 @@ class CaseService:
         if target.status is not NodeStatus.PENDING:
             raise InvalidTransitionError("Commitment is not awaiting Inbox approval")
         if not actor.strip():
-            raise InvalidTransitionError("Commitment approval requires an actor")
+            raise InvalidTransitionError("Commitment decision requires an actor")
 
         nodes = list(case.commitment_nodes)
-        nodes[target_index] = replace(target, status=NodeStatus.READY)
-        ready_ids = {
-            node.id for node in nodes
-            if node.path_id == path_id and node.status is NodeStatus.READY
-        }
-        nodes = [
-            replace(node, status=NodeStatus.PENDING)
-            if node.path_id == path_id
-            and node.status is NodeStatus.BLOCKED
-            and set(node.depends_on).issubset(ready_ids)
-            else node
-            for node in nodes
-        ]
+        event_type: str
+        if decision is CommitmentDecision.APPROVE:
+            nodes[target_index] = replace(target, status=NodeStatus.READY)
+            ready_ids = {
+                node.id for node in nodes
+                if node.path_id == path_id and node.status is NodeStatus.READY
+            }
+            nodes = [
+                replace(node, status=NodeStatus.PENDING)
+                if node.path_id == path_id
+                and node.status is NodeStatus.BLOCKED
+                and set(node.depends_on).issubset(ready_ids)
+                else node
+                for node in nodes
+            ]
+            event_type = "commitment.approved"
+        elif decision is CommitmentDecision.REVISE:
+            nodes[target_index] = replace(target, status=NodeStatus.STALE)
+            event_type = "commitment.revision_requested"
+            self._update_path_attempt(case, path_id, phase="REVISING", outcome=None)
+        elif decision is CommitmentDecision.REJECT:
+            nodes[target_index] = replace(target, status=NodeStatus.REJECTED)
+            nodes = [
+                replace(node, status=NodeStatus.STALE)
+                if node.path_id == path_id
+                and node.id != node_id
+                and node.status in {NodeStatus.PENDING, NodeStatus.BLOCKED}
+                else node
+                for node in nodes
+            ]
+            event_type = "commitment.rejected"
+            self._update_path_attempt(case, path_id, phase="DONE", outcome="REJECTED")
+        else:
+            raise InvalidTransitionError(f"Unsupported Commitment decision: {decision}")
         case.commitment_nodes = nodes
         case.version += 1
         case.updated_at = datetime.now(timezone.utc).isoformat()
-        self.repository.save(case, "commitment.approved", {
+        self.repository.save(case, event_type, {
             "path_id": path_id,
             "node_id": node_id,
             "actor": actor,
             "role": role,
         })
         return case
+
+    @staticmethod
+    def _update_path_attempt(case, path_id: str, *, phase: str, outcome: str | None) -> None:
+        case.path_attempts = [
+            {**attempt, "phase": phase, "outcome": outcome}
+            if attempt["path_id"] == path_id else attempt
+            for attempt in case.path_attempts
+        ]
+        if case.path_attempt and case.path_attempt.get("path_id") == path_id:
+            case.path_attempt = {**case.path_attempt, "phase": phase, "outcome": outcome}
 
     def reset_demo(self, dataset_id: str):
         if dataset_id != "supply-chain-golden-path-v1":

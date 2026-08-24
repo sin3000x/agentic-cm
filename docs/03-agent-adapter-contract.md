@@ -202,7 +202,7 @@ adapters:
 
 ## 10. 事件与可观测性
 
-Adapter 通过 `event_sink` 发送归一化运行事件。首版建议：
+Adapter 通过 `event_sink` 发送归一化运行事件。当前 Orchestrator 切片已经把事件持久化到独立的 `agent_runs / agent_trace_events` 技术审计表；Path 与 Synthesis Adapter 后续复用同一外层契约。归一化事件包括：
 
 - `run_started`
 - `status_updated`
@@ -212,7 +212,7 @@ Adapter 通过 `event_sink` 发送归一化运行事件。首版建议：
 - `run_completed`
 - `run_failed`
 
-不要求标准化不同框架的 token stream 或内部 trace。面向业务的判断依据、Evidence 和 SolutionRevision diff 必须保存；隐藏 chain-of-thought 不保存。
+不要求标准化不同框架的 token stream 或内部 trace。面向业务的输入、显式输出、判断依据、Evidence 和 SolutionRevision diff 必须保存；API Key 与隐藏 chain-of-thought 不保存。
 
 ## 11. 失败处理
 

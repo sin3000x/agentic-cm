@@ -21,9 +21,12 @@ test("server-renders the Case overview homepage", async () => {
   assert.match(html, /早上好，陈澄/);
   assert.match(html, /进行中 Case/);
   assert.match(html, /需要你的关注/);
-  assert.match(html, /订单预计延期/);
-  assert.match(html, /供应商交付异常/);
-  assert.match(html, /替代料认证缺口/);
+  assert.match(html, /Northstar MCU-X7 订单预计延期 12 天/);
+  assert.match(html, /Vela 一级供应商停机影响两个在途批次/);
+  assert.match(html, /Northstar MCU-X7 替代料缺少客户认证/);
+  assert.match(html, /Aster 9 月需求临时上调 22%/);
+  assert.match(html, /售后备件消耗连续三周超出预测区间/);
+  assert.match(html, /华南仓 WMS 与实收数量相差 320 件/);
   assert.match(html, /Human governed/);
   assert.doesNotMatch(html, /切换至该角色/);
   assert.doesNotMatch(html, /codex-preview|SkeletonPreview/);
@@ -61,7 +64,7 @@ test("order delay Case opens the original Case workspace", async () => {
   assert.equal(response.status, 200);
   const html = await response.text();
   assert.match(html, /CM-2026-014/);
-  assert.match(html, /订单预计延期/);
+  assert.match(html, /Northstar MCU-X7 订单预计延期 12 天/);
   assert.match(html, /Case 完整流转 Thread/);
   assert.match(html, /Human Proposal/);
   assert.match(html, /从 Case 组装 Manifest|审查 Path Manifest|物料替代 · 审批 DAG/);
@@ -88,6 +91,22 @@ test("overview and Case workspace use the same global Sidebar", async () => {
   assert.match(sidebarSource, /\/assets\/knowledge/);
   assert.doesNotMatch(workspaceSource, /className="caseList"|className="navItem"|className="identity"/);
   assert.doesNotMatch(workspaceStyles, /^\.sidebar\{|^\.brand\{|^\.nav\{|^\.identity\{/m);
+});
+
+test("DAG and cross-Case Inbox share role-scoped approval decisions", async () => {
+  const source = await readFile(new URL("../app/cases/[id]/page.tsx", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../app/cases/[id]/case-detail.css", import.meta.url), "utf8");
+
+  assert.match(source, /api\/inbox/);
+  assert.match(source, /commitments\/\$\{node\.id\}\/decision/);
+  assert.match(source, /node\.status !== "PENDING" \|\| node\.role !== currentIdentity\.role/);
+  assert.match(source, />通过<\/button>/);
+  assert.match(source, />修改<\/button>/);
+  assert.match(source, />否决<\/button>/);
+  assert.match(source, /approvalActions\("CM-2026-014", node\)/);
+  assert.match(source, /approvalActions\(item\.case_id, item\.node\)/);
+  assert.match(source, /汇总所有 Case/);
+  assert.match(styles, /\.approvalActions/);
 });
 
 test("organization asset pages read all three effective asset kinds from the backend", async () => {
