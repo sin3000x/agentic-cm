@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import Link from "next/link";
 import AppSidebar from "../../app-sidebar";
 import "./case-detail.css";
@@ -163,6 +163,21 @@ type AgentRun = {
   events: AgentTraceEvent[];
 };
 
+type AiRunKind = "manifest" | "alternatives";
+
+const aiRunCopy: Record<AiRunKind, { eyebrow: string; title: string; steps: string[] }> = {
+  manifest: {
+    eyebrow: "ORCHESTRATOR · LIVE",
+    title: "Orchestrator Agent 正在为您组装探索清单",
+    steps: ["读取 Case 事实", "匹配 Policy 与 Skill", "评估候选 Path", "冻结能力快照"],
+  },
+  alternatives: {
+    eyebrow: "PATH AGENT · LIVE",
+    title: "Path Agent 正在为您推演解决方案",
+    steps: ["装载 Manifest 快照", "运行执行 Skill", "比较收益与风险", "形成角色判断报告"],
+  },
+};
+
 const threadTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
   year: "numeric",
   month: "2-digit",
@@ -175,6 +190,28 @@ const threadTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
 
 function formatThreadTime(value: string | null) {
   return value ? threadTimeFormatter.format(new Date(value)) : "时间读取中";
+}
+
+function AiWorkingCard({ kind, step }: { kind: AiRunKind; step: number }) {
+  const copy = aiRunCopy[kind];
+  return (
+    <section className="aiWorkingCard" aria-live="polite" aria-label={copy.title}>
+      <div className="aiOrb" aria-hidden="true"><i /><i /><b>AI</b></div>
+      <div className="aiWorkingBody">
+        <small>{copy.eyebrow}</small>
+        <h3>{copy.title}<span className="thinkingDots"><i /><i /><i /></span></h3>
+        <div className="aiStepTrack">
+          {copy.steps.map((item, index) => (
+            <span className={index < step ? "done" : index === step ? "active" : ""} key={item}>
+              <i>{index < step ? "✓" : index + 1}</i>{item}
+            </span>
+          ))}
+        </div>
+        <div className="aiProgress"><i style={{ width: `${Math.min(92, 18 + step * 24)}%` }} /></div>
+        <p>你可以留在当前页面，结果完成后会自动出现；AI 只生成建议，不会替人批准业务承诺。</p>
+      </div>
+    </section>
+  );
 }
 
 function CapabilityPanel({ details }: { details: CapabilityDetails }) {
@@ -253,6 +290,9 @@ export default function Home() {
   const [phase, setPhase] = useState("INTAKE");
   const [approved, setApproved] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [aiRunKind, setAiRunKind] = useState<AiRunKind | null>(null);
+  const [aiRunStep, setAiRunStep] = useState(0);
+  const [failedAiRun, setFailedAiRun] = useState<AiRunKind | null>(null);
   const [message, setMessage] = useState("");
   const [capabilities, setCapabilities] = useState<CapabilityDetails | null>(null);
   const [showCapabilities, setShowCapabilities] = useState(false);
@@ -269,10 +309,22 @@ export default function Home() {
   const [caseCreatedAt, setCaseCreatedAt] = useState<string | null>(null);
   const [canViewManifest, setCanViewManifest] = useState(true);
   const [identityIndex, setIdentityIndex] = useState(0);
+  const [caseRefreshKey, setCaseRefreshKey] = useState(0);
   const identityIndexRef = useRef(0);
+  const automaticRunsRef = useRef(new Set<string>());
   const [showInbox, setShowInbox] = useState(false);
   const [inboxItems, setInboxItems] = useState<InboxItem[]>([]);
   const currentIdentity = demoIdentities[identityIndex];
+  const startAutomaticManifest = useEffectEvent(() => { void generateManifest(); });
+  const startAutomaticAlternatives = useEffectEvent((pathIds: string[]) => { void generateAlternatives(pathIds); });
+
+  useEffect(() => {
+    if (!aiRunKind) return;
+    const timer = window.setInterval(() => {
+      setAiRunStep((current) => Math.min(aiRunCopy[aiRunKind].steps.length - 1, current + 1));
+    }, 1250);
+    return () => window.clearInterval(timer);
+  }, [aiRunKind]);
 
   function selectIdentity(nextIdentityIndex: number) {
     identityIndexRef.current = nextIdentityIndex;
@@ -346,13 +398,34 @@ export default function Home() {
               }
             });
         }
+        if (data.permissions?.can_view_manifest === true && data.phase === "INTAKE" && !data.manifest) {
+          const runKey = `${identity.name}:manifest:${data.version ?? "current"}`;
+          if (!automaticRunsRef.current.has(runKey)) {
+            automaticRunsRef.current.add(runKey);
+            startAutomaticManifest();
+          }
+        }
+        if (data.permissions?.can_view_manifest === true && data.phase === "PATH_EXPLORATION") {
+          const pendingPathIds = (data.manifest?.paths ?? [])
+            .filter((path: ManifestPath) => path.selected)
+            .filter((path: ManifestPath) => {
+              const attempt = (data.path_attempts ?? []).find((item: PathAttempt) => item.path_id === path.id);
+              return !attempt || attempt.phase === "REVISING" || !isSolutionRevision(attempt.solution_revision);
+            })
+            .map((path: ManifestPath) => path.id);
+          const runKey = `${identity.name}:alternatives:${pendingPathIds.join(",")}`;
+          if (pendingPathIds.length > 0 && !automaticRunsRef.current.has(runKey)) {
+            automaticRunsRef.current.add(runKey);
+            startAutomaticAlternatives(pendingPathIds);
+          }
+        }
       })
       .catch((error) => {
         if (error instanceof DOMException && error.name === "AbortError") return;
         setMessage("API 尚未连接，当前展示固定演示数据。");
       });
     return () => controller.abort();
-  }, [identityIndex]);
+  }, [identityIndex, caseRefreshKey]);
 
   async function refreshTimeline() {
     try {
@@ -390,6 +463,9 @@ export default function Home() {
 
   async function generateManifest() {
     setBusy(true);
+    setAiRunKind("manifest");
+    setAiRunStep(0);
+    setFailedAiRun(null);
     setMessage("");
     try {
       const response = await fetch(`${API_BASE}/api/cases/CM-2026-014/orchestrate`, {
@@ -408,9 +484,11 @@ export default function Home() {
       await refreshTimeline();
       setMessage("Orchestrator 已根据 Case 与现有能力生成 Manifest，并冻结适用 Policy。 ");
     } catch (error) {
+      setFailedAiRun("manifest");
       setMessage(`Manifest 生成失败：${error instanceof Error ? error.message : "请确认本地 API 与 Planner 配置"}。`);
     } finally {
       await refreshAgentRuns();
+      setAiRunKind(null);
       setBusy(false);
     }
   }
@@ -436,7 +514,11 @@ export default function Home() {
       setApproved(true);
       setPhase("PATH_EXPLORATION");
       await refreshTimeline();
-      setMessage("Manifest 已批准；主计划与研发任务已分别投递到各自 Inbox，等待本人批准。 ");
+      const approvedPathIds = data.manifest.paths
+        .filter((path: ManifestPath) => path.selected)
+        .map((path: ManifestPath) => path.id);
+      setMessage("Manifest 已批准；Path Agent 将自动推演所选 Path。 ");
+      await generateAlternatives(approvedPathIds);
     } catch {
       setMessage("无法连接本地 API，请先启动 Python 服务。 ");
     } finally {
@@ -444,27 +526,36 @@ export default function Home() {
     }
   }
 
-  async function generateAlternatives(pathId: string) {
+  async function generateAlternatives(pathIds: string | string[]) {
+    const requestedPathIds = Array.isArray(pathIds) ? pathIds : [pathIds];
+    if (requestedPathIds.length === 0) return;
     setBusy(true);
+    setAiRunKind("alternatives");
+    setAiRunStep(0);
+    setFailedAiRun(null);
     setMessage("");
     try {
-      const response = await fetch(`${API_BASE}/api/cases/CM-2026-014/paths/${pathId}/execute`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ actor: currentIdentity.name, role: currentIdentity.role }),
-      });
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({}));
-        throw new Error(error.detail ?? "Path Agent failed");
+      for (const pathId of requestedPathIds) {
+        const response = await fetch(`${API_BASE}/api/cases/CM-2026-014/paths/${pathId}/execute`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ actor: currentIdentity.name, role: currentIdentity.role }),
+        });
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({}));
+          throw new Error(error.detail ?? "Path Agent failed");
+        }
+        const data = await response.json();
+        setPathAttempts(data.path_attempts ?? []);
       }
-      const data = await response.json();
-      setPathAttempts(data.path_attempts ?? []);
       await refreshTimeline();
-      setMessage("Path Agent 已从冻结 Manifest 组装并生成可审查的替代方案。 ");
+      setMessage(`Path Agent 已自动完成 ${requestedPathIds.length} 条 Path 的可审查替代方案。 `);
     } catch (error) {
+      setFailedAiRun("alternatives");
       setMessage(`替代方案生成失败：${error instanceof Error ? error.message : "请确认 Path Agent 配置"}。`);
     } finally {
       await refreshAgentRuns();
+      setAiRunKind(null);
       setBusy(false);
     }
   }
@@ -497,6 +588,9 @@ export default function Home() {
       setIdentityIndex(0);
       setShowInbox(false);
       setInboxItems([]);
+      setFailedAiRun(null);
+      automaticRunsRef.current.clear();
+      setCaseRefreshKey((current) => current + 1);
       setMessage("Golden Path 演示数据已重置。 ");
     } catch {
       setMessage("重置失败：本地 API 未连接。 ");
@@ -548,6 +642,7 @@ export default function Home() {
       const data = await response.json();
       if (caseId === "CM-2026-014") {
         setCommitmentNodes(data.commitment_nodes ?? []);
+        setPathAttempts(data.path_attempts ?? []);
         await refreshTimeline();
       }
       await refreshInbox();
@@ -613,7 +708,9 @@ export default function Home() {
     );
   }
 
-  const orchestrationCard = phase === "MANIFEST_REVIEW" && !canViewManifest ? (
+  const orchestrationCard = aiRunKind ? (
+    <AiWorkingCard kind={aiRunKind} step={aiRunStep} />
+  ) : phase === "MANIFEST_REVIEW" && !canViewManifest ? (
     <>
       <div className="panelTitle">
         <div><span className="agentIcon">⌁</span><span><small>OWNER-ONLY REVIEW</small><h2>Manifest 正在等待 Case Owner 审批</h2></span></div>
@@ -686,14 +783,12 @@ export default function Home() {
               )}
             </>
           )}
-          {activePathAttempt?.phase === "REVISING" && (
-            <button className="linkButton" disabled={busy} onClick={() => generateAlternatives(solutionRevision.path_id)}>根据人类修改要求生成修订版 →</button>
-          )}
+          {activePathAttempt?.phase === "REVISING" && <p className="autoRunNote">已收到人类修改要求；Case Owner 返回后，Path Agent 会自动生成修订版。</p>}
         </section>
       ) : (
         <div className="approvalBox pathAgentLaunch">
-          <span><strong>下一步：组装并运行 Path Agent</strong><small>从 Manifest 冻结快照加载 execution Skill 与强制 Policy；失败不会修改 Case。</small></span>
-          <button className="primary" disabled={busy || !selectedAttemptPathId} onClick={() => selectedAttemptPathId && generateAlternatives(selectedAttemptPathId)}>{busy ? "生成中…" : "生成替代方案"}</button>
+          <span><strong>{failedAiRun === "alternatives" ? "Path Agent 自动运行已暂停" : "Path Agent 将自动开始推演"}</strong><small>从 Manifest 冻结快照加载 execution Skill 与强制 Policy；失败不会修改 Case。</small></span>
+          {failedAiRun === "alternatives" && <button className="primary" disabled={busy || !selectedAttemptPathId} onClick={() => selectedAttemptPathId && generateAlternatives(selectedAttemptPathId)}>重试 Path Agent</button>}
         </div>
       )}
       <div className="dag" aria-label="Commitment DAG">
@@ -723,8 +818,8 @@ export default function Home() {
         <p>关键物料 MCU-X7 存在 18,400 pcs 缺口，目标交付日为 2026-08-24。</p>
       </article>
       <div className="approvalBox">
-        <span><strong>下一步：生成可审查的 Manifest</strong><small>Planner 无权发明 Path、删除强制责任或作出业务承诺。</small></span>
-        <button className="primary" disabled={busy} onClick={generateManifest}>{busy ? "组装中…" : "生成 Manifest"}</button>
+        <span><strong>{failedAiRun === "manifest" ? "自动规划已暂停" : "AI 将自动开始规划"}</strong><small>Planner 无权发明 Path、删除强制责任或作出业务承诺。</small></span>
+        {failedAiRun === "manifest" && <button className="primary" disabled={busy} onClick={generateManifest}>重试 AI 规划</button>}
       </div>
     </>
   ) : (

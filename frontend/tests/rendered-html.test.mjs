@@ -114,7 +114,14 @@ test("approved Manifest launches a real Path Agent and exposes its audited Solut
   const styles = await readFile(new URL("../app/cases/[id]/case-detail.css", import.meta.url), "utf8");
 
   assert.match(source, /paths\/\$\{pathId\}\/execute/);
-  assert.match(source, /生成替代方案/);
+  assert.match(source, /startAutomaticManifest\(\)/);
+  assert.match(source, /startAutomaticAlternatives\(pendingPathIds\)/);
+  assert.match(source, /await generateAlternatives\(approvedPathIds\)/);
+  assert.match(source, /AI 正在为你组装可审查的 Manifest/);
+  assert.match(source, /AI 正在为你推演替代方案/);
+  assert.match(source, /<AiWorkingCard kind=\{aiRunKind\} step=\{aiRunStep\}/);
+  assert.doesNotMatch(source, /onClick=\{generateManifest\}>生成 Manifest/);
+  assert.doesNotMatch(source, />生成替代方案<\/button>/);
   assert.match(source, /solutionRevision\.options\.map/);
   assert.match(source, /solutionRevision\.role_reports\.map/);
   assert.match(source, /三个角色的替代判断报告/);
@@ -135,6 +142,9 @@ test("approved Manifest launches a real Path Agent and exposes its audited Solut
   assert.match(styles, /\.solutionRevision/);
   assert.match(styles, /\.solutionOptions/);
   assert.match(styles, /\.roleReports/);
+  assert.match(styles, /\.aiWorkingCard/);
+  assert.match(styles, /@keyframes aiScan/);
+  assert.match(styles, /prefers-reduced-motion/);
 });
 
 test("organization asset pages read all three effective asset kinds from the backend", async () => {
