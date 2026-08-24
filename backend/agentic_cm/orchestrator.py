@@ -3,13 +3,20 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import asdict, dataclass
-from typing import Any, Protocol
+from typing import Annotated, Any, Protocol
 
 import httpx
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError, model_validator
 
 from .capabilities import CapabilityRegistry
 from .config import load_runtime_environment
 from .domain import Case, Manifest, ManifestPath, OrchestrationPhase
+from .llm import (
+    CompatibleModelClientError,
+    OpenAICompatibleClient,
+    build_openai_compatible_client,
+    create_chat_completion,
+)
 
 
 class OrchestrationError(ValueError):
@@ -22,6 +29,35 @@ class PlannerOutputError(OrchestrationError):
 
 class PlannerExecutionError(OrchestrationError):
     pass
+
+
+NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
+def _contains_chinese(value: str) -> bool:
+    return any("\u4e00" <= character <= "\u9fff" for character in value)
+
+
+class _PlannedPathPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    definition: NonEmptyText
+    rationale: NonEmptyText
+
+
+class _ManifestDraftPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    paths: list[_PlannedPathPayload] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def require_unique_paths(self) -> "_ManifestDraftPayload":
+        definitions = [path.definition for path in self.paths]
+        if len(set(definitions)) != len(definitions):
+            raise ValueError("Planner selected the same Path more than once")
+        if any(not _contains_chinese(path.rationale) for path in self.paths):
+            raise ValueError("Planner 的 Path 说明必须使用中文")
+        return self
 
 
 @dataclass(frozen=True)
@@ -133,22 +169,29 @@ class OpenAICompatiblePlannerAdapter:
         api_key_header: str = "Authorization",
         api_key_prefix: str = "Bearer",
         timeout_seconds: float = 45.0,
-        client: httpx.AsyncClient | None = None,
+        client: OpenAICompatibleClient | None = None,
+        http_client: httpx.AsyncClient | None = None,
     ) -> None:
         if not model.strip():
             raise OrchestrationError("A model id is required for the OpenAI-compatible planner")
         if not base_url.strip():
             raise OrchestrationError("A base URL is required for the OpenAI-compatible planner")
-        parsed_url = httpx.URL(base_url)
-        if parsed_url.scheme not in ("http", "https") or not parsed_url.host:
-            raise OrchestrationError("The OpenAI-compatible base URL must be an absolute HTTP(S) URL")
+        try:
+            configured_client = client or build_openai_compatible_client(
+                api_key,
+                base_url=base_url,
+                api_key_header=api_key_header,
+                api_key_prefix=api_key_prefix,
+                timeout_seconds=timeout_seconds,
+                http_client=http_client,
+            )
+        except ValueError as exc:
+            raise OrchestrationError(str(exc)) from exc
         self._api_key = api_key
         self._model = model
         self._base_url = base_url.rstrip("/")
         self._api_key_header = api_key_header
-        self._api_key_prefix = api_key_prefix
-        self._timeout = timeout_seconds
-        self._client = client
+        self._client = configured_client
 
     @property
     def profile(self) -> str:
@@ -160,6 +203,7 @@ class OpenAICompatiblePlannerAdapter:
         candidates: tuple[PlanningCandidate, ...],
         trace: AgentTraceSink,
     ) -> ManifestDraftResult:
+        response_schema = _ManifestDraftPayload.model_json_schema()
         request = {
             "model": self._model,
             "messages": [
@@ -168,9 +212,10 @@ class OpenAICompatiblePlannerAdapter:
                     "content": (
                         "You are an enterprise exception Case planning component. Return JSON only. "
                         "Return every provided candidate definition exactly once, with a Case-specific rationale. "
+                        "Write every human-facing rationale in Chinese. "
                         "You may order them by relevance. Never invent or omit ids, remove policies, "
                         "make business commitments, or claim operational actions. "
-                        'Schema: {"paths":[{"definition":"candidate id","rationale":"concise reason"}]}'
+                        f"Match this JSON Schema exactly: {json.dumps(response_schema)}"
                     ),
                 },
                 {
@@ -185,10 +230,6 @@ class OpenAICompatiblePlannerAdapter:
             "max_tokens": 800,
             "stream": False,
         }
-        headers = {"Content-Type": "application/json"}
-        if self._api_key:
-            credential = f"{self._api_key_prefix} {self._api_key}".strip()
-            headers[self._api_key_header] = credential
         last_error: Exception | None = None
         for attempt in range(2):
             trace(
@@ -208,45 +249,33 @@ class OpenAICompatiblePlannerAdapter:
                 },
             )
             try:
-                if self._client is not None:
-                    response = await self._client.post(
-                        f"{self._base_url}/chat/completions", json=request, headers=headers, timeout=self._timeout
-                    )
-                else:
-                    async with httpx.AsyncClient() as client:
-                        response = await client.post(
-                            f"{self._base_url}/chat/completions", json=request, headers=headers, timeout=self._timeout
-                        )
-                response.raise_for_status()
-            except httpx.HTTPError as exc:
-                status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else "unavailable"
+                response = await create_chat_completion(self._client, request)
+            except CompatibleModelClientError as exc:
                 trace(
                     "planner.request",
                     "FAILED",
                     "模型服务请求失败",
-                    {"attempt": attempt + 1, "http_status": status, "error_type": type(exc).__name__},
+                    {"attempt": attempt + 1, "http_status": exc.status, "error_type": exc.cause_type},
                 )
-                raise PlannerExecutionError(f"Model planning request failed (status={status})") from exc
+                raise PlannerExecutionError(f"Model planning request failed (status={exc.status})") from exc
             try:
-                envelope = response.json()
-                content = envelope["choices"][0]["message"]["content"]
                 trace(
                     "planner.response",
                     "COMPLETED",
                     "收到模型响应",
                     {
                         "attempt": attempt + 1,
-                        "http_status": response.status_code,
-                        "response_id": envelope.get("id"),
-                        "finish_reason": envelope.get("choices", [{}])[0].get("finish_reason"),
-                        "usage": envelope.get("usage"),
-                        "content": content,
+                        "http_status": response.http_status,
+                        "response_id": response.response_id,
+                        "finish_reason": response.finish_reason,
+                        "usage": response.usage,
+                        "content": response.content,
                     },
                 )
-                payload = json.loads(content)
-                paths = _parse_planned_paths(payload)
+                payload = _ManifestDraftPayload.model_validate_json(response.content)
+                paths = tuple(PlannedPath(path.definition, path.rationale) for path in payload.paths)
                 return ManifestDraftResult(paths=paths, planner_profile=self.profile)
-            except (KeyError, IndexError, TypeError, json.JSONDecodeError, PlannerOutputError) as exc:
+            except ValidationError as exc:
                 last_error = exc
                 trace(
                     "planner.response_validation",
@@ -260,24 +289,6 @@ class OpenAICompatiblePlannerAdapter:
                         "content": "The previous output was invalid. Return one non-empty JSON object matching the exact schema.",
                     })
         raise PlannerOutputError("Model returned an invalid JSON planning result after one repair") from last_error
-
-
-def _parse_planned_paths(payload: Any) -> tuple[PlannedPath, ...]:
-    if not isinstance(payload, dict) or set(payload) != {"paths"} or not isinstance(payload["paths"], list):
-        raise PlannerOutputError("Planner result must contain only a paths array")
-    paths: list[PlannedPath] = []
-    for item in payload["paths"]:
-        if not isinstance(item, dict) or set(item) != {"definition", "rationale"} or not all(
-            isinstance(item[field], str) and item[field].strip() for field in ("definition", "rationale")
-        ):
-            raise PlannerOutputError("Each planned Path requires definition and rationale")
-        paths.append(PlannedPath(item["definition"], item["rationale"].strip()))
-    if not paths:
-        raise PlannerOutputError("Planner must select at least one Path")
-    definitions = [path.definition for path in paths]
-    if len(set(definitions)) != len(definitions):
-        raise PlannerOutputError("Planner selected the same Path more than once")
-    return tuple(paths)
 
 
 class Orchestrator:

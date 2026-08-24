@@ -8,6 +8,7 @@ from .capabilities import CapabilityRegistry, default_registry
 from .demo import demo_cases
 from .domain import CommitmentDecision, CommitmentNode, NodeStatus, OrchestrationPhase
 from .orchestrator import Orchestrator, PlannerAdapter, planner_from_environment
+from .path_agent import PathAgent, PathAgentAdapter, path_agent_from_environment
 from .repository import CaseRepository
 
 
@@ -30,6 +31,7 @@ class CaseService:
         capabilities: CapabilityRegistry | None = None,
         *,
         planner: PlannerAdapter | None = None,
+        path_agent: PathAgentAdapter | None = None,
     ) -> None:
         self.repository = repository
         self.capabilities = capabilities or default_registry()
@@ -37,6 +39,7 @@ class CaseService:
             self.capabilities,
             planner or planner_from_environment(),
         )
+        self.path_agent = PathAgent(path_agent or path_agent_from_environment())
 
     def ensure_demo_data(self) -> None:
         if not self.repository.list_cases():
@@ -119,6 +122,7 @@ class CaseService:
         public_fields = {
             "manifest.proposed": ("revision",),
             "manifest.approved": ("actor",),
+            "solution_revision.proposed": ("path_id", "revision", "option_count"),
             "commitment.approved": ("actor", "role", "node_id", "path_id"),
             "commitment.revision_requested": ("actor", "role", "node_id", "path_id"),
             "commitment.rejected": ("actor", "role", "node_id", "path_id"),
@@ -278,7 +282,7 @@ class CaseService:
                 "definition": path.definition,
                 "phase": "AWAITING_HUMAN",
                 "outcome": None,
-                "solution_revision": 1,
+                "solution_revision": None,
             })
             nodes.extend(
                 CommitmentNode(
@@ -304,6 +308,111 @@ class CaseService:
             "path_attempt_ids": [attempt["id"] for attempt in attempts],
             "selected_path_ids": [path.id for path in selected_paths],
         })
+        return case
+
+    async def execute_path(
+        self,
+        case_id: str,
+        path_id: str,
+        *,
+        actor: str,
+        role: str,
+    ):
+        case = self.get_case(case_id)
+        self._require_case_owner(case, actor=actor, role=role)
+        run_id = f"RUN-{uuid4()}"
+        adapter_profile = getattr(
+            self.path_agent.adapter,
+            "profile",
+            type(self.path_agent.adapter).__name__,
+        )
+        self.repository.create_agent_run(
+            run_id,
+            case.id,
+            agent_type="path",
+            adapter_profile=adapter_profile,
+            initiated_by=actor,
+        )
+
+        def trace(step: str, status: str, summary: str, details: dict | None = None) -> None:
+            self.repository.append_agent_trace(
+                run_id,
+                step=step,
+                status=status,
+                summary=summary,
+                details=details,
+            )
+
+        trace(
+            "run.started",
+            "STARTED",
+            "Path AgentRun 已启动",
+            {"agent_type": "path", "path_id": path_id, "initiated_by": actor, "role": role},
+        )
+        try:
+            solution_revision = await self.path_agent.run(case, path_id, trace)
+        except Exception as exc:
+            trace(
+                "run.failed",
+                "FAILED",
+                "Path AgentRun 失败；Case 与 SolutionRevision 未修改",
+                {"error_type": type(exc).__name__, "error": str(exc)},
+            )
+            self.repository.finish_agent_run(run_id, status="FAILED", error=exc)
+            raise
+
+        case.path_attempts = [
+            {
+                **attempt,
+                "phase": "AWAITING_HUMAN",
+                "solution_revision": solution_revision,
+            }
+            if attempt.get("path_id") == path_id else attempt
+            for attempt in case.path_attempts
+        ]
+        case.path_attempt = next(
+            (dict(attempt) for attempt in case.path_attempts if attempt.get("path_id") == path_id),
+            case.path_attempt,
+        )
+        ready_ids = {
+            node.id for node in case.commitment_nodes
+            if node.path_id == path_id and node.status is NodeStatus.READY
+        }
+        case.commitment_nodes = [
+            replace(
+                node,
+                status=NodeStatus.PENDING
+                if set(node.depends_on).issubset(ready_ids)
+                else NodeStatus.BLOCKED,
+            )
+            if node.path_id == path_id and node.status is NodeStatus.STALE
+            else node
+            for node in case.commitment_nodes
+        ]
+        case.version += 1
+        case.updated_at = datetime.now(timezone.utc).isoformat()
+        self.repository.save(case, "solution_revision.proposed", {
+            "path_id": path_id,
+            "revision": solution_revision["revision"],
+            "option_count": len(solution_revision["options"]),
+            "generated_by": solution_revision["generated_by"],
+        })
+        trace(
+            "run.completed",
+            "COMPLETED",
+            "SolutionRevision 已持久化，等待人类责任节点评审",
+            {
+                "path_id": path_id,
+                "revision": solution_revision["revision"],
+                "case_version": case.version,
+                "phase": case.phase.value,
+            },
+        )
+        self.repository.finish_agent_run(
+            run_id,
+            status="SUCCEEDED",
+            adapter_profile=solution_revision["generated_by"],
+        )
         return case
 
     def get_inbox(self, role: str) -> list[dict]:

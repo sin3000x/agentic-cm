@@ -22,6 +22,15 @@ from agentic_cm.orchestrator import (
     PlannerOutputError,
 )
 from agentic_cm.repository import CaseRepository
+from agentic_cm.path_agent import (
+    DeterministicPathAgentAdapter,
+    OpenAICompatiblePathAgentAdapter,
+    PathAgentOutputError,
+    PathAgentResult,
+    PathAgentExecutionError,
+    ProposedOption,
+    RoleReport,
+)
 from agentic_cm.service import AuthorizationError, CaseService, InvalidTransitionError
 
 
@@ -29,6 +38,7 @@ def make_service(tmp_path: Path) -> CaseService:
     service = CaseService(
         CaseRepository(tmp_path / "test.db"),
         planner=DeterministicPlannerAdapter(),
+        path_agent=DeterministicPathAgentAdapter(),
     )
     service.ensure_demo_data()
     return service
@@ -37,6 +47,16 @@ def make_service(tmp_path: Path) -> CaseService:
 def orchestrate(service: CaseService):
     return asyncio.run(service.orchestrate_case(
         "CM-2026-014", actor="陈澄", role="订单统筹经理"
+    ))
+
+
+def approve_and_execute_path(service: CaseService):
+    orchestrate(service)
+    service.approve_manifest(
+        "CM-2026-014", ["PATH-01"], actor="陈澄", role="订单统筹经理"
+    )
+    return asyncio.run(service.execute_path(
+        "CM-2026-014", "PATH-01", actor="陈澄", role="订单统筹经理"
     ))
 
 
@@ -213,9 +233,12 @@ def test_manifest_http_endpoints_enforce_owner_boundary(tmp_path: Path, monkeypa
 
     library = client.get("/api/capabilities")
     assert library.status_code == 200
-    assert library.json()["counts"] == {"policies": 4, "skills": 4, "knowledge": 1}
+    assert library.json()["counts"] == {"policies": 4, "skills": 7, "knowledge": 1}
     assert {asset["id"] for asset in library.json()["assets"]["skills"]} == {
         "shortage-response-planning", "material-substitution-analysis",
+        "material-substitution-engineering-review",
+        "material-substitution-master-planning-review",
+        "material-substitution-supply-manager-review",
         "supply-expediting-analysis", "order-split-analysis",
     }
 
@@ -255,6 +278,23 @@ def test_manifest_http_endpoints_enforce_owner_boundary(tmp_path: Path, monkeypa
         "manifest.proposed", "manifest.approved"
     ]
     assert "selected_path_ids" not in timeline.json()[-1]["details"]
+
+    assert client.post(
+        "/api/cases/CM-2026-014/paths/PATH-01/execute",
+        json={"actor": "王淼", "role": "主计划"},
+    ).status_code == 403
+    path_result = client.post(
+        "/api/cases/CM-2026-014/paths/PATH-01/execute", json=owner
+    )
+    assert path_result.status_code == 200
+    assert [option["id"] for option in path_result.json()["path_attempts"][0]["solution_revision"]["options"]] == [
+        "A", "B"
+    ]
+    path_trace = client.get(
+        "/api/cases/CM-2026-014/agent-runs", params={**owner, "agent_type": "path"}
+    )
+    assert path_trace.status_code == 200
+    assert path_trace.json()[0]["status"] == "SUCCEEDED"
 
     approval = client.post(
         "/api/cases/CM-2026-014/paths/PATH-01/commitments/SUPPLY/approve",
@@ -368,10 +408,35 @@ def test_demo_manifest_freezes_resolved_capabilities(tmp_path: Path) -> None:
     assert snapshot is not None
     assert {item["id"] for item in snapshot["policies"]} == {"POL-SUBSTITUTION-3", "POL-CUSTOMER-2"}
     assert {item["id"] for item in snapshot["skills"]} == {
-        "material-substitution-analysis", "shortage-response-planning"
+        "material-substitution-analysis",
+        "material-substitution-engineering-review",
+        "material-substitution-master-planning-review",
+        "material-substitution-supply-manager-review",
+        "shortage-response-planning",
     }
     assert [item["id"] for item in snapshot["knowledge"]] == ["KNOW-2025-041"]
     assert all(item["digest"].startswith("sha256:") for item in snapshot["policies"])
+    assert "path_inputs" not in case.business_payload
+    base_skill = next(
+        item for item in snapshot["asset_payloads"]["skills"]
+        if item["id"] == "material-substitution-analysis"
+    )
+    assert [item["id"] for item in base_skill["path_options"]] == ["A", "B"]
+    assert [item["id"] for item in base_skill["tools"]] == [
+        "mock.material-master.lookup",
+        "mock.supply-snapshot.lookup",
+        "mock.customer-acceptance.lookup",
+    ]
+    role_contracts = {
+        item["role_report"]["role"]: item["role_report"]["dimension"]
+        for item in snapshot["asset_payloads"]["skills"]
+        if item.get("role_report")
+    }
+    assert role_contracts == {
+        "研发": "技术可行性",
+        "主计划": "供应与交付可行性",
+        "供应经理": "客户与商务接受度",
+    }
 
 
 def test_local_asset_replaces_builtin_without_editing_builtin(tmp_path: Path) -> None:
@@ -379,7 +444,7 @@ def test_local_asset_replaces_builtin_without_editing_builtin(tmp_path: Path) ->
     local_skill_dir.mkdir(parents=True)
     source = DEFAULT_BUILTIN_ROOT / "skills" / "material-substitution-analysis" / "SKILL.md"
     local_copy = local_skill_dir / "SKILL.md"
-    content = source.read_text().replace("Analyze only the candidate set", "Analyze strictly only the candidate set")
+    content = source.read_text().replace("候选集只能来自", "冻结候选集只能来自")
     local_copy.write_text(content)
 
     registry = CapabilityRegistry.from_directories(DEFAULT_BUILTIN_ROOT, tmp_path / "local")
@@ -392,7 +457,7 @@ def test_local_asset_replaces_builtin_without_editing_builtin(tmp_path: Path) ->
     local_version = resolution.skills[0].version
     frozen_snapshot = resolution.to_snapshot()
 
-    local_copy.write_text(content.replace("Analyze strictly only", "Analyze cautiously only"))
+    local_copy.write_text(content.replace("冻结候选集只能来自", "已评审候选集只能来自"))
     reloaded = CapabilityRegistry.from_directories(DEFAULT_BUILTIN_ROOT, tmp_path / "local")
     assert reloaded.resolve({
         "case_type": "ORDER_DELIVERY_RISK",
@@ -611,6 +676,30 @@ class _AllMatchedSkillPathsPlanner:
         )
 
 
+class _InventingPathAgent:
+    profile = "test/inventing-path-option"
+
+    async def generate(self, context, trace):
+        return PathAgentResult(
+            summary="invented option",
+            options=(ProposedOption(
+                id="ALT-C", title="invented", description="unsupported",
+                benefits=(), risks=(), assumptions=(),
+            ),),
+            recommended_option_ids=("ALT-C",),
+            recommendation_rationale="unsupported",
+            evidence_gaps=(),
+            role_reports=tuple(
+                RoleReport(
+                    role=item["role"], dimension=item["dimension"],
+                    report=f"{item['sentence_prefix']}A 与 B 的比较属于不受支持的测试输出。",
+                )
+                for item in context.required_role_reports
+            ),
+            adapter_profile=self.profile,
+        )
+
+
 def test_skill_declares_three_candidates_and_manifest_supports_all_paths(tmp_path: Path) -> None:
     planner = _AllMatchedSkillPathsPlanner()
     service = CaseService(CaseRepository(tmp_path / "test.db"), planner=planner)
@@ -625,6 +714,9 @@ def test_skill_declares_three_candidates_and_manifest_supports_all_paths(tmp_pat
     assert {ref.split("@", 1)[0] for ref in case.manifest.skill_refs} == {
         "shortage-response-planning",
         "material-substitution-analysis",
+        "material-substitution-engineering-review",
+        "material-substitution-master-planning-review",
+        "material-substitution-supply-manager-review",
         "supply-expediting-analysis",
         "order-split-analysis",
     }
@@ -727,13 +819,18 @@ def test_openai_compatible_adapter_accepts_custom_provider_configuration() -> No
 
     def handler(request: httpx.Request) -> httpx.Response:
         observed["api_key"] = request.headers["x-api-key"]
+        observed["authorization"] = request.headers.get("authorization")
         observed["url"] = str(request.url)
         observed["payload"] = json.loads(request.content)
         return httpx.Response(
             200,
             json={
+                "id": "response-planner-1",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "vendor-model-42",
                 "choices": [
-                    {"message": {"content": json.dumps({
+                    {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": json.dumps({
                         "paths": [
                             {"definition": "MaterialSubstitution", "rationale": "物料缺口与候选能力匹配"},
                             {"definition": "OrderSplit", "rationale": "可用数量支持分批交付探索"}
@@ -751,7 +848,7 @@ def test_openai_compatible_adapter_accepts_custom_provider_configuration() -> No
                 base_url="https://gateway.example/v1",
                 api_key_header="x-api-key",
                 api_key_prefix="",
-                client=client,
+                http_client=client,
             )
             from agentic_cm.orchestrator import PlanningCandidate, PlanningContext
             return await adapter.propose(
@@ -772,6 +869,7 @@ def test_openai_compatible_adapter_accepts_custom_provider_configuration() -> No
     assert [path.definition for path in result.paths] == ["MaterialSubstitution", "OrderSplit"]
     assert result.planner_profile == "openai-compatible/vendor-model-42"
     assert observed["api_key"] == "secret-key"
+    assert observed["authorization"] is None
     assert observed["url"] == "https://gateway.example/v1/chat/completions"
     assert observed["payload"]["response_format"] == {"type": "json_object"}
     assert "secret-key" not in json.dumps(trace_events)
@@ -781,6 +879,56 @@ def test_openai_compatible_adapter_accepts_custom_provider_configuration() -> No
         "credential_present": True,
         "credential_value_logged": False,
     }
+
+
+def test_openai_compatible_adapter_repairs_pydantic_schema_failure_once() -> None:
+    attempts = 0
+    trace_events = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        content = {
+            "paths": [{"definition": "MaterialSubstitution", "rationale": "候选能力匹配"}],
+        }
+        if attempts == 1:
+            content["unexpected"] = True
+        return httpx.Response(200, json={
+            "id": f"response-{attempts}",
+            "object": "chat.completion",
+            "created": attempts,
+            "model": "vendor-model-42",
+            "choices": [{
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {"role": "assistant", "content": json.dumps(content)},
+            }],
+        })
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+            adapter = OpenAICompatiblePlannerAdapter(
+                "secret-key",
+                model="vendor-model-42",
+                base_url="https://gateway.example/v1",
+                http_client=http_client,
+            )
+            from agentic_cm.orchestrator import PlanningCandidate, PlanningContext
+            return await adapter.propose(
+                PlanningContext("CM-1", 1, "延期", "关键物料延期", {}, {}, None),
+                (PlanningCandidate(
+                    "MaterialSubstitution", "物料替代", "desc",
+                    ("POL-1",), ("skill-1",), (), ("SUPPLY",),
+                    ({"id": "skill-1", "description": "desc", "instructions_markdown": "guide"},),
+                ),),
+                lambda *args, **kwargs: trace_events.append((args, kwargs)),
+            )
+
+    result = asyncio.run(run())
+    assert attempts == 2
+    assert result.paths[0].definition == "MaterialSubstitution"
+    assert [args[0] for args, _ in trace_events].count("planner.response_validation") == 1
+    assert [args[0] for args, _ in trace_events].count("planner.repair_request") == 1
 
 
 def test_orchestrator_trace_persists_each_governed_step(tmp_path: Path) -> None:
@@ -854,3 +1002,261 @@ def test_agent_trace_is_owner_only(tmp_path: Path) -> None:
         pass
     else:
         raise AssertionError("Agent trace must remain owner-only")
+
+
+def test_path_agent_builds_solution_revision_from_frozen_manifest(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+
+    case = approve_and_execute_path(service)
+
+    attempt = case.path_attempts[0]
+    revision = attempt["solution_revision"]
+    assert revision["path_definition"] == "MaterialSubstitution"
+    assert revision["manifest_ref"]["id"] == "MAN-CM-2026-014-1"
+    assert [option["id"] for option in revision["options"]] == ["A", "B"]
+    assert {item["role"] for item in revision["role_reports"]} == {"研发", "主计划", "供应经理"}
+    assert all("A" in item["report"] and "B" in item["report"] for item in revision["role_reports"])
+    assert revision["required_commitment_ids"] == ["SUPPLY", "TECH", "CUSTOMER"]
+    assert revision["generated_by"] == "deterministic-path/v1"
+    assert case.phase is OrchestrationPhase.PATH_EXPLORATION
+    assert case.commitment_nodes[0].status is NodeStatus.PENDING
+    assert service.repository.list_events("CM-2026-014")[-1]["event_type"] == "solution_revision.proposed"
+
+
+def test_repository_normalizes_legacy_numeric_solution_revision(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+    orchestrate(service)
+    service.approve_manifest(
+        "CM-2026-014", ["PATH-01"], actor="陈澄", role="订单统筹经理"
+    )
+    with service.repository._connect() as connection:
+        row = connection.execute(
+            "SELECT payload FROM cases WHERE id = ?", ("CM-2026-014",)
+        ).fetchone()
+        payload = json.loads(row["payload"])
+        payload["path_attempts"][0]["solution_revision"] = 1
+        payload["path_attempt"]["solution_revision"] = 1
+        connection.execute(
+            "UPDATE cases SET payload = ? WHERE id = ?",
+            (json.dumps(payload, ensure_ascii=False), "CM-2026-014"),
+        )
+
+    reloaded = service.get_case("CM-2026-014")
+
+    assert reloaded.path_attempts[0]["solution_revision"] is None
+    assert reloaded.path_attempt["solution_revision"] is None
+
+
+def test_path_agent_trace_audits_manifest_assembly_and_persistence(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+    approve_and_execute_path(service)
+
+    runs = service.get_agent_runs(
+        "CM-2026-014", actor="陈澄", role="订单统筹经理", agent_type="path"
+    )
+
+    assert len(runs) == 1
+    run = runs[0]
+    assert run["status"] == "SUCCEEDED"
+    assert run["adapter_profile"] == "deterministic-path/v1"
+    assert [event["step"] for event in run["events"]] == [
+        "run.started",
+        "path.eligibility",
+        "path.eligibility",
+        "agent.assemble",
+        "tools.query",
+        "agent.input",
+        "model.request",
+        "model.response",
+        "agent.output_validation",
+        "solution_revision.compose",
+        "run.completed",
+    ]
+    assembly = next(event for event in run["events"] if event["step"] == "agent.assemble")
+    assert assembly["details"]["manifest_ref"]["id"] == "MAN-CM-2026-014-1"
+    assert {item["id"] for item in assembly["details"]["execution_skills"]} == {
+        "material-substitution-analysis",
+        "material-substitution-engineering-review",
+        "material-substitution-master-planning-review",
+        "material-substitution-supply-manager-review",
+    }
+    assert assembly["details"]["authorized_options"] == [
+        {
+            "id": "A", "material_id": "MCU-X7A", "title": "物料 A · MCU-X7A",
+            "description": "与 MCU-X7 封装和引脚兼容、无需固件改动的优先替代候选。",
+        },
+        {
+            "id": "B", "material_id": "MCU-X7B", "title": "物料 B · MCU-X7B",
+            "description": "可覆盖完整缺口但需要固件配置与客户 AVL 评审的备选替代候选。",
+        },
+    ]
+    assert assembly["details"]["tool_ids"] == [
+        "mock.customer-acceptance.lookup",
+        "mock.material-master.lookup",
+        "mock.supply-snapshot.lookup",
+    ]
+    tool_trace = next(event for event in run["events"] if event["step"] == "tools.query")
+    assert len(tool_trace["details"]["results"]) == 6
+    assert {item["input"]["option_id"] for item in tool_trace["details"]["results"]} == {"A", "B"}
+    assert assembly["details"]["mandatory_commitment_ids"] == ["SUPPLY", "TECH", "CUSTOMER"]
+
+
+def test_path_agent_cannot_invent_manifest_unauthorized_option(tmp_path: Path) -> None:
+    repository = CaseRepository(tmp_path / "inventing-path.db")
+    service = CaseService(
+        repository,
+        planner=DeterministicPlannerAdapter(),
+        path_agent=_InventingPathAgent(),
+    )
+    service.ensure_demo_data()
+    orchestrate(service)
+    service.approve_manifest(
+        "CM-2026-014", ["PATH-01"], actor="陈澄", role="订单统筹经理"
+    )
+
+    try:
+        asyncio.run(service.execute_path(
+            "CM-2026-014", "PATH-01", actor="陈澄", role="订单统筹经理"
+        ))
+    except PathAgentOutputError as exc:
+        assert "unknown=['ALT-C']" in str(exc)
+    else:
+        raise AssertionError("Path Agent must not invent an unauthorized option")
+
+    unchanged = service.get_case("CM-2026-014")
+    assert unchanged.path_attempts[0]["solution_revision"] is None
+    assert [event["event_type"] for event in repository.list_events("CM-2026-014")] == [
+        "manifest.proposed", "manifest.approved"
+    ]
+    runs = service.get_agent_runs(
+        "CM-2026-014", actor="陈澄", role="订单统筹经理", agent_type="path"
+    )
+    assert runs[0]["status"] == "FAILED"
+
+
+def test_openai_compatible_path_agent_uses_manifest_assembled_context(tmp_path: Path) -> None:
+    observed = {"attempts": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed["attempts"] += 1
+        observed["api_key"] = request.headers["x-api-key"]
+        observed["payload"] = json.loads(request.content)
+        return httpx.Response(200, json={
+            "id": "response-path-1",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "vendor-model-42",
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": json.dumps({
+                "summary": "English summary" if observed["attempts"] == 1 else "比较两个替代候选，所有结论等待责任角色确认。",
+                "options": [{
+                    "id": "A",
+                    "title": "物料 A · MCU-X7A",
+                    "description": "保留为替代候选。",
+                    "benefits": ["可并行开展核验"],
+                    "risks": ["供应与技术状态未确认"],
+                    "assumptions": ["不代表交付承诺"],
+                }, {
+                    "id": "B",
+                    "title": "物料 B · MCU-X7B",
+                    "description": "保留为第二替代候选。",
+                    "benefits": ["降低单一候选失败风险"],
+                    "risks": ["客户接受度未确认"],
+                    "assumptions": ["不代表认证通过"],
+                }],
+                "recommendation": {"option_ids": [], "rationale": "证据不足，不排序。"},
+                "evidence_gaps": ["供应、技术与客户接受度确认"],
+                "role_reports": [
+                    {
+                        "role": "研发",
+                        "dimension": "技术可行性",
+                        "report": "研发维度：A 无需固件改动而 B 需要配置与回归测试，两者均须由研发完成剩余验证后确认。",
+                    },
+                    {
+                        "role": "主计划",
+                        "dimension": "供应与交付可行性",
+                        "report": "主计划维度：A 需要分段补足缺口而 B 的模拟数量可覆盖缺口，两者库存和交期均须主计划确认。",
+                    },
+                    {
+                        "role": "供应经理",
+                        "dimension": "客户与商务接受度",
+                        "report": "供应经理维度：A 需要客户偏差放行而 B 需要正式 AVL 认证，两者均须取得客户书面确认。",
+                    },
+                ],
+            }, ensure_ascii=False)}}],
+            "usage": {"prompt_tokens": 200, "completion_tokens": 121, "total_tokens": 321},
+        })
+
+    # A file-backed DB is required because each repository call opens a connection.
+    async def run_file_backed(tmp_path: Path):
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            adapter = OpenAICompatiblePathAgentAdapter(
+                "path-secret", model="vendor-model-42", base_url="https://gateway.example/v1",
+                api_key_header="x-api-key", api_key_prefix="", http_client=client,
+            )
+            service = CaseService(
+                CaseRepository(tmp_path / "openai-path.db"),
+                planner=DeterministicPlannerAdapter(), path_agent=adapter,
+            )
+            service.ensure_demo_data()
+            await service.orchestrate_case("CM-2026-014", actor="陈澄", role="订单统筹经理")
+            service.approve_manifest("CM-2026-014", ["PATH-01"], actor="陈澄", role="订单统筹经理")
+            return await service.execute_path(
+                "CM-2026-014", "PATH-01", actor="陈澄", role="订单统筹经理"
+            )
+
+    case = asyncio.run(run_file_backed(tmp_path))
+    revision = case.path_attempts[0]["solution_revision"]
+    assert observed["attempts"] == 2
+    assert revision["generated_by"] == "openai-compatible-path/vendor-model-42"
+    assert observed["api_key"] == "path-secret"
+    assert observed["payload"]["max_tokens"] == 6000
+    request_context = json.loads(observed["payload"]["messages"][1]["content"])
+    assert request_context["manifest_ref"]["id"] == "MAN-CM-2026-014-1"
+    assert request_context["execution_skills"][0]["id"] == "material-substitution-analysis"
+    assert request_context["compiled_policy"]["commitments"][0]["id"] == "SUPPLY"
+    assert request_context["authorized_option_ids"] == ["A", "B"]
+    assert len(request_context["tool_results"]) == 6
+    assert {item["role"] for item in request_context["required_role_reports"]} == {
+        "研发", "主计划", "供应经理"
+    }
+    assert "path-secret" not in json.dumps(observed["payload"])
+
+
+def test_failed_path_agent_trace_is_kept_without_solution_mutation(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, json={"error": "unavailable"})
+
+    async def run_failure(service: CaseService):
+        await service.orchestrate_case("CM-2026-014", actor="陈澄", role="订单统筹经理")
+        service.approve_manifest("CM-2026-014", ["PATH-01"], actor="陈澄", role="订单统筹经理")
+        await service.execute_path("CM-2026-014", "PATH-01", actor="陈澄", role="订单统筹经理")
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            service = CaseService(
+                CaseRepository(tmp_path / "failed-path.db"),
+                planner=DeterministicPlannerAdapter(),
+                path_agent=OpenAICompatiblePathAgentAdapter(
+                    None, model="unavailable-model", base_url="https://gateway.example/v1", http_client=client,
+                ),
+            )
+            service.ensure_demo_data()
+            try:
+                await run_failure(service)
+            except PathAgentExecutionError:
+                pass
+            else:
+                raise AssertionError("upstream Path Agent failure must propagate")
+            return service
+
+    service = asyncio.run(scenario())
+    unchanged = service.get_case("CM-2026-014")
+    assert unchanged.path_attempts[0]["solution_revision"] is None
+    assert [event["event_type"] for event in service.repository.list_events("CM-2026-014")] == [
+        "manifest.proposed", "manifest.approved"
+    ]
+    runs = service.get_agent_runs(
+        "CM-2026-014", actor="陈澄", role="订单统筹经理", agent_type="path"
+    )
+    assert runs[0]["status"] == "FAILED"
+    assert runs[0]["events"][-1]["step"] == "run.failed"

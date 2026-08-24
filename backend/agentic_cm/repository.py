@@ -279,8 +279,16 @@ class CaseRepository:
                 path_id=item.get("path_id", ""),
             ) for item in data.get("commitment_nodes", [])
         ]
-        legacy_attempt = data.get("path_attempt")
-        path_attempts = data.get("path_attempts") or ([legacy_attempt] if legacy_attempt else [])
+        raw_legacy_attempt = data.get("path_attempt")
+        raw_attempts = data.get("path_attempts") or ([raw_legacy_attempt] if raw_legacy_attempt else [])
+        path_attempts = [CaseRepository._normalize_path_attempt(item) for item in raw_attempts]
+        legacy_attempt = None
+        if raw_legacy_attempt:
+            legacy_path_id = raw_legacy_attempt.get("path_id")
+            legacy_attempt = next(
+                (item for item in path_attempts if item.get("path_id") == legacy_path_id),
+                CaseRepository._normalize_path_attempt(raw_legacy_attempt),
+            )
         return Case(
             id=data["id"], title=data["title"], description=data["description"], status=CaseStatus(data["status"]),
             phase=OrchestrationPhase(data["phase"]), owner=data["owner"], owner_role=data["owner_role"],
@@ -290,3 +298,12 @@ class CaseRepository:
             commitment_nodes=nodes, version=data["version"],
             created_at=data.get("created_at", data["updated_at"]), updated_at=data["updated_at"],
         )
+
+    @staticmethod
+    def _normalize_path_attempt(value: Any) -> dict[str, Any]:
+        """Read old demo rows where solution_revision was only a revision number."""
+        attempt = dict(value) if isinstance(value, dict) else {}
+        revision = attempt.get("solution_revision")
+        if not isinstance(revision, dict) or not isinstance(revision.get("options"), list):
+            attempt["solution_revision"] = None
+        return attempt

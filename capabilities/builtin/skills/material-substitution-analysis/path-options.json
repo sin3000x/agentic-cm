@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "path_definition": "MaterialSubstitution",
+  "options": [
+    {
+      "id": "A",
+      "material_id": "MCU-X7A",
+      "title": "物料 A · MCU-X7A",
+      "description": "与 MCU-X7 封装和引脚兼容、无需固件改动的优先替代候选。"
+    },
+    {
+      "id": "B",
+      "material_id": "MCU-X7B",
+      "title": "物料 B · MCU-X7B",
+      "description": "可覆盖完整缺口但需要固件配置与客户 AVL 评审的备选替代候选。"
+    }
+  ]
+}

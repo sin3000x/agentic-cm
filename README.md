@@ -75,6 +75,7 @@ AGENTIC_CM_ORCHESTRATOR_ADAPTER=openai-compatible
 AGENTIC_CM_LLM_BASE_URL=https://your-provider.example/v1
 AGENTIC_CM_LLM_API_KEY=your-key
 AGENTIC_CM_LLM_MODEL=your-model-id
+AGENTIC_CM_PATH_MAX_OUTPUT_TOKENS=6000
 ```
 
 然后正常启动，无需额外 `export`：
@@ -109,7 +110,7 @@ curl -sS 'http://localhost:8000/api/cases/CM-2026-014/agent-runs?actor=陈澄&ro
   | python3 -m json.tool
 ```
 
-Path Agent 与 Synthesis Agent 的 trace 尚未实现；后续会复用同一 AgentRun/TraceEvent 契约，详见 [Orchestrator 实现](docs/06-orchestrator.md)。
+Path Agent trace 已实现：方案生成后可在对应 SolutionRevision 下按 Path 展开，默认折叠；Synthesis Agent trace 尚未实现。详见 [Orchestrator 实现](docs/06-orchestrator.md)。
 
 当 Manifest 含多条 Path 时，每条 Path 都有独立的 `capability_snapshots[path_id]`。可以单独检查：
 

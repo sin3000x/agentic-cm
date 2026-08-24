@@ -109,6 +109,34 @@ test("DAG and cross-Case Inbox share role-scoped approval decisions", async () =
   assert.match(styles, /\.approvalActions/);
 });
 
+test("approved Manifest launches a real Path Agent and exposes its audited SolutionRevision", async () => {
+  const source = await readFile(new URL("../app/cases/[id]/page.tsx", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../app/cases/[id]/case-detail.css", import.meta.url), "utf8");
+
+  assert.match(source, /paths\/\$\{pathId\}\/execute/);
+  assert.match(source, /生成替代方案/);
+  assert.match(source, /solutionRevision\.options\.map/);
+  assert.match(source, /solutionRevision\.role_reports\.map/);
+  assert.match(source, /三个角色的替代判断报告/);
+  assert.match(source, /isSolutionRevision\(activePathAttempt\?\.solution_revision\)/);
+  assert.match(source, /Agent 建议（非业务决定）/);
+  assert.match(source, /agent_type: "path"/);
+  assert.match(source, /event\.step === "run\.started" && event\.details\.path_id === solutionRevision\.path_id/);
+  assert.match(source, /run\.agent_type === "path" && run\.events\.some/);
+  assert.match(source, /phase === "MANIFEST_REVIEW" && agentRuns\.some\(\(run\) => run\.agent_type === "orchestrator"\)/);
+  assert.match(source, /const typedRuns = runs\.filter\(\(run\) => run\.agent_type === agentType\)/);
+  assert.match(source, /<AgentTracePanel runs=\{activePathAgentRuns\} agentType="path"/);
+  assert.match(source, /查看当前 Path Trace/);
+  assert.match(source, /查看 Orchestrator Trace/);
+  assert.doesNotMatch(source, /查看 Agent Trace/);
+  assert.doesNotMatch(source, /setShowAgentTrace\(true\)/);
+  assert.doesNotMatch(source, /open=\{runIndex === 0\}/);
+  assert.match(source, /solution_revision\.proposed/);
+  assert.match(styles, /\.solutionRevision/);
+  assert.match(styles, /\.solutionOptions/);
+  assert.match(styles, /\.roleReports/);
+});
+
 test("organization asset pages read all three effective asset kinds from the backend", async () => {
   const source = await readFile(new URL("../app/assets/asset-library.tsx", import.meta.url), "utf8");
   assert.match(source, /\/api\/capabilities/);

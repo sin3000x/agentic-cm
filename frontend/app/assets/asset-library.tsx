@@ -70,10 +70,12 @@ function AssetBody({ group, asset }: { group: AssetGroup; asset: CapabilityAsset
     <details><summary>查看 SKILL.md 指令与文件</summary><pre>{asset.instructions_markdown}</pre><p className="assetFiles">{asset.files?.map(file => file.path).join(" · ")}</p></details>
   </>;
   if (group === "policies") return <div className="commitmentList">{asset.requirements?.commitments?.map(node => <div key={node.id}><span>{node.node_type}</span><strong>{node.id}</strong><p>{node.role} · 评审 {node.reviews.join("、")}</p><small>{node.depends_on?.length ? `依赖 ${node.depends_on.join("、")}` : "无前置依赖"}</small></div>)}</div>;
+  const sourceType = asset.source?.type === "closed_case" ? "已关闭 Case" : asset.source?.type;
+  const confidence = asset.confidence === "medium" ? "中" : asset.confidence === "high" ? "高" : asset.confidence === "low" ? "低" : asset.confidence;
   return <>
     <p className="assetSummary">{asset.content?.summary}</p>
     <ul className="knowledgeObservations">{asset.content?.observations?.map(item => <li key={item}>{item}</li>)}</ul>
-    <dl className="knowledgeSource"><div><dt>来源</dt><dd>{asset.source?.type}{asset.source?.case_id ? ` · ${asset.source.case_id}` : ""}</dd></div><div><dt>观察日期</dt><dd>{asset.source?.observed_at ?? "—"}</dd></div><div><dt>审核</dt><dd>{asset.source?.reviewed_by ?? "—"}</dd></div><div><dt>置信度</dt><dd>{asset.confidence ?? "—"}</dd></div></dl>
+    <dl className="knowledgeSource"><div><dt>来源</dt><dd>{sourceType}{asset.source?.case_id ? ` · ${asset.source.case_id}` : ""}</dd></div><div><dt>观察日期</dt><dd>{asset.source?.observed_at ?? "—"}</dd></div><div><dt>审核</dt><dd>{asset.source?.reviewed_by ?? "—"}</dd></div><div><dt>置信度</dt><dd>{confidence ?? "—"}</dd></div></dl>
   </>;
 }
 

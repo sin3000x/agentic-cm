@@ -129,6 +129,10 @@ Adapter 不得通过自己的模型或 Tool 绕开上下文权限范围。
 
 ## 6. PathAgentResult
 
+当前最小实现已经落地：`backend/agentic_cm/path_agent.py` 从已批准 Path 的冻结 Manifest 快照组装 `PathAgentContext`，OpenAI-compatible Adapter 通过官方 `openai-python` SDK 请求 `PathAgentResult/v1`，由 Pydantic 生成并解析结构 Schema；平台继续负责 option 引用、角色报告和 Manifest 授权范围等业务校验，全部通过后才持久化 `SolutionRevision`。模型请求失败或输出非法时只保留 `agent_type=path` 的审计 trace，不改变 Case、PathAttempt、Commitment 或业务事件。
+
+首版稳定外层字段为：`summary`、`options[]`、`recommendation`、`evidence_gaps`、`role_reports[]`。平台补入 revision、Path/Manifest 引用、强制 Commitment id 和 adapter profile。候选来自冻结 Skill 的 `path-options.json`；只读模拟 Tool 结果和角色报告契约也来自 Skill，框架只执行通用 schema、候选完整性、角色/维度、句首和完整句校验，不复制 A/B 或三个角色的领域判断。
+
 建议结构：
 
 - `solution_sections`
@@ -238,6 +242,6 @@ Agent 输出不合法时：
 
 ## 13. 当前已实现的 Orchestrator 切片
 
-当前代码已实现 `DeterministicPlannerAdapter` 与 `OpenAICompatiblePlannerAdapter`。两者消费同一 `PlanningContext + PlanningCandidate[]`，只返回候选 Path ID 与 rationale；Policy 匹配、Policy 编译、Manifest 冻结、Case 状态推进与事件持久化留在平台内核。详见 [Orchestrator 实现](06-orchestrator.md)。
+当前代码已实现 `DeterministicPlannerAdapter` 与 `OpenAICompatiblePlannerAdapter`。两者消费同一 `PlanningContext + PlanningCandidate[]`，只返回候选 Path ID 与 rationale；OpenAI-compatible 传输与错误映射集中在共享 SDK 封装，Pydantic 负责结构校验，Policy 匹配、Policy 编译、Manifest 冻结、Case 状态推进与事件持久化仍留在平台内核。详见 [Orchestrator 实现](06-orchestrator.md)。
 
 这比概念性的通用 `run(context, tool_provider, event_sink)` 更窄，是 Orchestration 任务的首个可运行子协议。后续若用 LangGraph、Deep Agents 或其他 Runtime，只允许在该 Adapter 内实现这个协议，不得把框架状态提升为 Case 权威状态。
