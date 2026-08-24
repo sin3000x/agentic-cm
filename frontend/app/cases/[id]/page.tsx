@@ -17,8 +17,8 @@ const demoIdentities = [
 ];
 
 const commitmentCopy: Record<string, string> = {
-  SUPPLY: "确认 A / B 供应可行性",
-  TECH: "确认 A / B 技术可行性",
+  SUPPLY: "确认 Manifest 候选物料的供应可行性",
+  TECH: "确认 Manifest 候选物料的技术可行性",
   CUSTOMER: "确认客户接受度与整体建议",
 };
 
@@ -68,6 +68,56 @@ type CommitmentNode = {
 
 type CommitmentDecision = "APPROVE" | "REVISE" | "REJECT";
 
+type SolutionOption = {
+  id: string;
+  title: string;
+  description: string;
+  benefits: string[];
+  risks: string[];
+  assumptions: string[];
+};
+
+type SolutionRevision = {
+  revision: number;
+  path_id: string;
+  path_definition: string;
+  summary: string;
+  options: SolutionOption[];
+  recommendation: { option_ids: string[]; rationale: string };
+  evidence_gaps: string[];
+  role_reports: Array<{ role: string; dimension: string; report: string }>;
+  required_commitment_ids: string[];
+  generated_by: string;
+  manifest_ref: { id: string; revision: number };
+};
+
+type PathAttempt = {
+  id: string;
+  path_id: string;
+  definition: string;
+  phase: string;
+  solution_revision: SolutionRevision | null;
+};
+
+function isSolutionRevision(value: unknown): value is SolutionRevision {
+  if (!value || typeof value !== "object") return false;
+  const revision = value as Partial<SolutionRevision>;
+  return Array.isArray(revision.options)
+    && revision.options.every((option) => option
+      && typeof option === "object"
+      && Array.isArray(option.benefits)
+      && Array.isArray(option.risks)
+      && Array.isArray(option.assumptions))
+    && !!revision.recommendation
+    && Array.isArray(revision.recommendation.option_ids)
+    && Array.isArray(revision.evidence_gaps)
+    && Array.isArray(revision.role_reports)
+    && revision.role_reports.every((item) => item
+      && typeof item.role === "string"
+      && typeof item.dimension === "string"
+      && typeof item.report === "string");
+}
+
 type InboxItem = {
   case_id: string;
   case_title: string;
@@ -78,7 +128,7 @@ type InboxItem = {
 
 type TimelineEvent = {
   id: number;
-  event_type: "manifest.proposed" | "manifest.approved" | "commitment.approved" | "commitment.revision_requested" | "commitment.rejected";
+  event_type: "manifest.proposed" | "manifest.approved" | "solution_revision.proposed" | "commitment.approved" | "commitment.revision_requested" | "commitment.rejected";
   created_at: string;
   details: {
     revision?: number;
@@ -86,6 +136,7 @@ type TimelineEvent = {
     role?: string;
     node_id?: string;
     path_id?: string;
+    option_count?: number;
   };
 };
 
@@ -157,17 +208,19 @@ function CapabilityPanel({ details }: { details: CapabilityDetails }) {
   );
 }
 
-function AgentTracePanel({ runs }: { runs: AgentRun[] }) {
+function AgentTracePanel({ runs, agentType }: { runs: AgentRun[]; agentType: "orchestrator" | "path" }) {
+  const label = agentType === "orchestrator" ? "ORCHESTRATOR" : "PATH AGENT";
+  const typedRuns = runs.filter((run) => run.agent_type === agentType);
   return (
-    <section className="agentTracePanel" aria-label="Orchestrator Agent Trace">
+    <section className="agentTracePanel" aria-label={`${label} Trace`}>
       <div className="traceHeader">
-        <span><strong>ORCHESTRATOR TRACE</strong><small>可审计步骤；不记录 API Key 或隐藏思维链</small></span>
-        <em>{runs.length} RUNS</em>
+        <span><strong>{label} TRACE</strong><small>可审计步骤；不记录 API Key 或隐藏思维链</small></span>
+        <em>{typedRuns.length} RUNS</em>
       </div>
-      {runs.length === 0 ? (
-        <p className="emptyTrace">尚无 Orchestrator 运行记录。生成 Manifest 后将在这里显示逐步 trace。</p>
-      ) : runs.map((run, runIndex) => (
-        <details className={`traceRun ${run.status.toLowerCase()}`} open={runIndex === 0} key={run.id}>
+      {typedRuns.length === 0 ? (
+        <p className="emptyTrace">尚无 {label} 运行记录。</p>
+      ) : typedRuns.map((run) => (
+        <details className={`traceRun ${run.status.toLowerCase()}`} key={run.id}>
           <summary>
             <span><b>{run.status}</b><strong>{run.adapter_profile}</strong></span>
             <small>{formatThreadTime(run.started_at)} · {run.events.length} steps</small>
@@ -207,9 +260,12 @@ export default function Home() {
   const [capabilitySnapshots, setCapabilitySnapshots] = useState<Record<string, CapabilitySnapshot>>({});
   const [selectedPathIds, setSelectedPathIds] = useState<string[]>([]);
   const [commitmentNodes, setCommitmentNodes] = useState<CommitmentNode[]>([]);
+  const [pathAttempts, setPathAttempts] = useState<PathAttempt[]>([]);
   const [timelineEvents, setTimelineEvents] = useState<TimelineEvent[]>([]);
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
-  const [showAgentTrace, setShowAgentTrace] = useState(false);
+  const [pathAgentRuns, setPathAgentRuns] = useState<AgentRun[]>([]);
+  const [showOrchestratorTrace, setShowOrchestratorTrace] = useState(false);
+  const [expandedPathTraces, setExpandedPathTraces] = useState<Record<string, boolean>>({});
   const [caseCreatedAt, setCaseCreatedAt] = useState<string | null>(null);
   const [canViewManifest, setCanViewManifest] = useState(true);
   const [identityIndex, setIdentityIndex] = useState(0);
@@ -227,7 +283,9 @@ export default function Home() {
     setCapabilities(null);
     setShowCapabilities(false);
     setAgentRuns([]);
-    setShowAgentTrace(false);
+    setPathAgentRuns([]);
+    setShowOrchestratorTrace(false);
+    setExpandedPathTraces({});
     setInboxItems([]);
     setIdentityIndex(nextIdentityIndex);
   }
@@ -257,6 +315,7 @@ export default function Home() {
         setPhase(data.phase);
         setApproved(data.phase === "PATH_EXPLORATION");
         setCommitmentNodes(data.commitment_nodes ?? []);
+        setPathAttempts(data.path_attempts ?? []);
         setTimelineEvents(timeline);
         setInboxItems(inbox);
         setCaseCreatedAt(data.created_at);
@@ -269,13 +328,22 @@ export default function Home() {
           const traceQuery = new URLSearchParams({
             actor: identity.name,
             role: identity.role,
-            agent_type: "orchestrator",
           });
-          fetch(`${API_BASE}/api/cases/CM-2026-014/agent-runs?${traceQuery}`, { signal: controller.signal })
-            .then((response) => response.ok ? response.json() : [])
-            .then(setAgentRuns)
+          Promise.all(["orchestrator", "path"].map((agentType) => {
+            const query = new URLSearchParams(traceQuery);
+            query.set("agent_type", agentType);
+            return fetch(`${API_BASE}/api/cases/CM-2026-014/agent-runs?${query}`, { signal: controller.signal })
+              .then((response) => response.ok ? response.json() : []);
+          }))
+            .then(([orchestratorRuns, loadedPathRuns]) => {
+              setAgentRuns(orchestratorRuns);
+              setPathAgentRuns(loadedPathRuns);
+            })
             .catch((error) => {
-              if (!(error instanceof DOMException && error.name === "AbortError")) setAgentRuns([]);
+              if (!(error instanceof DOMException && error.name === "AbortError")) {
+                setAgentRuns([]);
+                setPathAgentRuns([]);
+              }
             });
         }
       })
@@ -308,13 +376,13 @@ export default function Home() {
   async function refreshAgentRuns() {
     if (!canViewManifest) return;
     try {
-      const query = new URLSearchParams({
-        actor: currentIdentity.name,
-        role: currentIdentity.role,
-        agent_type: "orchestrator",
-      });
-      const response = await fetch(`${API_BASE}/api/cases/CM-2026-014/agent-runs?${query}`);
-      if (response.ok) setAgentRuns(await response.json());
+      const baseQuery = { actor: currentIdentity.name, role: currentIdentity.role };
+      const [orchestratorResponse, pathResponse] = await Promise.all([
+        fetch(`${API_BASE}/api/cases/CM-2026-014/agent-runs?${new URLSearchParams({ ...baseQuery, agent_type: "orchestrator" })}`),
+        fetch(`${API_BASE}/api/cases/CM-2026-014/agent-runs?${new URLSearchParams({ ...baseQuery, agent_type: "path" })}`),
+      ]);
+      if (orchestratorResponse.ok) setAgentRuns(await orchestratorResponse.json());
+      if (pathResponse.ok) setPathAgentRuns(await pathResponse.json());
     } catch {
       // Trace persistence is independent from the business action and can be reloaded later.
     }
@@ -343,7 +411,6 @@ export default function Home() {
       setMessage(`Manifest 生成失败：${error instanceof Error ? error.message : "请确认本地 API 与 Planner 配置"}。`);
     } finally {
       await refreshAgentRuns();
-      setShowAgentTrace(true);
       setBusy(false);
     }
   }
@@ -365,6 +432,7 @@ export default function Home() {
       const data = await response.json();
       setManifestPaths(data.manifest.paths);
       setCommitmentNodes(data.commitment_nodes ?? []);
+      setPathAttempts(data.path_attempts ?? []);
       setApproved(true);
       setPhase("PATH_EXPLORATION");
       await refreshTimeline();
@@ -372,6 +440,31 @@ export default function Home() {
     } catch {
       setMessage("无法连接本地 API，请先启动 Python 服务。 ");
     } finally {
+      setBusy(false);
+    }
+  }
+
+  async function generateAlternatives(pathId: string) {
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch(`${API_BASE}/api/cases/CM-2026-014/paths/${pathId}/execute`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ actor: currentIdentity.name, role: currentIdentity.role }),
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.detail ?? "Path Agent failed");
+      }
+      const data = await response.json();
+      setPathAttempts(data.path_attempts ?? []);
+      await refreshTimeline();
+      setMessage("Path Agent 已从冻结 Manifest 组装并生成可审查的替代方案。 ");
+    } catch (error) {
+      setMessage(`替代方案生成失败：${error instanceof Error ? error.message : "请确认 Path Agent 配置"}。`);
+    } finally {
+      await refreshAgentRuns();
       setBusy(false);
     }
   }
@@ -392,9 +485,12 @@ export default function Home() {
       setCapabilitySnapshots({});
       setSelectedPathIds([]);
       setCommitmentNodes([]);
+      setPathAttempts([]);
       setTimelineEvents([]);
       setAgentRuns([]);
-      setShowAgentTrace(false);
+      setPathAgentRuns([]);
+      setShowOrchestratorTrace(false);
+      setExpandedPathTraces({});
       setCaseCreatedAt(new Date().toISOString());
       setCanViewManifest(true);
       identityIndexRef.current = 0;
@@ -470,6 +566,15 @@ export default function Home() {
     ?? selectedPathIds[0]
     ?? commitmentNodes[0]?.path_id;
   const activeCommitments = commitmentNodes.filter((node) => node.path_id === selectedAttemptPathId);
+  const activePathAttempt = pathAttempts.find((attempt) => attempt.path_id === selectedAttemptPathId);
+  const solutionRevision = isSolutionRevision(activePathAttempt?.solution_revision)
+    ? activePathAttempt.solution_revision
+    : null;
+  const activePathAgentRuns = solutionRevision
+    ? pathAgentRuns.filter((run) => run.agent_type === "path" && run.events.some(
+      (event) => event.step === "run.started" && event.details.path_id === solutionRevision.path_id,
+    ))
+    : [];
 
   function approvalActions(caseId: string, node: CommitmentNode) {
     if (node.status !== "PENDING" || node.role !== currentIdentity.role) return null;
@@ -527,7 +632,70 @@ export default function Home() {
         <div><span className="agentIcon">✓</span><span><small>PATH ATTEMPT · ATTEMPT-01</small><h2>物料替代 · 审批 DAG</h2></span></div>
         <span className="version">AWAITING INBOX</span>
       </div>
-      <p className="lead">方案 v1 已覆盖候选物料 A / B。主计划与研发任务已并行投递到各自 Inbox；本人批准后节点才会变成 READY。</p>
+      <p className="lead">Path Agent 只使用已批准 Manifest 冻结的 Skill、Policy、Knowledge 与 Case 快照生成替代方案；主计划与研发仍需在各自 Inbox 作出独立确认。</p>
+      {solutionRevision ? (
+        <section className="solutionRevision" aria-label="Path Agent 替代方案">
+          <div className="solutionHeader">
+            <span><small>SOLUTION REVISION</small><strong>v{solutionRevision.revision} · {solutionRevision.path_definition}</strong></span>
+            <em>{solutionRevision.generated_by}</em>
+          </div>
+          <p>{solutionRevision.summary}</p>
+          <div className="solutionOptions">
+            {solutionRevision.options.map((option) => (
+              <article key={option.id}>
+                <span>{option.id}</span>
+                <h3>{option.title}</h3>
+                <p>{option.description}</p>
+                <dl>
+                  <div><dt>收益</dt><dd>{option.benefits.join("；") || "待分析"}</dd></div>
+                  <div><dt>风险</dt><dd>{option.risks.join("；") || "待分析"}</dd></div>
+                  <div><dt>假设</dt><dd>{option.assumptions.join("；") || "无"}</dd></div>
+                </dl>
+              </article>
+            ))}
+          </div>
+          <div className="solutionRecommendation">
+            <strong>Agent 建议（非业务决定）</strong>
+            <p>{solutionRevision.recommendation.rationale}</p>
+            <small>证据缺口：{solutionRevision.evidence_gaps.join("；") || "无"}</small>
+          </div>
+          <div className="roleReports" aria-label="三个角色的替代判断报告">
+            {solutionRevision.role_reports.map((item) => (
+              <article key={`${item.role}-${item.dimension}`}>
+                <span>{item.role}</span>
+                <strong>{item.dimension}</strong>
+                <p>{item.report}</p>
+              </article>
+            ))}
+          </div>
+          {activePathAgentRuns.length > 0 && (
+            <>
+              <button
+                className="linkButton traceToggle"
+                onClick={() => setExpandedPathTraces((current) => ({
+                  ...current,
+                  [solutionRevision.path_id]: !current[solutionRevision.path_id],
+                }))}
+              >
+                {expandedPathTraces[solutionRevision.path_id]
+                  ? "收起当前 Path Trace ↑"
+                  : `查看当前 Path Trace (${activePathAgentRuns.length}) →`}
+              </button>
+              {expandedPathTraces[solutionRevision.path_id] && (
+                <AgentTracePanel runs={activePathAgentRuns} agentType="path" />
+              )}
+            </>
+          )}
+          {activePathAttempt?.phase === "REVISING" && (
+            <button className="linkButton" disabled={busy} onClick={() => generateAlternatives(solutionRevision.path_id)}>根据人类修改要求生成修订版 →</button>
+          )}
+        </section>
+      ) : (
+        <div className="approvalBox pathAgentLaunch">
+          <span><strong>下一步：组装并运行 Path Agent</strong><small>从 Manifest 冻结快照加载 execution Skill 与强制 Policy；失败不会修改 Case。</small></span>
+          <button className="primary" disabled={busy || !selectedAttemptPathId} onClick={() => selectedAttemptPathId && generateAlternatives(selectedAttemptPathId)}>{busy ? "生成中…" : "生成替代方案"}</button>
+        </div>
+      )}
       <div className="dag" aria-label="Commitment DAG">
         {commitmentNode("SUPPLY", "主计划", "PENDING")}
         {commitmentNode("TECH", "研发", "PENDING")}
@@ -668,6 +836,14 @@ export default function Home() {
                     </div>
                   );
                 }
+                if (event.event_type === "solution_revision.proposed") {
+                  return (
+                    <div className="threadEvent completedEvent" key={event.id}>
+                      <span className="eventIcon botEvent">◇</span>
+                      <p><strong>Path Agent 生成 SolutionRevision v{event.details.revision ?? 1}</strong><span>{event.details.path_id} · {event.details.option_count ?? 0} 个可审查选项；未作出业务承诺 · {formatThreadTime(event.created_at)}</span></p>
+                    </div>
+                  );
+                }
                 if (event.event_type === "commitment.approved") {
                   return (
                     <div className="threadEvent completedEvent" key={event.id}>
@@ -691,15 +867,17 @@ export default function Home() {
               <article className="threadItem commentItem currentThreadItem">
                 <div className="threadAvatar botAvatar">AC</div>
                 <div className="commentBox activeComment">
-                  <header><strong>Agentic CM</strong><span>Orchestrator · 当前步骤</span><b className="currentLabel">{currentStage}</b></header>
+                  <header><strong>Agentic CM</strong><span>{approved ? "Path Agent" : "Orchestrator"} · 当前步骤</span><b className="currentLabel">{currentStage}</b></header>
                   <div className="commentBody actionBody">
                     {orchestrationCard}
-                    {canViewManifest && (
+                    {canViewManifest && phase === "MANIFEST_REVIEW" && agentRuns.some((run) => run.agent_type === "orchestrator") && (
                       <>
-                        <button className="linkButton traceToggle" onClick={() => setShowAgentTrace((current) => !current)}>
-                          {showAgentTrace ? "收起 Orchestrator Trace ↑" : `查看 Orchestrator Trace${agentRuns.length ? ` (${agentRuns.length})` : ""} →`}
+                        <button className="linkButton traceToggle" onClick={() => setShowOrchestratorTrace((current) => !current)}>
+                          {showOrchestratorTrace ? "收起 Orchestrator Trace ↑" : `查看 Orchestrator Trace (${agentRuns.filter((run) => run.agent_type === "orchestrator").length}) →`}
                         </button>
-                        {showAgentTrace && <AgentTracePanel runs={agentRuns} />}
+                        {showOrchestratorTrace && (
+                          <AgentTracePanel runs={agentRuns} agentType="orchestrator" />
+                        )}
                       </>
                     )}
                   </div>

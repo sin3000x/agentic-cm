@@ -10,7 +10,13 @@ def demo_cases() -> list[Case]:
         description="订单 SO-48392 的关键物料预计晚于承诺日期 12 天，可能影响客户交付。",
         status=CaseStatus.OPEN, phase=OrchestrationPhase.INTAKE,
         owner="陈澄", owner_role="订单统筹经理",
-        business_payload={"order_id": "SO-48392", "customer": "Northstar Mobility", "material": "MCU-X7", "gap_quantity": 18400, "target_date": "2026-08-24"},
+        business_payload={
+            "order_id": "SO-48392",
+            "customer": "Northstar Mobility",
+            "material": "MCU-X7",
+            "gap_quantity": 18400,
+            "target_date": "2026-08-24",
+        },
         human_proposal={"revision": 1, "author": "陈澄", "role": "订单统筹经理", "content": "建议优先评估现有认证范围内的替代物料，避免直接承诺未经客户确认的新方案。"},
         classification=classification,
     )

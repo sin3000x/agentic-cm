@@ -209,6 +209,15 @@ class CapabilityRegistry:
             raise CapabilityConfigurationError(f"SKILL.md requires string name and description: {entrypoint}")
         if frontmatter["name"] != skill_path.name:
             raise CapabilityConfigurationError(f"Skill name must match its folder: {entrypoint}")
+        display_title = next(
+            (
+                line.removeprefix("# ").strip()
+                for line in body.splitlines()
+                if line.startswith("# ") and line.removeprefix("# ").strip()
+            ),
+            frontmatter["name"],
+        )
+        selector = binding.get("selector", {}) if binding else {}
         paths_file = skill_path / "paths.json"
         declared_paths: list[dict[str, str]] = []
         if paths_file.is_file():
@@ -233,11 +242,89 @@ class CapabilityRegistry:
                 declared_paths.append({field: item[field].strip() for field in ("id", "title", "description")})
             if len({item["id"] for item in declared_paths}) != len(declared_paths):
                 raise CapabilityConfigurationError(f"Skill PathDefinition ids must be unique: {paths_file}")
-            selector = binding.get("selector", {}) if binding else {}
             if len(selector.get("case_type", [])) != 1 or "path_definition" in selector:
                 raise CapabilityConfigurationError(
                     f"A Skill owning paths.json must bind exactly one case_type and not path_definition: {paths_file}"
                 )
+
+        path_options: list[dict[str, str]] = []
+        options_file = skill_path / "path-options.json"
+        if options_file.is_file():
+            try:
+                options_payload = json.loads(options_file.read_text())
+            except (OSError, json.JSONDecodeError) as exc:
+                raise CapabilityConfigurationError(f"Cannot load Skill options {options_file}: {exc}") from exc
+            if (
+                not isinstance(options_payload, dict)
+                or set(options_payload) != {"schema_version", "path_definition", "options"}
+                or options_payload.get("schema_version") != 1
+                or not isinstance(options_payload.get("path_definition"), str)
+                or not isinstance(options_payload.get("options"), list)
+                or not options_payload["options"]
+            ):
+                raise CapabilityConfigurationError(f"Invalid Skill path-options contract: {options_file}")
+            bound_paths = selector.get("path_definition", [])
+            if bound_paths != [options_payload["path_definition"]]:
+                raise CapabilityConfigurationError(
+                    f"Skill path-options must match its single path_definition binding: {options_file}"
+                )
+            for item in options_payload["options"]:
+                if not isinstance(item, dict) or set(item) != {"id", "material_id", "title", "description"} or any(
+                    not isinstance(item[field], str) or not item[field].strip()
+                    for field in ("id", "material_id", "title", "description")
+                ):
+                    raise CapabilityConfigurationError(f"Invalid Skill path option: {options_file}")
+                path_options.append({field: item[field].strip() for field in item})
+            if len({item["id"] for item in path_options}) != len(path_options):
+                raise CapabilityConfigurationError(f"Skill path option ids must be unique: {options_file}")
+
+        tools: list[dict[str, Any]] = []
+        tools_file = skill_path / "tools.json"
+        if tools_file.is_file():
+            try:
+                tools_payload = json.loads(tools_file.read_text())
+            except (OSError, json.JSONDecodeError) as exc:
+                raise CapabilityConfigurationError(f"Cannot load Skill tools {tools_file}: {exc}") from exc
+            if (
+                not isinstance(tools_payload, dict)
+                or set(tools_payload) != {"schema_version", "tools"}
+                or tools_payload.get("schema_version") != 1
+                or not isinstance(tools_payload.get("tools"), list)
+            ):
+                raise CapabilityConfigurationError(f"Invalid Skill tools contract: {tools_file}")
+            for item in tools_payload["tools"]:
+                if (
+                    not isinstance(item, dict)
+                    or set(item) != {"id", "description", "read_only", "input_key", "records"}
+                    or not all(isinstance(item.get(field), str) and item[field].strip() for field in ("id", "description", "input_key"))
+                    or item.get("read_only") is not True
+                    or not isinstance(item.get("records"), dict)
+                ):
+                    raise CapabilityConfigurationError(f"Invalid read-only Skill tool: {tools_file}")
+                tools.append(deepcopy(item))
+            if len({item["id"] for item in tools}) != len(tools):
+                raise CapabilityConfigurationError(f"Skill tool ids must be unique: {tools_file}")
+
+        role_report = None
+        role_report_file = skill_path / "role-report.json"
+        if role_report_file.is_file():
+            try:
+                role_report = json.loads(role_report_file.read_text())
+            except (OSError, json.JSONDecodeError) as exc:
+                raise CapabilityConfigurationError(
+                    f"Cannot load Skill role-report contract {role_report_file}: {exc}"
+                ) from exc
+            if (
+                not isinstance(role_report, dict)
+                or set(role_report) != {"schema_version", "role", "dimension", "sentence_prefix"}
+                or role_report.get("schema_version") != 1
+                or any(
+                    not isinstance(role_report.get(field), str) or not role_report[field].strip()
+                    for field in ("role", "dimension", "sentence_prefix")
+                )
+                or len(selector.get("path_definition", [])) != 1
+            ):
+                raise CapabilityConfigurationError(f"Invalid Skill role-report contract: {role_report_file}")
 
         digest = hashlib.sha256()
         inventory: list[dict[str, Any]] = []
@@ -255,10 +342,13 @@ class CapabilityRegistry:
             "kind": "skill",
             "id": frontmatter["name"],
             "version": digest_hex[:12],
-            "title": frontmatter["name"],
+            "title": display_title,
             "status": "published",
-            "selector": deepcopy(binding.get("selector")) if binding else None,
+            "selector": deepcopy(selector) if selector else None,
             "paths": deepcopy(declared_paths),
+            "path_options": deepcopy(path_options),
+            "tools": deepcopy(tools),
+            "role_report": deepcopy(role_report),
             "description": frontmatter["description"],
             "purpose": frontmatter["description"],
             "entrypoint": "SKILL.md",

@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from .config import load_runtime_environment
 from .domain import CommitmentDecision
 from .orchestrator import OrchestrationError
+from .path_agent import PathAgentError, PathAgentExecutionError
 from .repository import CaseRepository
 from .service import AuthorizationError, CaseNotFoundError, CaseService, InvalidTransitionError
 
@@ -161,6 +162,25 @@ def approve_manifest(case_id: str, request: ManifestApprovalRequest):
     except CaseNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Case not found") from exc
     except InvalidTransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except AuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@app.post("/api/cases/{case_id}/paths/{path_id}/execute")
+async def execute_path(case_id: str, path_id: str, request: OwnerActionRequest):
+    try:
+        return (await service.execute_path(
+            case_id,
+            path_id,
+            actor=request.actor,
+            role=request.role,
+        )).to_dict()
+    except CaseNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Case not found") from exc
+    except PathAgentExecutionError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except PathAgentError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except AuthorizationError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc

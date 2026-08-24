@@ -61,7 +61,7 @@ export AGENTIC_CM_ORCHESTRATOR_ADAPTER=deterministic
 
 ### OpenAI-compatible 模型服务
 
-通用 Adapter 调用配置的 `base_url + /chat/completions`，启用 JSON Output。平台核心不知道服务商名称；Base URL、API Key、模型 ID、鉴权 Header 和鉴权前缀均由运行时注入。API Key 只用于请求 Header，不进入 Case、Manifest、事件或日志。非法 JSON/Schema 会进行一次修复调用；仍失败则本次编排失败且 Case 保持 `INTAKE`。
+通用 Adapter 通过官方 `openai-python` 的异步 Chat Completions 客户端调用配置的 `base_url + /chat/completions`，启用兼容性更广的 JSON Object 模式。Pydantic 模型生成响应 Schema 并严格解析结构；平台再校验 Path/option 白名单、角色报告契约与治理边界。平台核心不知道服务商名称；Base URL、API Key、模型 ID、鉴权 Header 和鉴权前缀均由运行时注入。API Key 只用于 SDK 请求 Header，不进入 Case、Manifest、事件或日志。SDK 传输重试关闭，非法结构只进行一次可审计的修复调用；仍失败则本次运行失败且不修改 Case。
 
 ```bash
 cp .env.example .env
@@ -71,9 +71,11 @@ cp .env.example .env
 
 ```dotenv
 AGENTIC_CM_ORCHESTRATOR_ADAPTER=openai-compatible
+AGENTIC_CM_PATH_ADAPTER=openai-compatible
 AGENTIC_CM_LLM_BASE_URL=https://your-provider.example/v1
 AGENTIC_CM_LLM_API_KEY=your-key
 AGENTIC_CM_LLM_MODEL=your-model-id
+AGENTIC_CM_PATH_MAX_OUTPUT_TOKENS=6000
 ```
 
 默认使用标准 `Authorization: Bearer <key>`。兼容服务采用其他鉴权格式时可以覆盖：
@@ -103,6 +105,10 @@ curl -sS 'http://localhost:8000/api/cases/CM-2026-014/capabilities?actor=陈澄&
 curl -sS -X POST http://localhost:8000/api/cases/CM-2026-014/manifest/approve \
   -H 'Content-Type: application/json' \
   -d '{"selected_path_ids":["PATH-01"],"actor":"陈澄","role":"订单统筹经理"}'
+curl -sS -X POST http://localhost:8000/api/cases/CM-2026-014/paths/PATH-01/execute \
+  -H 'Content-Type: application/json' \
+  -d '{"actor":"陈澄","role":"订单统筹经理"}'
+curl -sS 'http://localhost:8000/api/cases/CM-2026-014/agent-runs?actor=陈澄&role=订单统筹经理&agent_type=path' | python3 -m json.tool
 ```
 
 Manifest 的具体内容及其能力快照是 Owner-only 数据。非 Owner 的 Case 视图返回 `manifest: null`，直接读取、生成或审批返回 `403`。当前 `actor` / `role` 仅服务于 Demo 身份模拟；生产环境应从可信认证主体映射身份。
@@ -116,7 +122,7 @@ Manifest 的具体内容及其能力快照是 Owner-only 数据。非 Owner 的 
 首版状态：
 
 - `orchestrator` Agent trace：已实现并在 Case 工作台可展开查看，成功和失败运行均保留；
-- `path` Agent trace：待 Path execution Adapter 与 `SolutionRevision` 切片实现后，复用同一 `agent_runs / agent_trace_events` 契约；
+- `path` Agent trace：已实现。Owner 启动已批准 Path 后，平台从该 Path 的冻结 Manifest 快照读取 execution Skill、Policy、Knowledge、编译责任和 Case 快照，组装最小授权 `PathRunContext`；依次审计门禁、Agent 组装、输入、模型请求/响应、结构校验、`SolutionRevision` 组装与持久化。失败运行保留 trace，但不创建业务事件或修改 SolutionRevision；
 - `synthesis` Agent trace：待多 Path 结果汇总与冲突检测切片实现后接入；Synthesis 不得引入未探索 Path 或绕过人类批准。
 
 Case Thread 读取 `GET /api/cases/{case_id}/timeline`。该接口从 append-only `domain_events` 投影 Manifest 生成、Owner 批准和各角色 Commitment 批准事件，并返回数据库记录的 UTC 时间；前端按浏览器本地时区显示到秒。投影只包含 Thread 所需字段，不暴露原始事件中的 Manifest Path、Policy 或能力快照。
@@ -125,6 +131,7 @@ Case Thread 读取 `GET /api/cases/{case_id}/timeline`。该接口从 append-onl
 
 - Manifest 包含 `MaterialSubstitution`、`SupplyExpediting`、`OrderSplit`；
 - 前端默认只勾选 `MaterialSubstitution`，也允许多选；
-- 三条 Path 分别冻结自己的 Policy、execution Skill 与 Knowledge 快照；提拉、替代、拆分分别命中 `supply-expediting-analysis`、`material-substitution-analysis`、`order-split-analysis`；
+- 三条 Path 分别冻结自己的 Policy、execution Skill 与 Knowledge 快照；替代 Path 同时冻结总控 Skill、研发 Skill、主计划 Skill、供应经理 Skill，以及 Skill 自有的 A/B 候选和三种只读模拟查询；
 - Owner 批准后 `SUPPLY`、`TECH` 为 `PENDING` 并进入各自角色 Inbox；本人批准后才为 `READY`，`CUSTOMER` 在两者均 `READY` 前保持 `BLOCKED`；
+- `PATH-01` 执行时只使用 Manifest 中冻结的 execution Skills、Policy、Knowledge、A/B 候选与 Tool 结果，输出两个选项和研发/主计划/供应经理三个维度的完整句报告，再由平台封装为 `SolutionRevision`；模型不能新增、遗漏候选或角色报告；
 - Planner 发明 Path 或返回非法结构时，Case 与事件表均无副作用。

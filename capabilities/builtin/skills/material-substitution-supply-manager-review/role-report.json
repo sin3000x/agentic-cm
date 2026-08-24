@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "role": "供应经理",
+  "dimension": "客户与商务接受度",
+  "sentence_prefix": "供应经理维度："
+}

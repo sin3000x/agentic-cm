@@ -48,11 +48,14 @@ Policy 初版只包含结构化 `selector` 和 `requirements.commitments`。`sel
 
 ### 2.2 Skill
 
-Skill 不定义平台私有 JSON，而是直接复用通行的文件夹约定：
+Skill 复用通行的文件夹约定；只有需要被平台确定性消费的候选、只读 Tool 和角色报告边界使用小型有类型 JSON 契约：
 
 ```text
 material-substitution-analysis/
 ├── SKILL.md          # 必需；YAML name/description + Markdown 指令
+├── path-options.json # 可选；由 Skill 拥有的 Path 候选，而非框架默认值
+├── tools.json        # 可选；随 Manifest 冻结的只读模拟查询
+├── role-report.json  # 可选；角色 Skill 要求的报告角色、维度与句首
 ├── scripts/          # 可选；确定性脚本
 ├── references/       # 可选；按需加载的参考资料
 └── assets/           # 可选；模板或输出资源
@@ -67,8 +70,9 @@ Path 与 Skill 的确定性关系单独放在 `capabilities/builtin/skill-bindin
 - Path-level execution Skill 用同时包含 `case_type` 与 `path_definition` 的 selector 注入某一条 Path；
 - 对整个 Skill 文件夹计算 SHA-256，任一脚本、参考资料或资产变化都会产生新版本摘要；
 - 冻结 `SKILL.md` 正文和文件清单，供审计与 Adapter 消费。
+- 若存在 `path-options.json`、`tools.json` 或 `role-report.json`，CapabilityRegistry 会校验其契约并把内容随 Skill payload 一起冻结；Path Agent 不从框架或 Demo Case 复制一份候选定义。
 
-Demo 的 `shortage-response-planning/paths.json` 是提拉、替代、拆分三条定义的唯一来源，`SKILL.md` 只说明如何根据当前 Case 解释和排序它们。`material-substitution-analysis`、`supply-expediting-analysis` 与 `order-split-analysis` 分别负责三条 Path 获批后的具体分析。Policy 只负责强制人类责任与依赖，不代替执行 Skill。
+Demo 的 `shortage-response-planning/paths.json` 是提拉、替代、拆分三条定义的唯一来源，`SKILL.md` 只说明如何根据当前 Case 解释和排序它们。`material-substitution-analysis/path-options.json` 是 A（MCU-X7A）和 B（MCU-X7B）的唯一机器可读来源；同包 `tools.json` 提供物料主数据、供应快照和客户接受度的只读模拟查询。研发、主计划、供应经理分别由三个 Path-level role Skill 定义报告方法和完整句子契约。Policy 只负责强制人类责任与依赖，不代替执行 Skill。
 
 ### 2.3 Knowledge
 

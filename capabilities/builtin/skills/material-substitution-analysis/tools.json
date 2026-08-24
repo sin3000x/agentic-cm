@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "tools": [
+    {
+      "id": "mock.material-master.lookup",
+      "description": "按替代候选 id 查询冻结的物料主数据与研发验证快照。",
+      "read_only": true,
+      "input_key": "option_id",
+      "records": {
+        "A": {
+          "material_id": "MCU-X7A",
+          "package": "QFN-48",
+          "pin_compatible": true,
+          "firmware_change": "none",
+          "qualification": "基础功能与热循环已通过，EMC 差异测试待研发确认"
+        },
+        "B": {
+          "material_id": "MCU-X7B",
+          "package": "QFN-48",
+          "pin_compatible": true,
+          "firmware_change": "需要寄存器映射配置和约 3 个工作日回归测试",
+          "qualification": "供应商 EMC 报告已提供，整机回归仍待研发确认"
+        }
+      }
+    },
+    {
+      "id": "mock.supply-snapshot.lookup",
+      "description": "按替代候选 id 查询冻结的库存、调拨和补货快照。",
+      "read_only": true,
+      "input_key": "option_id",
+      "records": {
+        "A": {
+          "available_quantity": 12000,
+          "transfer_lead_days": 2,
+          "additional_quantity": 6400,
+          "additional_lead_days": 5,
+          "snapshot_status": "模拟数据，待主计划确认"
+        },
+        "B": {
+          "available_quantity": 18400,
+          "transfer_lead_days": 3,
+          "additional_quantity": 0,
+          "additional_lead_days": 0,
+          "snapshot_status": "模拟数据，待主计划确认"
+        }
+      }
+    },
+    {
+      "id": "mock.customer-acceptance.lookup",
+      "description": "按替代候选 id 查询冻结的客户 AVL、认证和偏差放行快照。",
+      "read_only": true,
+      "input_key": "option_id",
+      "records": {
+        "A": {
+          "customer": "Northstar Mobility",
+          "avl_status": "同系列已在 AVL，具体料号需偏差放行",
+          "approval_route": "供应经理提交差异包并取得客户书面确认",
+          "estimated_review_days": 2,
+          "snapshot_status": "历史与模拟查询，不代表当前客户承诺"
+        },
+        "B": {
+          "customer": "Northstar Mobility",
+          "avl_status": "不在当前 AVL",
+          "approval_route": "供应经理发起正式替代认证与商务影响确认",
+          "estimated_review_days": 7,
+          "snapshot_status": "历史与模拟查询，不代表当前客户承诺"
+        }
+      }
+    }
+  ]
+}

@@ -12,6 +12,24 @@
         "path_definition": ["MaterialSubstitution"]
       }
     },
+    "material-substitution-engineering-review": {
+      "selector": {
+        "case_type": ["ORDER_DELIVERY_RISK"],
+        "path_definition": ["MaterialSubstitution"]
+      }
+    },
+    "material-substitution-master-planning-review": {
+      "selector": {
+        "case_type": ["ORDER_DELIVERY_RISK"],
+        "path_definition": ["MaterialSubstitution"]
+      }
+    },
+    "material-substitution-supply-manager-review": {
+      "selector": {
+        "case_type": ["ORDER_DELIVERY_RISK"],
+        "path_definition": ["MaterialSubstitution"]
+      }
+    },
     "supply-expediting-analysis": {
       "selector": {
         "case_type": ["ORDER_DELIVERY_RISK"],
