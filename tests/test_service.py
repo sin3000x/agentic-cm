@@ -12,7 +12,7 @@ from agentic_cm.capabilities import (
     CapabilityConflictError,
     CapabilityRegistry,
 )
-from agentic_cm.domain import NodeStatus, OrchestrationPhase
+from agentic_cm.domain import CommitmentDecision, NodeStatus, OrchestrationPhase
 from agentic_cm.orchestrator import (
     DeterministicPlannerAdapter,
     ManifestDraftResult,
@@ -312,6 +312,52 @@ def test_role_inbox_approval_makes_node_ready_and_releases_dependents(tmp_path: 
     assert [event["details"]["node_id"] for event in approvals] == ["SUPPLY", "TECH"]
     assert all(event["created_at"].endswith("+00:00") for event in approvals)
     assert all("reviews" not in event["details"] for event in approvals)
+
+
+def test_commitment_revision_request_enters_revising_and_leaves_inbox(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+    orchestrate(service)
+    service.approve_manifest(
+        "CM-2026-014", ["PATH-01"], actor="陈澄", role="订单统筹经理"
+    )
+
+    case = service.decide_commitment(
+        "CM-2026-014", "PATH-01", "SUPPLY",
+        decision=CommitmentDecision.REVISE, actor="王淼", role="主计划",
+    )
+
+    assert {node.id: node.status for node in case.commitment_nodes} == {
+        "SUPPLY": NodeStatus.STALE,
+        "TECH": NodeStatus.PENDING,
+        "CUSTOMER": NodeStatus.BLOCKED,
+    }
+    assert case.path_attempts[0]["phase"] == "REVISING"
+    assert service.get_inbox("主计划") == []
+    assert service.get_case_timeline("CM-2026-014")[-1]["event_type"] == "commitment.revision_requested"
+
+
+def test_commitment_rejection_ends_path_and_invalidates_open_nodes(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+    orchestrate(service)
+    service.approve_manifest(
+        "CM-2026-014", ["PATH-01"], actor="陈澄", role="订单统筹经理"
+    )
+
+    case = service.decide_commitment(
+        "CM-2026-014", "PATH-01", "TECH",
+        decision=CommitmentDecision.REJECT, actor="林乔", role="研发",
+    )
+
+    assert {node.id: node.status for node in case.commitment_nodes} == {
+        "SUPPLY": NodeStatus.STALE,
+        "TECH": NodeStatus.REJECTED,
+        "CUSTOMER": NodeStatus.STALE,
+    }
+    assert case.path_attempts[0]["phase"] == "DONE"
+    assert case.path_attempts[0]["outcome"] == "REJECTED"
+    assert service.get_inbox("主计划") == []
+    assert service.get_inbox("研发") == []
+    assert service.get_case_timeline("CM-2026-014")[-1]["event_type"] == "commitment.rejected"
 
 
 def test_demo_manifest_freezes_resolved_capabilities(tmp_path: Path) -> None:

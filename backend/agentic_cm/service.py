@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from .capabilities import CapabilityRegistry, default_registry
 from .demo import demo_cases
-from .domain import CommitmentNode, NodeStatus, OrchestrationPhase
+from .domain import CommitmentDecision, CommitmentNode, NodeStatus, OrchestrationPhase
 from .orchestrator import Orchestrator, PlannerAdapter, planner_from_environment
 from .repository import CaseRepository
 
@@ -120,6 +120,8 @@ class CaseService:
             "manifest.proposed": ("revision",),
             "manifest.approved": ("actor",),
             "commitment.approved": ("actor", "role", "node_id", "path_id"),
+            "commitment.revision_requested": ("actor", "role", "node_id", "path_id"),
+            "commitment.rejected": ("actor", "role", "node_id", "path_id"),
         }
         timeline: list[dict] = []
         for event in self.repository.list_events(case_id):
@@ -330,6 +332,25 @@ class CaseService:
         actor: str,
         role: str,
     ):
+        return self.decide_commitment(
+            case_id,
+            path_id,
+            node_id,
+            decision=CommitmentDecision.APPROVE,
+            actor=actor,
+            role=role,
+        )
+
+    def decide_commitment(
+        self,
+        case_id: str,
+        path_id: str,
+        node_id: str,
+        *,
+        decision: CommitmentDecision,
+        actor: str,
+        role: str,
+    ):
         case = self.get_case(case_id)
         if case.phase is not OrchestrationPhase.PATH_EXPLORATION:
             raise InvalidTransitionError("Case is not exploring a Path")
@@ -348,32 +369,63 @@ class CaseService:
         if target.status is not NodeStatus.PENDING:
             raise InvalidTransitionError("Commitment is not awaiting Inbox approval")
         if not actor.strip():
-            raise InvalidTransitionError("Commitment approval requires an actor")
+            raise InvalidTransitionError("Commitment decision requires an actor")
 
         nodes = list(case.commitment_nodes)
-        nodes[target_index] = replace(target, status=NodeStatus.READY)
-        ready_ids = {
-            node.id for node in nodes
-            if node.path_id == path_id and node.status is NodeStatus.READY
-        }
-        nodes = [
-            replace(node, status=NodeStatus.PENDING)
-            if node.path_id == path_id
-            and node.status is NodeStatus.BLOCKED
-            and set(node.depends_on).issubset(ready_ids)
-            else node
-            for node in nodes
-        ]
+        event_type: str
+        if decision is CommitmentDecision.APPROVE:
+            nodes[target_index] = replace(target, status=NodeStatus.READY)
+            ready_ids = {
+                node.id for node in nodes
+                if node.path_id == path_id and node.status is NodeStatus.READY
+            }
+            nodes = [
+                replace(node, status=NodeStatus.PENDING)
+                if node.path_id == path_id
+                and node.status is NodeStatus.BLOCKED
+                and set(node.depends_on).issubset(ready_ids)
+                else node
+                for node in nodes
+            ]
+            event_type = "commitment.approved"
+        elif decision is CommitmentDecision.REVISE:
+            nodes[target_index] = replace(target, status=NodeStatus.STALE)
+            event_type = "commitment.revision_requested"
+            self._update_path_attempt(case, path_id, phase="REVISING", outcome=None)
+        elif decision is CommitmentDecision.REJECT:
+            nodes[target_index] = replace(target, status=NodeStatus.REJECTED)
+            nodes = [
+                replace(node, status=NodeStatus.STALE)
+                if node.path_id == path_id
+                and node.id != node_id
+                and node.status in {NodeStatus.PENDING, NodeStatus.BLOCKED}
+                else node
+                for node in nodes
+            ]
+            event_type = "commitment.rejected"
+            self._update_path_attempt(case, path_id, phase="DONE", outcome="REJECTED")
+        else:
+            raise InvalidTransitionError(f"Unsupported Commitment decision: {decision}")
         case.commitment_nodes = nodes
         case.version += 1
         case.updated_at = datetime.now(timezone.utc).isoformat()
-        self.repository.save(case, "commitment.approved", {
+        self.repository.save(case, event_type, {
             "path_id": path_id,
             "node_id": node_id,
             "actor": actor,
             "role": role,
         })
         return case
+
+    @staticmethod
+    def _update_path_attempt(case, path_id: str, *, phase: str, outcome: str | None) -> None:
+        case.path_attempts = [
+            {**attempt, "phase": phase, "outcome": outcome}
+            if attempt["path_id"] == path_id else attempt
+            for attempt in case.path_attempts
+        ]
+        if case.path_attempt and case.path_attempt.get("path_id") == path_id:
+            case.path_attempt = {**case.path_attempt, "phase": phase, "outcome": outcome}
 
     def reset_demo(self, dataset_id: str):
         if dataset_id != "supply-chain-golden-path-v1":

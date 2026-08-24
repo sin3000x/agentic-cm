@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .config import load_runtime_environment
+from .domain import CommitmentDecision
 from .orchestrator import OrchestrationError
 from .repository import CaseRepository
 from .service import AuthorizationError, CaseNotFoundError, CaseService, InvalidTransitionError
@@ -47,6 +48,10 @@ class OwnerActionRequest(BaseModel):
 class CommitmentApprovalRequest(BaseModel):
     actor: str
     role: str
+
+
+class CommitmentDecisionRequest(CommitmentApprovalRequest):
+    decision: CommitmentDecision
 
 
 @app.get("/api/health")
@@ -178,6 +183,29 @@ def approve_commitment(
             case_id,
             path_id,
             node_id,
+            actor=request.actor,
+            role=request.role,
+        )
+        return service.get_case_view(case_id, actor=request.actor, role=request.role)
+    except CaseNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Case not found") from exc
+    except InvalidTransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/cases/{case_id}/paths/{path_id}/commitments/{node_id}/decision")
+def decide_commitment(
+    case_id: str,
+    path_id: str,
+    node_id: str,
+    request: CommitmentDecisionRequest,
+):
+    try:
+        service.decide_commitment(
+            case_id,
+            path_id,
+            node_id,
+            decision=request.decision,
             actor=request.actor,
             role=request.role,
         )

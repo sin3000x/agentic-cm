@@ -25,6 +25,13 @@ class NodeStatus(StrEnum):
     READY = "READY"
     COMMITTED = "COMMITTED"
     STALE = "STALE"
+    REJECTED = "REJECTED"
+
+
+class CommitmentDecision(StrEnum):
+    APPROVE = "APPROVE"
+    REVISE = "REVISE"
+    REJECT = "REJECT"
 
 
 @dataclass(frozen=True)

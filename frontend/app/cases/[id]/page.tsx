@@ -61,14 +61,24 @@ type CommitmentNode = {
   id: string;
   role: string;
   node_type: string;
-  status: "BLOCKED" | "PENDING" | "READY" | "COMMITTED" | "STALE";
+  status: "BLOCKED" | "PENDING" | "READY" | "COMMITTED" | "STALE" | "REJECTED";
   depends_on: string[];
   path_id: string;
 };
 
+type CommitmentDecision = "APPROVE" | "REVISE" | "REJECT";
+
+type InboxItem = {
+  case_id: string;
+  case_title: string;
+  path_id: string;
+  path_title: string;
+  node: CommitmentNode;
+};
+
 type TimelineEvent = {
   id: number;
-  event_type: "manifest.proposed" | "manifest.approved" | "commitment.approved";
+  event_type: "manifest.proposed" | "manifest.approved" | "commitment.approved" | "commitment.revision_requested" | "commitment.rejected";
   created_at: string;
   details: {
     revision?: number;
@@ -205,6 +215,7 @@ export default function Home() {
   const [identityIndex, setIdentityIndex] = useState(0);
   const identityIndexRef = useRef(0);
   const [showInbox, setShowInbox] = useState(false);
+  const [inboxItems, setInboxItems] = useState<InboxItem[]>([]);
   const currentIdentity = demoIdentities[identityIndex];
 
   function selectIdentity(nextIdentityIndex: number) {
@@ -217,6 +228,7 @@ export default function Home() {
     setShowCapabilities(false);
     setAgentRuns([]);
     setShowAgentTrace(false);
+    setInboxItems([]);
     setIdentityIndex(nextIdentityIndex);
   }
 
@@ -235,16 +247,18 @@ export default function Home() {
     Promise.all([
       fetch(`${API_BASE}/api/cases/CM-2026-014?${query}`, { signal: controller.signal }),
       fetch(`${API_BASE}/api/cases/CM-2026-014/timeline`, { signal: controller.signal }),
+      fetch(`${API_BASE}/api/inbox?${new URLSearchParams({ role: identity.role })}`, { signal: controller.signal }),
     ])
-      .then(([caseResponse, timelineResponse]) => {
-        if (!caseResponse.ok || !timelineResponse.ok) return Promise.reject();
-        return Promise.all([caseResponse.json(), timelineResponse.json()]);
+      .then(([caseResponse, timelineResponse, inboxResponse]) => {
+        if (!caseResponse.ok || !timelineResponse.ok || !inboxResponse.ok) return Promise.reject();
+        return Promise.all([caseResponse.json(), timelineResponse.json(), inboxResponse.json()]);
       })
-      .then(([data, timeline]) => {
+      .then(([data, timeline, inbox]) => {
         setPhase(data.phase);
         setApproved(data.phase === "PATH_EXPLORATION");
         setCommitmentNodes(data.commitment_nodes ?? []);
         setTimelineEvents(timeline);
+        setInboxItems(inbox);
         setCaseCreatedAt(data.created_at);
         setCanViewManifest(data.permissions?.can_view_manifest === true);
         loadManifest(data.manifest);
@@ -278,6 +292,16 @@ export default function Home() {
       if (response.ok) setTimelineEvents(await response.json());
     } catch {
       // The business action has already succeeded; the next Case refresh will reload the Thread.
+    }
+  }
+
+  async function refreshInbox() {
+    try {
+      const query = new URLSearchParams({ role: currentIdentity.role });
+      const response = await fetch(`${API_BASE}/api/inbox?${query}`);
+      if (response.ok) setInboxItems(await response.json());
+    } catch {
+      // Inbox can be refreshed independently without changing the Case decision.
     }
   }
 
@@ -376,6 +400,7 @@ export default function Home() {
       identityIndexRef.current = 0;
       setIdentityIndex(0);
       setShowInbox(false);
+      setInboxItems([]);
       setMessage("Golden Path 演示数据已重置。 ");
     } catch {
       setMessage("重置失败：本地 API 未连接。 ");
@@ -411,25 +436,29 @@ export default function Home() {
     }
   }
 
-  async function approveCommitment(node: CommitmentNode) {
+  async function decideCommitment(caseId: string, node: CommitmentNode, decision: CommitmentDecision) {
     setBusy(true);
     setMessage("");
     try {
       const response = await fetch(
-        `${API_BASE}/api/cases/CM-2026-014/paths/${node.path_id}/commitments/${node.id}/approve`,
+        `${API_BASE}/api/cases/${caseId}/paths/${node.path_id}/commitments/${node.id}/decision`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ actor: currentIdentity.name, role: currentIdentity.role }),
+          body: JSON.stringify({ actor: currentIdentity.name, role: currentIdentity.role, decision }),
         },
       );
-      if (!response.ok) throw new Error("commitment approval failed");
+      if (!response.ok) throw new Error("commitment decision failed");
       const data = await response.json();
-      setCommitmentNodes(data.commitment_nodes ?? []);
-      await refreshTimeline();
-      setMessage(`${currentIdentity.name} 已在 ${currentIdentity.role} Inbox 批准 ${node.id}，节点现为 READY。`);
+      if (caseId === "CM-2026-014") {
+        setCommitmentNodes(data.commitment_nodes ?? []);
+        await refreshTimeline();
+      }
+      await refreshInbox();
+      const result = decision === "APPROVE" ? "通过" : decision === "REVISE" ? "要求修改" : "否决";
+      setMessage(`${currentIdentity.name} 已${result} ${caseId} 的 ${node.id} 节点。`);
     } catch {
-      setMessage("Inbox 批准失败：请确认当前身份与本地 API 状态。 ");
+      setMessage("审批操作失败：请确认当前身份、节点状态与本地 API。 ");
     } finally {
       setBusy(false);
     }
@@ -441,9 +470,17 @@ export default function Home() {
     ?? selectedPathIds[0]
     ?? commitmentNodes[0]?.path_id;
   const activeCommitments = commitmentNodes.filter((node) => node.path_id === selectedAttemptPathId);
-  const inboxItems = commitmentNodes.filter(
-    (node) => node.role === currentIdentity.role && node.status === "PENDING",
-  );
+
+  function approvalActions(caseId: string, node: CommitmentNode) {
+    if (node.status !== "PENDING" || node.role !== currentIdentity.role) return null;
+    return (
+      <div className="approvalActions" aria-label={`${node.id} 审批操作`}>
+        <button className="decisionApprove" disabled={busy} onClick={() => decideCommitment(caseId, node, "APPROVE")}>通过</button>
+        <button className="decisionRevise" disabled={busy} onClick={() => decideCommitment(caseId, node, "REVISE")}>修改</button>
+        <button className="decisionReject" disabled={busy} onClick={() => decideCommitment(caseId, node, "REJECT")}>否决</button>
+      </div>
+    );
+  }
 
   function commitmentNode(nodeId: string, fallbackRole: string, fallbackStatus: CommitmentNode["status"]) {
     const node = activeCommitments.find((item) => item.id === nodeId) ?? {
@@ -456,12 +493,17 @@ export default function Home() {
     };
     const statusLabel = node.status === "PENDING"
       ? node.role === currentIdentity.role ? "待本人批准" : `待${node.role}批准`
+      : node.status === "BLOCKED" ? "等待前置审批"
+      : node.status === "READY" ? "已通过"
+      : node.status === "STALE" ? "待方案修改"
+      : node.status === "REJECTED" ? "已否决"
       : node.status;
     return (
       <article className={`dagNode ${node.depends_on.length ? "downstream" : "upstream"} ${node.status.toLowerCase()}`}>
         <span>{statusLabel}</span>
         <h3>{node.role}</h3>
         <p>{commitmentCopy[node.id] ?? "等待责任人确认"}</p>
+        {approvalActions("CM-2026-014", node)}
       </article>
     );
   }
@@ -581,7 +623,7 @@ export default function Home() {
           <header className="issueHeader">
             <div>
               <div className="eyebrow">SUPPLY CHAIN CASE <span>·</span> 高优先级</div>
-              <h1>订单预计延期 <span>#CM-2026-014</span></h1>
+              <h1>Northstar MCU-X7 订单预计延期 12 天 <span>#CM-2026-014</span></h1>
               <p><span className="openBadge">● Open</span> 陈澄于 {formatThreadTime(caseCreatedAt)} 创建 · 当前由 <strong>陈澄</strong> 负责</p>
             </div>
             <button className="primary">继续处理 <span>→</span></button>
@@ -631,6 +673,15 @@ export default function Home() {
                     <div className="threadEvent completedEvent" key={event.id}>
                       <span className="eventIcon humanEvent">{event.details.actor?.slice(0, 1) ?? "人"}</span>
                       <p><strong>{event.details.actor}（{event.details.role}）批准 {event.details.node_id}</strong><span>{commitmentCopy[event.details.node_id ?? ""] ?? "专业责任节点"}已确认，节点变为 READY · {formatThreadTime(event.created_at)}</span></p>
+                    </div>
+                  );
+                }
+                if (event.event_type === "commitment.revision_requested" || event.event_type === "commitment.rejected") {
+                  const isRevision = event.event_type === "commitment.revision_requested";
+                  return (
+                    <div className="threadEvent" key={event.id}>
+                      <span className="eventIcon humanEvent">{event.details.actor?.slice(0, 1) ?? "人"}</span>
+                      <p><strong>{event.details.actor}（{event.details.role}）{isRevision ? "要求修改" : "否决"} {event.details.node_id}</strong><span>{isRevision ? "PathAttempt 进入 REVISING" : "当前 PathAttempt 已结束"} · {formatThreadTime(event.created_at)}</span></p>
                     </div>
                   );
                 }
@@ -698,14 +749,14 @@ export default function Home() {
               <div><small>ROLE INBOX</small><h2>{currentIdentity.role}</h2><p>{currentIdentity.name} · Demo identity simulation</p></div>
               <button aria-label="关闭 Inbox" onClick={() => setShowInbox(false)}>×</button>
             </header>
-            <div className="inboxHint">这里只显示分配给当前角色、且依赖已经满足的待批准节点。请从左下角切换演示身份。</div>
+            <div className="inboxHint">汇总所有 Case 中分配给当前角色、且依赖已经满足的待审批节点。请从左下角切换演示身份。</div>
             <div className="inboxList">
-              {inboxItems.length ? inboxItems.map((node) => (
-                <article key={`${node.path_id}-${node.id}`}>
-                  <div><span>PENDING</span><small>{node.path_id} · {node.id}</small></div>
-                  <h3>{commitmentCopy[node.id] ?? node.role}</h3>
-                  <p>Case CM-2026-014 · {manifestPaths.find((path) => path.id === node.path_id)?.title ?? node.path_id}</p>
-                  <button className="primary" disabled={busy} onClick={() => approveCommitment(node)}>{busy ? "处理中…" : "批准并设为 READY"}</button>
+              {inboxItems.length ? inboxItems.map((item) => (
+                <article key={`${item.case_id}-${item.path_id}-${item.node.id}`}>
+                  <div><span>PENDING</span><small>{item.path_id} · {item.node.id}</small></div>
+                  <h3>{commitmentCopy[item.node.id] ?? item.node.role}</h3>
+                  <p>Case {item.case_id} · {item.case_title} · {item.path_title}</p>
+                  {approvalActions(item.case_id, item.node)}
                 </article>
               )) : (
                 <div className="emptyInbox"><strong>当前没有待批准事项</strong><p>如果 Manifest 已批准，请切换到主计划或研发身份查看各自任务。</p></div>
