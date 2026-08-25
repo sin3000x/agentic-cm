@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from uuid import uuid4
 
 from .capabilities import CapabilityRegistry, default_registry
+from .config import (
+    path_execution_mode_from_environment,
+    path_max_concurrency_from_environment,
+)
 from .demo import DEMO_DATASET_ID, LEGACY_DEMO_TITLES, demo_cases
 from .domain import (
     CaseStatus,
@@ -45,6 +50,8 @@ class CaseService:
         planner: PlannerAdapter | None = None,
         path_agent: PathAgentAdapter | None = None,
         synthesis_agent: SynthesisAgentAdapter | None = None,
+        path_execution_mode: str | None = None,
+        path_max_concurrency: int | None = None,
     ) -> None:
         self.repository = repository
         self.capabilities = capabilities or default_registry()
@@ -56,6 +63,17 @@ class CaseService:
         self.synthesis_agent = SynthesisAgent(
             synthesis_agent or synthesis_agent_from_environment()
         )
+        self.path_execution_mode = path_execution_mode or path_execution_mode_from_environment()
+        if self.path_execution_mode not in {"parallel", "serial"}:
+            raise ValueError("path_execution_mode must be 'parallel' or 'serial'")
+        self.path_max_concurrency = (
+            path_max_concurrency
+            if path_max_concurrency is not None
+            else path_max_concurrency_from_environment()
+        )
+        if self.path_max_concurrency < 1:
+            raise ValueError("path_max_concurrency must be a positive integer")
+        self._path_commit_locks: dict[str, asyncio.Lock] = {}
 
     def ensure_demo_data(self) -> None:
         cases = self.repository.list_cases()
@@ -416,6 +434,58 @@ class CaseService:
         })
         return case
 
+    async def execute_paths(
+        self,
+        case_id: str,
+        path_ids: list[str],
+        *,
+        actor: str,
+        role: str,
+    ):
+        case = self.get_case(case_id)
+        self._require_case_owner(case, actor=actor, role=role)
+        if not path_ids:
+            raise InvalidTransitionError("At least one Path is required")
+        if len(path_ids) != len(set(path_ids)):
+            raise InvalidTransitionError("Path execution request contains duplicate ids")
+        selected_path_ids = {
+            path.id for path in (case.manifest.paths if case.manifest else ()) if path.selected
+        }
+        unknown_path_ids = set(path_ids) - selected_path_ids
+        if unknown_path_ids:
+            raise InvalidTransitionError(
+                f"Path execution request contains unselected ids: {sorted(unknown_path_ids)}"
+            )
+
+        if self.path_execution_mode == "parallel":
+            semaphore = asyncio.Semaphore(self.path_max_concurrency)
+
+            async def execute_with_limit(path_id: str):
+                async with semaphore:
+                    return await self.execute_path(
+                        case_id, path_id, actor=actor, role=role
+                    )
+
+            results = await asyncio.gather(*(
+                execute_with_limit(path_id)
+                for path_id in path_ids
+            ), return_exceptions=True)
+        else:
+            results = []
+            for path_id in path_ids:
+                try:
+                    results.append(await self.execute_path(
+                        case_id, path_id, actor=actor, role=role
+                    ))
+                except Exception as exc:
+                    results.append(exc)
+                    break
+
+        failure = next((result for result in results if isinstance(result, Exception)), None)
+        if failure is not None:
+            raise failure
+        return self.get_case(case_id)
+
     async def execute_path(
         self,
         case_id: str,
@@ -424,8 +494,8 @@ class CaseService:
         actor: str,
         role: str,
     ):
-        case = self.get_case(case_id)
-        self._require_case_owner(case, actor=actor, role=role)
+        case_snapshot = self.get_case(case_id)
+        self._require_case_owner(case_snapshot, actor=actor, role=role)
         run_id = f"RUN-{uuid4()}"
         adapter_profile = getattr(
             self.path_agent.adapter,
@@ -434,7 +504,7 @@ class CaseService:
         )
         self.repository.create_agent_run(
             run_id,
-            case.id,
+            case_snapshot.id,
             agent_type="path",
             adapter_profile=adapter_profile,
             initiated_by=actor,
@@ -456,7 +526,64 @@ class CaseService:
             {"agent_type": "path", "path_id": path_id, "initiated_by": actor, "role": role},
         )
         try:
-            solution_revision = await self.path_agent.run(case, path_id, trace)
+            initial_attempt = next(
+                attempt for attempt in case_snapshot.path_attempts
+                if attempt.get("path_id") == path_id
+            )
+            initial_solution_revision = initial_attempt.get("solution_revision")
+            solution_revision = await self.path_agent.run(case_snapshot, path_id, trace)
+
+            lock = self._path_commit_locks.setdefault(case_id, asyncio.Lock())
+            async with lock:
+                case = self.get_case(case_id)
+                self._require_case_owner(case, actor=actor, role=role)
+                current_attempt = next(
+                    attempt for attempt in case.path_attempts
+                    if attempt.get("path_id") == path_id
+                )
+                if current_attempt.get("solution_revision") != initial_solution_revision:
+                    raise InvalidTransitionError(
+                        f"Path {path_id} changed while its Agent was running"
+                    )
+                case.path_attempts = [
+                    {
+                        **attempt,
+                        "phase": "AWAITING_HUMAN",
+                        "solution_revision": solution_revision,
+                    }
+                    if attempt.get("path_id") == path_id else attempt
+                    for attempt in case.path_attempts
+                ]
+                case.path_attempt = next(
+                    (dict(attempt) for attempt in case.path_attempts if attempt.get("path_id") == path_id),
+                    case.path_attempt,
+                )
+                if all(attempt.get("solution_revision") for attempt in case.path_attempts):
+                    case.phase = OrchestrationPhase.PROFESSIONAL_COMMITMENT
+                ready_ids = {
+                    node.id for node in case.commitment_nodes
+                    if node.path_id == path_id and node.status is NodeStatus.READY
+                }
+                case.commitment_nodes = [
+                    replace(
+                        node,
+                        status=NodeStatus.PENDING
+                        if set(node.depends_on).issubset(ready_ids)
+                        else NodeStatus.BLOCKED,
+                    )
+                    if node.path_id == path_id and node.status is NodeStatus.STALE
+                    else node
+                    for node in case.commitment_nodes
+                ]
+                case.version += 1
+                case.updated_at = datetime.now(timezone.utc).isoformat()
+                self.repository.save(case, "solution_revision.proposed", {
+                    "path_id": path_id,
+                    "revision": solution_revision["revision"],
+                    "option_count": len(solution_revision["options"]),
+                    "generated_by": solution_revision["generated_by"],
+                    "next_phase": case.phase.value,
+                })
         except Exception as exc:
             trace(
                 "run.failed",
@@ -466,46 +593,6 @@ class CaseService:
             )
             self.repository.finish_agent_run(run_id, status="FAILED", error=exc)
             raise
-
-        case.path_attempts = [
-            {
-                **attempt,
-                "phase": "AWAITING_HUMAN",
-                "solution_revision": solution_revision,
-            }
-            if attempt.get("path_id") == path_id else attempt
-            for attempt in case.path_attempts
-        ]
-        case.path_attempt = next(
-            (dict(attempt) for attempt in case.path_attempts if attempt.get("path_id") == path_id),
-            case.path_attempt,
-        )
-        if all(attempt.get("solution_revision") for attempt in case.path_attempts):
-            case.phase = OrchestrationPhase.PROFESSIONAL_COMMITMENT
-        ready_ids = {
-            node.id for node in case.commitment_nodes
-            if node.path_id == path_id and node.status is NodeStatus.READY
-        }
-        case.commitment_nodes = [
-            replace(
-                node,
-                status=NodeStatus.PENDING
-                if set(node.depends_on).issubset(ready_ids)
-                else NodeStatus.BLOCKED,
-            )
-            if node.path_id == path_id and node.status is NodeStatus.STALE
-            else node
-            for node in case.commitment_nodes
-        ]
-        case.version += 1
-        case.updated_at = datetime.now(timezone.utc).isoformat()
-        self.repository.save(case, "solution_revision.proposed", {
-            "path_id": path_id,
-            "revision": solution_revision["revision"],
-            "option_count": len(solution_revision["options"]),
-            "generated_by": solution_revision["generated_by"],
-            "next_phase": case.phase.value,
-        })
         trace(
             "run.completed",
             "COMPLETED",

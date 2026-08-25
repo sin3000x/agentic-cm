@@ -47,6 +47,10 @@ class OwnerActionRequest(BaseModel):
     role: str
 
 
+class PathExecutionRequest(OwnerActionRequest):
+    path_ids: list[str]
+
+
 class CommitmentApprovalRequest(BaseModel):
     actor: str
     role: str
@@ -64,6 +68,14 @@ class OwnerDecisionRequest(OwnerActionRequest):
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/runtime-config")
+def runtime_config() -> dict[str, str | int]:
+    return {
+        "path_execution_mode": service.path_execution_mode,
+        "path_max_concurrency": service.path_max_concurrency,
+    }
 
 
 @app.get("/api/cases")
@@ -187,6 +199,30 @@ async def execute_path(case_id: str, path_id: str, request: OwnerActionRequest):
     except PathAgentExecutionError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except PathAgentError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except AuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@app.post("/api/cases/{case_id}/paths/execute")
+async def execute_paths(case_id: str, request: PathExecutionRequest):
+    try:
+        case = await service.execute_paths(
+            case_id,
+            request.path_ids,
+            actor=request.actor,
+            role=request.role,
+        )
+        return {
+            "execution_mode": service.path_execution_mode,
+            "max_concurrency": service.path_max_concurrency,
+            "case": case.to_dict(),
+        }
+    except CaseNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Case not found") from exc
+    except PathAgentExecutionError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except (PathAgentError, InvalidTransitionError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except AuthorizationError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
