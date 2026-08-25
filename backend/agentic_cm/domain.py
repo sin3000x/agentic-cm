@@ -6,6 +6,15 @@ from enum import StrEnum
 from typing import Any
 
 
+def utc_now() -> str:
+    """The current UTC instant as an ISO 8601 string.
+
+    Every persisted timestamp goes through here so stored values stay
+    timezone-aware and comparable.
+    """
+    return datetime.now(timezone.utc).isoformat()
+
+
 class CaseStatus(StrEnum):
     OPEN = "OPEN"
     PENDING = "PENDING"
@@ -96,8 +105,17 @@ class Case:
     synthesis_report: dict[str, Any] | None = None
     owner_decision: dict[str, Any] | None = None
     version: int = 1
-    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    created_at: str = field(default_factory=utc_now)
+    updated_at: str = field(default_factory=utc_now)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    def touch(self) -> None:
+        """Record a new authoritative revision of this Case.
+
+        Every state change bumps the version and the timestamp together; they
+        are what the optimistic-concurrency check and the UI both read.
+        """
+        self.version += 1
+        self.updated_at = utc_now()

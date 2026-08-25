@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import asdict, replace
-from datetime import datetime, timezone
-from uuid import uuid4
 
+from .agent_run import agent_run
 from .capabilities import CapabilityRegistry, default_registry
 from .config import (
     path_execution_mode_from_environment,
@@ -18,6 +17,7 @@ from .domain import (
     NodeStatus,
     OrchestrationPhase,
     OwnerDecisionAction,
+    utc_now,
 )
 from .orchestrator import Orchestrator, PlannerAdapter, planner_from_environment
 from .path_agent import PathAgent, PathAgentAdapter, path_agent_from_environment
@@ -90,8 +90,7 @@ class CaseService:
                     **template.business_payload,
                     **case.business_payload,
                 }
-                case.version += 1
-                case.updated_at = datetime.now(timezone.utc).isoformat()
+                case.touch()
                 self.repository.save(case, "case.demo_metadata_migrated", {
                     "dataset_id": DEMO_DATASET_ID,
                     "fields": ["title", "description", "business_payload"],
@@ -103,8 +102,7 @@ class CaseService:
                 and not any(attempt.get("phase") == "REVISING" for attempt in case.path_attempts)
             ):
                 case.phase = OrchestrationPhase.PROFESSIONAL_COMMITMENT
-                case.version += 1
-                case.updated_at = datetime.now(timezone.utc).isoformat()
+                case.touch()
                 self.repository.save(case, "case.phase_migrated", {
                     "from": OrchestrationPhase.PATH_EXPLORATION.value,
                     "to": OrchestrationPhase.PROFESSIONAL_COMMITMENT.value,
@@ -125,8 +123,7 @@ class CaseService:
                     else node
                     for node in case.commitment_nodes
                 ]
-                case.version += 1
-                case.updated_at = datetime.now(timezone.utc).isoformat()
+                case.touch()
                 self.repository.save(case, "commitment.pending_migration", {
                     "reason": "introduce explicit role Inbox approval before READY",
                 })
@@ -144,8 +141,7 @@ class CaseService:
                         self._update_path_attempt(case, path_id, phase="DONE", outcome="SUCCEEDED")
                 if self._all_selected_paths_terminal(case):
                     case.phase = OrchestrationPhase.FINAL_REVIEW
-                    case.version += 1
-                    case.updated_at = datetime.now(timezone.utc).isoformat()
+                    case.touch()
                     self.repository.save(case, "case.phase_migrated", {
                         "from": OrchestrationPhase.PROFESSIONAL_COMMITMENT.value,
                         "to": OrchestrationPhase.FINAL_REVIEW.value,
@@ -155,8 +151,7 @@ class CaseService:
                     (attempt.get("path_id"), attempt.get("phase"), attempt.get("outcome"))
                     for attempt in case.path_attempts
                 ]:
-                    case.version += 1
-                    case.updated_at = datetime.now(timezone.utc).isoformat()
+                    case.touch()
                     self.repository.save(case, "path_attempt.terminal_migrated", {
                         "reason": "derive terminal Path outcomes from existing approval DAG states",
                     })
@@ -284,72 +279,40 @@ class CaseService:
     async def orchestrate_case(self, case_id: str, *, actor: str, role: str):
         case = self.get_case(case_id)
         self._require_case_owner(case, actor=actor, role=role)
-        run_id = f"RUN-{uuid4()}"
-        adapter_profile = getattr(
-            self.orchestrator.planner,
-            "profile",
-            type(self.orchestrator.planner).__name__,
-        )
-        self.repository.create_agent_run(
-            run_id,
+        async with agent_run(
+            self.repository,
             case.id,
             agent_type="orchestrator",
-            adapter_profile=adapter_profile,
-            initiated_by=actor,
-        )
-
-        def trace(step: str, status: str, summary: str, details: dict | None = None) -> None:
-            self.repository.append_agent_trace(
-                run_id,
-                step=step,
-                status=status,
-                summary=summary,
-                details=details,
+            adapter=self.orchestrator.planner,
+            actor=actor,
+            role=role,
+            started_summary="Orchestrator AgentRun 已启动",
+            failed_summary="Orchestrator AgentRun 失败；Case 权威状态未修改",
+        ) as run:
+            manifest = await self.orchestrator.compose_manifest(case, run.trace)
+            case.manifest = manifest
+            case.phase = OrchestrationPhase.MANIFEST_REVIEW
+            case.touch()
+            self.repository.save(
+                case,
+                "manifest.proposed",
+                {
+                    "manifest_id": manifest.id,
+                    "revision": manifest.revision,
+                    "planner_profile": manifest.planner_profile,
+                    "path_definitions": [path.definition for path in manifest.paths],
+                    "policy_refs": list(manifest.policy_refs),
+                },
             )
-
-        trace(
-            "run.started",
-            "STARTED",
-            "Orchestrator AgentRun 已启动",
-            {"agent_type": "orchestrator", "initiated_by": actor, "role": role},
-        )
-        try:
-            manifest = await self.orchestrator.compose_manifest(case, trace)
-        except Exception as exc:
-            trace(
-                "run.failed",
-                "FAILED",
-                "Orchestrator AgentRun 失败；Case 权威状态未修改",
-                {"error_type": type(exc).__name__, "error": str(exc)},
+            run.complete(
+                "Manifest 已持久化，Case 进入 MANIFEST_REVIEW",
+                {
+                    "manifest_id": manifest.id,
+                    "case_version": case.version,
+                    "phase": case.phase.value,
+                },
+                adapter_profile=manifest.planner_profile,
             )
-            self.repository.finish_agent_run(run_id, status="FAILED", error=exc)
-            raise
-        case.manifest = manifest
-        case.phase = OrchestrationPhase.MANIFEST_REVIEW
-        case.version += 1
-        case.updated_at = datetime.now(timezone.utc).isoformat()
-        self.repository.save(
-            case,
-            "manifest.proposed",
-            {
-                "manifest_id": manifest.id,
-                "revision": manifest.revision,
-                "planner_profile": manifest.planner_profile,
-                "path_definitions": [path.definition for path in manifest.paths],
-                "policy_refs": list(manifest.policy_refs),
-            },
-        )
-        trace(
-            "run.completed",
-            "COMPLETED",
-            "Manifest 已持久化，Case 进入 MANIFEST_REVIEW",
-            {"manifest_id": manifest.id, "case_version": case.version, "phase": case.phase.value},
-        )
-        self.repository.finish_agent_run(
-            run_id,
-            status="SUCCEEDED",
-            adapter_profile=manifest.planner_profile,
-        )
         return case
 
     def approve_manifest(
@@ -423,8 +386,7 @@ class CaseService:
         case.path_attempts = attempts
         case.path_attempt = attempts[0]
         case.commitment_nodes = nodes
-        case.version += 1
-        case.updated_at = datetime.now(timezone.utc).isoformat()
+        case.touch()
         self.repository.save(case, "manifest.approved", {
             "manifest_id": case.manifest.id,
             "revision": case.manifest.revision,
@@ -496,42 +458,23 @@ class CaseService:
     ):
         case_snapshot = self.get_case(case_id)
         self._require_case_owner(case_snapshot, actor=actor, role=role)
-        run_id = f"RUN-{uuid4()}"
-        adapter_profile = getattr(
-            self.path_agent.adapter,
-            "profile",
-            type(self.path_agent.adapter).__name__,
-        )
-        self.repository.create_agent_run(
-            run_id,
+        async with agent_run(
+            self.repository,
             case_snapshot.id,
             agent_type="path",
-            adapter_profile=adapter_profile,
-            initiated_by=actor,
-        )
-
-        def trace(step: str, status: str, summary: str, details: dict | None = None) -> None:
-            self.repository.append_agent_trace(
-                run_id,
-                step=step,
-                status=status,
-                summary=summary,
-                details=details,
-            )
-
-        trace(
-            "run.started",
-            "STARTED",
-            "Path AgentRun 已启动",
-            {"agent_type": "path", "path_id": path_id, "initiated_by": actor, "role": role},
-        )
-        try:
+            adapter=self.path_agent.adapter,
+            actor=actor,
+            role=role,
+            started_summary="Path AgentRun 已启动",
+            failed_summary="Path AgentRun 失败；Case 与 SolutionRevision 未修改",
+            started_details={"path_id": path_id},
+        ) as run:
             initial_attempt = next(
                 attempt for attempt in case_snapshot.path_attempts
                 if attempt.get("path_id") == path_id
             )
             initial_solution_revision = initial_attempt.get("solution_revision")
-            solution_revision = await self.path_agent.run(case_snapshot, path_id, trace)
+            solution_revision = await self.path_agent.run(case_snapshot, path_id, run.trace)
 
             lock = self._path_commit_locks.setdefault(case_id, asyncio.Lock())
             async with lock:
@@ -575,8 +518,7 @@ class CaseService:
                     else node
                     for node in case.commitment_nodes
                 ]
-                case.version += 1
-                case.updated_at = datetime.now(timezone.utc).isoformat()
+                case.touch()
                 self.repository.save(case, "solution_revision.proposed", {
                     "path_id": path_id,
                     "revision": solution_revision["revision"],
@@ -584,31 +526,16 @@ class CaseService:
                     "generated_by": solution_revision["generated_by"],
                     "next_phase": case.phase.value,
                 })
-        except Exception as exc:
-            trace(
-                "run.failed",
-                "FAILED",
-                "Path AgentRun 失败；Case 与 SolutionRevision 未修改",
-                {"error_type": type(exc).__name__, "error": str(exc)},
+            run.complete(
+                "SolutionRevision 已持久化，等待人类责任节点评审",
+                {
+                    "path_id": path_id,
+                    "revision": solution_revision["revision"],
+                    "case_version": case.version,
+                    "phase": case.phase.value,
+                },
+                adapter_profile=solution_revision["generated_by"],
             )
-            self.repository.finish_agent_run(run_id, status="FAILED", error=exc)
-            raise
-        trace(
-            "run.completed",
-            "COMPLETED",
-            "SolutionRevision 已持久化，等待人类责任节点评审",
-            {
-                "path_id": path_id,
-                "revision": solution_revision["revision"],
-                "case_version": case.version,
-                "phase": case.phase.value,
-            },
-        )
-        self.repository.finish_agent_run(
-            run_id,
-            status="SUCCEEDED",
-            adapter_profile=solution_revision["generated_by"],
-        )
         return case
 
     def get_inbox(self, role: str) -> list[dict]:
@@ -768,8 +695,7 @@ class CaseService:
                 self._update_path_attempt(case, attempt_path_id, phase="DONE", outcome="SUCCEEDED")
         if self._all_selected_paths_terminal(case):
             case.phase = OrchestrationPhase.FINAL_REVIEW
-        case.version += 1
-        case.updated_at = datetime.now(timezone.utc).isoformat()
+        case.touch()
         self.repository.save(case, event_type, {
             "path_id": path_id,
             "node_id": node_id,
@@ -793,56 +719,35 @@ class CaseService:
     async def synthesize_case(self, case_id: str, *, actor: str, role: str):
         case = self.get_case(case_id)
         self._require_case_owner(case, actor=actor, role=role)
-        run_id = f"RUN-{uuid4()}"
-        adapter_profile = getattr(
-            self.synthesis_agent.adapter,
-            "profile",
-            type(self.synthesis_agent.adapter).__name__,
-        )
-        self.repository.create_agent_run(
-            run_id,
+        async with agent_run(
+            self.repository,
             case.id,
             agent_type="synthesis",
-            adapter_profile=adapter_profile,
-            initiated_by=actor,
-        )
-
-        def trace(step: str, status: str, summary: str, details: dict | None = None) -> None:
-            self.repository.append_agent_trace(
-                run_id, step=step, status=status, summary=summary, details=details
+            adapter=self.synthesis_agent.adapter,
+            actor=actor,
+            role=role,
+            started_summary="Synthesis AgentRun 已启动",
+            failed_summary="Synthesis AgentRun 失败；CaseSynthesis 未修改",
+        ) as run:
+            report = await self.synthesis_agent.run(case, run.trace)
+            case.synthesis_report = report
+            case.owner_decision = None
+            case.touch()
+            successful = sum(
+                item["status"] == "SUCCEEDED" for item in report["path_assessments"]
             )
-
-        trace("run.started", "STARTED", "Synthesis AgentRun 已启动", {
-            "agent_type": "synthesis", "initiated_by": actor, "role": role
-        })
-        try:
-            report = await self.synthesis_agent.run(case, trace)
-        except Exception as exc:
-            trace("run.failed", "FAILED", "Synthesis AgentRun 失败；CaseSynthesis 未修改", {
-                "error_type": type(exc).__name__, "error": str(exc)
+            failed = len(report["path_assessments"]) - successful
+            self.repository.save(case, "synthesis.proposed", {
+                "revision": report["revision"],
+                "successful_path_count": successful,
+                "failed_path_count": failed,
+                "generated_by": report["generated_by"],
             })
-            self.repository.finish_agent_run(run_id, status="FAILED", error=exc)
-            raise
-        case.synthesis_report = report
-        case.owner_decision = None
-        case.version += 1
-        case.updated_at = datetime.now(timezone.utc).isoformat()
-        successful = sum(
-            item["status"] == "SUCCEEDED" for item in report["path_assessments"]
-        )
-        failed = len(report["path_assessments"]) - successful
-        self.repository.save(case, "synthesis.proposed", {
-            "revision": report["revision"],
-            "successful_path_count": successful,
-            "failed_path_count": failed,
-            "generated_by": report["generated_by"],
-        })
-        trace("run.completed", "COMPLETED", "CaseSynthesis 已持久化，等待 Case Owner 最终决策", {
-            "revision": report["revision"], "case_version": case.version
-        })
-        self.repository.finish_agent_run(
-            run_id, status="SUCCEEDED", adapter_profile=report["generated_by"]
-        )
+            run.complete(
+                "CaseSynthesis 已持久化，等待 Case Owner 最终决策",
+                {"revision": report["revision"], "case_version": case.version},
+                adapter_profile=report["generated_by"],
+            )
         return case
 
     def decide_case(
@@ -869,7 +774,7 @@ class CaseService:
             "actor": actor,
             "role": role,
             "synthesis_revision": case.synthesis_report["revision"],
-            "decided_at": datetime.now(timezone.utc).isoformat(),
+            "decided_at": utc_now(),
             "synthesis_snapshot": dict(case.synthesis_report),
             "path_attempts_snapshot": [dict(attempt) for attempt in case.path_attempts],
             "commitments_snapshot": [asdict(node) for node in case.commitment_nodes],
@@ -898,6 +803,7 @@ class CaseService:
             case.synthesis_report = None
         else:
             raise InvalidTransitionError(f"Unsupported Owner decision: {action}")
+        # The Case timestamp is the decision instant, not a fresh "now".
         case.version += 1
         case.updated_at = decision["decided_at"]
         self.repository.save(case, "owner.decision", decision)
