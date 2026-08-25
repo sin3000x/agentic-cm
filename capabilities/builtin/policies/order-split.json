@@ -2,7 +2,7 @@
   "schema_version": 1,
   "kind": "policy",
   "id": "POL-ORDER-SPLIT-1",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "title": "订单拆分履约确认",
   "status": "published",
   "selector": {
@@ -16,14 +16,22 @@
         "role": "主计划",
         "node_type": "APPROVAL",
         "reviews": ["available_quantity", "shipment_batches"],
-        "depends_on": []
+        "depends_on": [],
+        "role_report": {
+          "dimension": "可用数量与交付批次",
+          "sentence_prefix": "主计划维度："
+        }
       },
       {
         "id": "SPLIT-CUSTOMER",
         "role": "供应经理",
         "node_type": "REVIEW",
         "reviews": ["customer_acceptance", "remaining_commitment"],
-        "depends_on": ["SPLIT-PLAN"]
+        "depends_on": ["SPLIT-PLAN"],
+        "role_report": {
+          "dimension": "客户接受度与剩余承诺",
+          "sentence_prefix": "供应经理维度："
+        }
       }
     ]
   }

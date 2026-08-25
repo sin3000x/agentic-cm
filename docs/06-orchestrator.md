@@ -61,7 +61,7 @@ export AGENTIC_CM_ADAPTER=deterministic
 
 ### OpenAI-compatible 模型服务
 
-通用 Adapter 通过官方 `openai-python` 的异步 Chat Completions 客户端调用配置的 `base_url + /chat/completions`，启用兼容性更广的 JSON Object 模式。Pydantic 模型生成响应 Schema 并严格解析结构；平台再校验 Path/option 白名单、角色报告契约与治理边界。平台核心不知道服务商名称；Base URL、API Key、模型 ID、鉴权 Header 和鉴权前缀均由运行时注入。API Key 只用于 SDK 请求 Header，不进入 Case、Manifest、事件或日志。SDK 传输重试关闭，非法结构只进行一次可审计的修复调用；仍失败则本次运行失败且不修改 Case。
+通用 Adapter 通过官方 `openai-python` 的异步 Chat Completions 客户端调用配置的 `base_url + /chat/completions`，启用兼容性更广的 JSON Object 模式。Pydantic 模型生成响应 Schema 并严格解析结构；平台再校验 Path/option 白名单、角色报告契约与治理边界。平台核心不知道服务商名称；Base URL、API Key、模型 ID、鉴权 Header 和鉴权前缀均由运行时注入。API Key 只用于 SDK 请求 Header，不进入 Case、Manifest、事件或日志。SDK 内建传输重试保持关闭；Planner Adapter 对 `unavailable` 连接错误或超时进行一次可审计的即时重试，非法结构另进行一次可审计的修复调用。仍失败则本次运行失败且不修改 Case。
 
 ```bash
 cp .env.example .env

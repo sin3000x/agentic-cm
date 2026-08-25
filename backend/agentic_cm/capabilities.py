@@ -305,27 +305,6 @@ class CapabilityRegistry:
             if len({item["id"] for item in tools}) != len(tools):
                 raise CapabilityConfigurationError(f"Skill tool ids must be unique: {tools_file}")
 
-        role_report = None
-        role_report_file = skill_path / "role-report.json"
-        if role_report_file.is_file():
-            try:
-                role_report = json.loads(role_report_file.read_text())
-            except (OSError, json.JSONDecodeError) as exc:
-                raise CapabilityConfigurationError(
-                    f"Cannot load Skill role-report contract {role_report_file}: {exc}"
-                ) from exc
-            if (
-                not isinstance(role_report, dict)
-                or set(role_report) != {"schema_version", "role", "dimension", "sentence_prefix"}
-                or role_report.get("schema_version") != 1
-                or any(
-                    not isinstance(role_report.get(field), str) or not role_report[field].strip()
-                    for field in ("role", "dimension", "sentence_prefix")
-                )
-                or len(selector.get("path_definition", [])) != 1
-            ):
-                raise CapabilityConfigurationError(f"Invalid Skill role-report contract: {role_report_file}")
-
         digest = hashlib.sha256()
         inventory: list[dict[str, Any]] = []
         for path in sorted(path for path in skill_path.rglob("*") if path.is_file()):
@@ -348,7 +327,6 @@ class CapabilityRegistry:
             "paths": deepcopy(declared_paths),
             "path_options": deepcopy(path_options),
             "tools": deepcopy(tools),
-            "role_report": deepcopy(role_report),
             "description": frontmatter["description"],
             "purpose": frontmatter["description"],
             "entrypoint": "SKILL.md",
@@ -395,10 +373,32 @@ class CapabilityRegistry:
             if not isinstance(requirements.get("commitments", []), list):
                 raise CapabilityConfigurationError(f"Policy commitments must be a list: {path}")
             for node in requirements.get("commitments", []):
-                if not isinstance(node, dict) or any(field not in node for field in ("id", "role", "node_type", "reviews")):
+                if not isinstance(node, dict) or any(
+                    field not in node
+                    for field in ("id", "role", "node_type", "reviews", "role_report")
+                ):
                     raise CapabilityConfigurationError(f"Policy commitment has an invalid contract: {path}")
+                if set(node) - {"id", "role", "node_type", "reviews", "depends_on", "role_report"}:
+                    raise CapabilityConfigurationError(f"Policy commitment has unsupported fields: {path}")
+                if any(
+                    not isinstance(node.get(field), str) or not node[field].strip()
+                    for field in ("id", "role", "node_type")
+                ):
+                    raise CapabilityConfigurationError(f"Policy commitment strings must be non-empty: {path}")
                 if not isinstance(node["reviews"], list) or not isinstance(node.get("depends_on", []), list):
                     raise CapabilityConfigurationError(f"Policy commitment reviews/dependencies must be lists: {path}")
+                role_report = node["role_report"]
+                if (
+                    not isinstance(role_report, dict)
+                    or set(role_report) != {"dimension", "sentence_prefix"}
+                    or any(
+                        not isinstance(role_report.get(field), str) or not role_report[field].strip()
+                        for field in ("dimension", "sentence_prefix")
+                    )
+                ):
+                    raise CapabilityConfigurationError(
+                        f"Policy commitment role_report has an invalid contract: {path}"
+                    )
         if data["kind"] == "knowledge":
             if not isinstance(data.get("source"), dict) or not isinstance(data.get("content"), dict):
                 raise CapabilityConfigurationError(f"Knowledge source/content must be objects: {path}")

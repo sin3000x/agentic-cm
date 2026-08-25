@@ -259,4 +259,4 @@ Owner 首版选择：
 
 CaseSynthesis 本身也必须版本化。重新汇总会创建新版本，OwnerDecision 引用作出决定时看到的具体版本。
 
-关闭不触发外部业务系统修改。`KEEP_OPEN` 保留当前汇总与 Case 的 Open 状态；`MODIFY` 留存决定事件并清空当前活动 Manifest/Path 状态，回到 `INTAKE` 重新触发 Orchestrator。
+关闭不触发外部业务系统修改。`KEEP_OPEN` 保留当前汇总与 Case 的 Open 状态；`MODIFY` 必须由 Case Owner 提供非空指导文字。平台将该文字保存为新版 Human Proposal，留存决定与上一版 Proposal 快照，清空当前活动 Manifest/Path 状态，并回到 `INTAKE`，让下一轮 Orchestrator 明确消费这次修改指导。

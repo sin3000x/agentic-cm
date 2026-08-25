@@ -2,6 +2,7 @@
 
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import Link from "next/link";
+import { useParams } from "next/navigation";
 import AppSidebar from "../../app-sidebar";
 import "./case-detail.css";
 
@@ -14,12 +15,18 @@ const demoIdentities = [
   { name: "王淼", role: "主计划", avatar: "王" },
   { name: "林乔", role: "研发", avatar: "林" },
   { name: "赵宁", role: "供应经理", avatar: "赵" },
+  { name: "周岚", role: "采购与供应协同", avatar: "周" },
+  { name: "吴桐", role: "物流", avatar: "吴" },
 ];
 
 const commitmentCopy: Record<string, string> = {
   SUPPLY: "确认 Manifest 候选物料的供应可行性",
   TECH: "确认 Manifest 候选物料的技术可行性",
   CUSTOMER: "确认客户接受度与整体建议",
+  "EXPEDITE-SUPPLY": "确认供应商产能与最早可供应日期",
+  "EXPEDITE-DELIVERY": "确认运输提速方案与预计到货日期",
+  "SPLIT-PLAN": "确认可用数量与分批交付计划",
+  "SPLIT-CUSTOMER": "确认客户对分批交付与剩余承诺的接受度",
 };
 
 type CapabilityAsset = {
@@ -95,6 +102,7 @@ type PathAttempt = {
   id: string;
   path_id: string;
   definition: string;
+  title?: string;
   phase: string;
   solution_revision: SolutionRevision | null;
 };
@@ -122,6 +130,36 @@ type OwnerDecision = {
   role: string;
   synthesis_revision: number;
   decided_at: string;
+};
+
+type HumanProposal = {
+  revision: number;
+  author: string;
+  role: string;
+  content: string;
+};
+
+type CaseDetails = {
+  id: string;
+  title: string;
+  description: string;
+  owner: string;
+  owner_role: string;
+  business_payload?: {
+    order_id?: string;
+    customer?: string;
+    material?: string;
+    gap_quantity?: number;
+    target_date?: string;
+    risk_level?: "HIGH" | "MEDIUM" | "LOW";
+  };
+};
+
+const initialHumanProposal: HumanProposal = {
+  revision: 0,
+  author: "Case Owner",
+  role: "加载中",
+  content: "正在同步 Case Owner 提案。",
 };
 
 function isSolutionRevision(value: unknown): value is SolutionRevision {
@@ -167,6 +205,7 @@ type TimelineEvent = {
     failed_path_count?: number;
     action?: "CLOSE" | "KEEP_OPEN" | "MODIFY";
     synthesis_revision?: number;
+    guidance?: string;
   };
 };
 
@@ -280,7 +319,7 @@ function CapabilityPanel({ details }: { details: CapabilityDetails }) {
   );
 }
 
-function AgentTracePanel({ runs, agentType }: { runs: AgentRun[]; agentType: "orchestrator" | "path" | "synthesis" }) {
+function AgentTracePanel({ runs, agentType, autoExpand = false }: { runs: AgentRun[]; agentType: "orchestrator" | "path" | "synthesis"; autoExpand?: boolean }) {
   const label = agentType === "orchestrator" ? "ORCHESTRATOR" : agentType === "path" ? "PATH AGENT" : "SYNTHESIS AGENT";
   const typedRuns = runs.filter((run) => run.agent_type === agentType);
   return (
@@ -292,7 +331,7 @@ function AgentTracePanel({ runs, agentType }: { runs: AgentRun[]; agentType: "or
       {typedRuns.length === 0 ? (
         <p className="emptyTrace">尚无 {label} 运行记录。</p>
       ) : typedRuns.map((run) => (
-        <details className={`traceRun ${run.status.toLowerCase()}`} key={run.id}>
+        <details className={`traceRun ${run.status.toLowerCase()}`} open={autoExpand && (run.status === "RUNNING" || run.status === "FAILED")} key={run.id}>
           <summary>
             <span><b>{run.status}</b><strong>{run.adapter_profile}</strong></span>
             <small>{formatThreadTime(run.started_at)} · {run.events.length} steps</small>
@@ -322,6 +361,9 @@ function AgentTracePanel({ runs, agentType }: { runs: AgentRun[]; agentType: "or
 }
 
 export default function Home() {
+  const params = useParams<{ id: string }>();
+  const activeCaseId = params?.id ?? "";
+  const [caseDetails, setCaseDetails] = useState<CaseDetails | null>(null);
   const [phase, setPhase] = useState("INTAKE");
   const [caseStatus, setCaseStatus] = useState<"OPEN" | "PENDING" | "CLOSED">("OPEN");
   const [approved, setApproved] = useState(false);
@@ -343,6 +385,9 @@ export default function Home() {
   const [synthesisAgentRuns, setSynthesisAgentRuns] = useState<AgentRun[]>([]);
   const [synthesisReport, setSynthesisReport] = useState<SynthesisReport | null>(null);
   const [ownerDecision, setOwnerDecision] = useState<OwnerDecision | null>(null);
+  const [humanProposal, setHumanProposal] = useState<HumanProposal>(initialHumanProposal);
+  const [showModifyGuidance, setShowModifyGuidance] = useState(false);
+  const [modifyGuidance, setModifyGuidance] = useState("");
   const [showSynthesisTrace, setShowSynthesisTrace] = useState(false);
   const [showOrchestratorTrace, setShowOrchestratorTrace] = useState(false);
   const [expandedPathTraces, setExpandedPathTraces] = useState<Record<string, boolean>>({});
@@ -358,6 +403,7 @@ export default function Home() {
   const startAutomaticManifest = useEffectEvent(() => { void generateManifest(); });
   const startAutomaticAlternatives = useEffectEvent((pathIds: string[]) => { void generateAlternatives(pathIds); });
   const startAutomaticSynthesis = useEffectEvent(() => { void generateSynthesis(); });
+  const refreshLiveTrace = useEffectEvent(() => { void refreshAgentRuns(); });
 
   useEffect(() => {
     if (!aiRunKind) return;
@@ -366,6 +412,13 @@ export default function Home() {
     }, 1250);
     return () => window.clearInterval(timer);
   }, [aiRunKind]);
+
+  useEffect(() => {
+    if (!aiRunKind || !canViewManifest) return;
+    refreshLiveTrace();
+    const timer = window.setInterval(refreshLiveTrace, 600);
+    return () => window.clearInterval(timer);
+  }, [aiRunKind, canViewManifest]);
 
   function selectIdentity(nextIdentityIndex: number) {
     identityIndexRef.current = nextIdentityIndex;
@@ -381,14 +434,26 @@ export default function Home() {
     setSynthesisReport(null);
     setOwnerDecision(null);
     setShowSynthesisTrace(false);
+    setShowModifyGuidance(false);
+    setModifyGuidance("");
     setShowOrchestratorTrace(false);
     setExpandedPathTraces({});
     setInboxItems([]);
     setIdentityIndex(nextIdentityIndex);
   }
 
-  function loadManifest(manifest: { paths?: ManifestPath[]; capability_snapshots?: Record<string, CapabilitySnapshot> } | null) {
-    const paths = manifest?.paths ?? [];
+  function loadManifest(
+    manifest: { paths?: ManifestPath[]; capability_snapshots?: Record<string, CapabilitySnapshot> } | null,
+    attempts: PathAttempt[] = [],
+    workflowPaths: ManifestPath[] = [],
+  ) {
+    const paths = manifest?.paths ?? (workflowPaths.length > 0 ? workflowPaths : attempts.map((attempt) => ({
+      id: attempt.path_id,
+      definition: attempt.definition,
+      title: attempt.title ?? attempt.definition,
+      rationale: "",
+      selected: true,
+    })));
     setManifestPaths(paths);
     setCapabilitySnapshots(manifest?.capability_snapshots ?? {});
     const substitution = paths.find((path) => path.definition === "MaterialSubstitution");
@@ -396,12 +461,13 @@ export default function Home() {
   }
 
   useEffect(() => {
+    if (!activeCaseId) return;
     const identity = demoIdentities[identityIndex];
     const query = new URLSearchParams({ actor: identity.name, role: identity.role });
     const controller = new AbortController();
     Promise.all([
-      fetch(`${API_BASE}/api/cases/CM-2026-014?${query}`, { signal: controller.signal }),
-      fetch(`${API_BASE}/api/cases/CM-2026-014/timeline`, { signal: controller.signal }),
+      fetch(`${API_BASE}/api/cases/${activeCaseId}?${query}`, { signal: controller.signal }),
+      fetch(`${API_BASE}/api/cases/${activeCaseId}/timeline`, { signal: controller.signal }),
       fetch(`${API_BASE}/api/inbox?${new URLSearchParams({ role: identity.role })}`, { signal: controller.signal }),
     ])
       .then(([caseResponse, timelineResponse, inboxResponse]) => {
@@ -409,6 +475,7 @@ export default function Home() {
         return Promise.all([caseResponse.json(), timelineResponse.json(), inboxResponse.json()]);
       })
       .then(([data, timeline, inbox]) => {
+        setCaseDetails(data);
         setPhase(data.phase);
         setCaseStatus(data.status);
         setApproved(["PATH_EXPLORATION", "PROFESSIONAL_COMMITMENT", "FINAL_REVIEW"].includes(data.phase));
@@ -416,11 +483,12 @@ export default function Home() {
         setPathAttempts(data.path_attempts ?? []);
         setSynthesisReport(data.synthesis_report ?? null);
         setOwnerDecision(data.owner_decision ?? null);
+        setHumanProposal(data.human_proposal ?? initialHumanProposal);
         setTimelineEvents(timeline);
         setInboxItems(inbox);
         setCaseCreatedAt(data.created_at);
         setCanViewManifest(data.permissions?.can_view_manifest === true);
-        loadManifest(data.manifest);
+        loadManifest(data.manifest, data.path_attempts ?? [], data.workflow_paths ?? []);
         if (["PATH_EXPLORATION", "PROFESSIONAL_COMMITMENT", "FINAL_REVIEW"].includes(data.phase)) {
           setSelectedPathIds((data.manifest?.paths ?? []).filter((path: ManifestPath) => path.selected).map((path: ManifestPath) => path.id));
         }
@@ -432,7 +500,7 @@ export default function Home() {
           Promise.all(["orchestrator", "path", "synthesis"].map((agentType) => {
             const query = new URLSearchParams(traceQuery);
             query.set("agent_type", agentType);
-            return fetch(`${API_BASE}/api/cases/CM-2026-014/agent-runs?${query}`, { signal: controller.signal })
+            return fetch(`${API_BASE}/api/cases/${activeCaseId}/agent-runs?${query}`, { signal: controller.signal })
               .then((response) => response.ok ? response.json() : []);
           }))
             .then(([orchestratorRuns, loadedPathRuns, loadedSynthesisRuns]) => {
@@ -479,14 +547,14 @@ export default function Home() {
       })
       .catch((error) => {
         if (error instanceof DOMException && error.name === "AbortError") return;
-        setMessage("API 尚未连接，当前展示固定演示数据。");
+        setMessage("API 尚未连接，无法同步当前 Case 数据。");
       });
     return () => controller.abort();
-  }, [identityIndex, caseRefreshKey]);
+  }, [activeCaseId, identityIndex, caseRefreshKey]);
 
   async function refreshTimeline() {
     try {
-      const response = await fetch(`${API_BASE}/api/cases/CM-2026-014/timeline`);
+      const response = await fetch(`${API_BASE}/api/cases/${activeCaseId}/timeline`);
       if (response.ok) setTimelineEvents(await response.json());
     } catch {
       // The business action has already succeeded; the next Case refresh will reload the Thread.
@@ -508,11 +576,14 @@ export default function Home() {
     try {
       const baseQuery = { actor: currentIdentity.name, role: currentIdentity.role };
       const [orchestratorResponse, pathResponse, synthesisResponse] = await Promise.all([
-        fetch(`${API_BASE}/api/cases/CM-2026-014/agent-runs?${new URLSearchParams({ ...baseQuery, agent_type: "orchestrator" })}`),
-        fetch(`${API_BASE}/api/cases/CM-2026-014/agent-runs?${new URLSearchParams({ ...baseQuery, agent_type: "path" })}`),
-        fetch(`${API_BASE}/api/cases/CM-2026-014/agent-runs?${new URLSearchParams({ ...baseQuery, agent_type: "synthesis" })}`),
+        fetch(`${API_BASE}/api/cases/${activeCaseId}/agent-runs?${new URLSearchParams({ ...baseQuery, agent_type: "orchestrator" })}`),
+        fetch(`${API_BASE}/api/cases/${activeCaseId}/agent-runs?${new URLSearchParams({ ...baseQuery, agent_type: "path" })}`),
+        fetch(`${API_BASE}/api/cases/${activeCaseId}/agent-runs?${new URLSearchParams({ ...baseQuery, agent_type: "synthesis" })}`),
       ]);
-      if (orchestratorResponse.ok) setAgentRuns(await orchestratorResponse.json());
+      if (orchestratorResponse.ok) {
+        const loadedOrchestratorRuns = await orchestratorResponse.json();
+        setAgentRuns(loadedOrchestratorRuns);
+      }
       if (pathResponse.ok) setPathAgentRuns(await pathResponse.json());
       if (synthesisResponse.ok) setSynthesisAgentRuns(await synthesisResponse.json());
     } catch {
@@ -527,7 +598,7 @@ export default function Home() {
     setFailedAiRun(null);
     setMessage("");
     try {
-      const response = await fetch(`${API_BASE}/api/cases/CM-2026-014/orchestrate`, {
+      const response = await fetch(`${API_BASE}/api/cases/${activeCaseId}/orchestrate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ actor: currentIdentity.name, role: currentIdentity.role }),
@@ -556,7 +627,7 @@ export default function Home() {
     setBusy(true);
     setMessage("");
     try {
-      const response = await fetch(`${API_BASE}/api/cases/CM-2026-014/manifest/approve`, {
+      const response = await fetch(`${API_BASE}/api/cases/${activeCaseId}/manifest/approve`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -595,7 +666,7 @@ export default function Home() {
     setMessage("");
     try {
       for (const pathId of requestedPathIds) {
-        const response = await fetch(`${API_BASE}/api/cases/CM-2026-014/paths/${pathId}/execute`, {
+        const response = await fetch(`${API_BASE}/api/cases/${activeCaseId}/paths/${pathId}/execute`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ actor: currentIdentity.name, role: currentIdentity.role }),
@@ -629,7 +700,7 @@ export default function Home() {
     setFailedAiRun(null);
     setMessage("");
     try {
-      const response = await fetch(`${API_BASE}/api/cases/CM-2026-014/synthesize`, {
+      const response = await fetch(`${API_BASE}/api/cases/${activeCaseId}/synthesize`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ actor: currentIdentity.name, role: currentIdentity.role }),
@@ -653,17 +724,23 @@ export default function Home() {
     }
   }
 
-  async function decideCase(action: OwnerDecision["action"]) {
+  async function decideCase(action: OwnerDecision["action"], guidance?: string) {
+    const normalizedGuidance = guidance?.trim() ?? "";
+    if (action === "MODIFY" && !normalizedGuidance) {
+      setMessage("请先填写给 Orchestrator 的修改指导。 ");
+      return;
+    }
     setBusy(true);
     setMessage("");
     try {
-      const response = await fetch(`${API_BASE}/api/cases/CM-2026-014/owner-decision`, {
+      const response = await fetch(`${API_BASE}/api/cases/${activeCaseId}/owner-decision`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           actor: currentIdentity.name,
           role: currentIdentity.role,
           action,
+          guidance: action === "MODIFY" ? normalizedGuidance : undefined,
         }),
       });
       if (!response.ok) {
@@ -674,17 +751,20 @@ export default function Home() {
       setCaseStatus(data.status);
       setPhase(data.phase);
       setOwnerDecision(data.owner_decision ?? null);
+      setHumanProposal(data.human_proposal ?? initialHumanProposal);
       setSynthesisReport(data.synthesis_report ?? null);
       setCommitmentNodes(data.commitment_nodes ?? []);
       setPathAttempts(data.path_attempts ?? []);
       loadManifest(data.manifest);
       await refreshTimeline();
       if (action === "MODIFY") {
+        setShowModifyGuidance(false);
+        setModifyGuidance("");
         automaticRunsRef.current.clear();
         setCaseRefreshKey((current) => current + 1);
       }
       const actionCopy = action === "CLOSE" ? "关闭 Case" : action === "KEEP_OPEN" ? "保持 Case Open" : "打回 Orchestrator 修改";
-      setMessage(`陈澄已决定：${actionCopy}。`);
+      setMessage(`${currentIdentity.name}已决定：${actionCopy}。`);
     } catch (error) {
       setMessage(`最终决策失败：${error instanceof Error ? error.message : "请确认当前身份与 Case 状态"}。`);
     } finally {
@@ -715,6 +795,9 @@ export default function Home() {
       setSynthesisAgentRuns([]);
       setSynthesisReport(null);
       setOwnerDecision(null);
+      setHumanProposal(initialHumanProposal);
+      setShowModifyGuidance(false);
+      setModifyGuidance("");
       setShowSynthesisTrace(false);
       setShowOrchestratorTrace(false);
       setExpandedPathTraces({});
@@ -752,7 +835,7 @@ export default function Home() {
     try {
       const requestIdentityIndex = identityIndex;
       const query = new URLSearchParams({ actor: currentIdentity.name, role: currentIdentity.role });
-      const response = await fetch(`${API_BASE}/api/cases/CM-2026-014/capabilities?${query}`);
+      const response = await fetch(`${API_BASE}/api/cases/${activeCaseId}/capabilities?${query}`);
       if (!response.ok) throw new Error("capabilities failed");
       const data = await response.json();
       if (identityIndexRef.current !== requestIdentityIndex) return;
@@ -777,7 +860,7 @@ export default function Home() {
       );
       if (!response.ok) throw new Error("commitment decision failed");
       const data = await response.json();
-      if (caseId === "CM-2026-014") {
+      if (caseId === activeCaseId) {
         setCommitmentNodes(data.commitment_nodes ?? []);
         setPathAttempts(data.path_attempts ?? []);
         setPhase(data.phase);
@@ -802,11 +885,6 @@ export default function Home() {
   };
   const activeStageIndex = phaseStageIndex[phase] ?? 0;
   const currentStage = stages[activeStageIndex];
-  const selectedAttemptPathId = manifestPaths.find((path) => path.selected)?.id
-    ?? selectedPathIds[0]
-    ?? commitmentNodes[0]?.path_id;
-  const activeCommitments = commitmentNodes.filter((node) => node.path_id === selectedAttemptPathId);
-  const activePathAttempt = pathAttempts.find((attempt) => attempt.path_id === selectedAttemptPathId);
   const pendingExplorationPathIds = manifestPaths
     .filter((path) => path.selected)
     .filter((path) => {
@@ -815,14 +893,25 @@ export default function Home() {
     })
     .map((path) => path.id);
   const completedExplorationCount = manifestPaths.filter((path) => path.selected).length - pendingExplorationPathIds.length;
-  const solutionRevision = isSolutionRevision(activePathAttempt?.solution_revision)
-    ? activePathAttempt.solution_revision
-    : null;
-  const activePathAgentRuns = solutionRevision
-    ? pathAgentRuns.filter((run) => run.agent_type === "path" && run.events.some(
-      (event) => event.step === "run.started" && event.details.path_id === solutionRevision.path_id,
-    ))
-    : [];
+  const selectedPathViews = manifestPaths.filter((path) => path.selected).map((path) => {
+    const attempt = pathAttempts.find((item) => item.path_id === path.id);
+    const revision = isSolutionRevision(attempt?.solution_revision) ? attempt.solution_revision : null;
+    const nodes = commitmentNodes.filter((node) => node.path_id === path.id);
+    const runs = pathAgentRuns.filter((run) => run.events.some(
+      (event) => event.step === "run.started" && event.details.path_id === path.id,
+    ));
+    return { path, revision, nodes, runs };
+  });
+  const liveAgentType = aiRunKind === "manifest" ? "orchestrator" : aiRunKind === "alternatives" ? "path" : "synthesis";
+  const liveAgentRuns = liveAgentType === "orchestrator"
+    ? agentRuns
+    : liveAgentType === "path" ? pathAgentRuns : synthesisAgentRuns;
+  const latestFailedOrchestratorRuns = agentRuns[0]?.status === "FAILED" ? [agentRuns[0]] : [];
+  const latestFailedPathRuns = pathAgentRuns[0]?.status === "FAILED" ? [pathAgentRuns[0]] : [];
+  const latestFailedSynthesisRuns = synthesisAgentRuns[0]?.status === "FAILED" ? [synthesisAgentRuns[0]] : [];
+  const latestFailedRunCount = latestFailedOrchestratorRuns.length
+    + latestFailedPathRuns.length
+    + latestFailedSynthesisRuns.length;
 
   function approvalActions(caseId: string, node: CommitmentNode) {
     if (node.status !== "PENDING" || node.role !== currentIdentity.role) return null;
@@ -835,15 +924,7 @@ export default function Home() {
     );
   }
 
-  function commitmentNode(nodeId: string, fallbackRole: string, fallbackStatus: CommitmentNode["status"]) {
-    const node = activeCommitments.find((item) => item.id === nodeId) ?? {
-      id: nodeId,
-      role: fallbackRole,
-      node_type: "APPROVAL",
-      status: fallbackStatus,
-      depends_on: nodeId === "CUSTOMER" ? ["SUPPLY", "TECH"] : [],
-      path_id: selectedAttemptPathId ?? "PATH-01",
-    };
+  function commitmentNode(node: CommitmentNode) {
     const statusLabel = node.status === "PENDING"
       ? node.role === currentIdentity.role ? "待本人批准" : `待${node.role}批准`
       : node.status === "BLOCKED" ? "等待前置审批"
@@ -852,17 +933,23 @@ export default function Home() {
       : node.status === "REJECTED" ? "已否决"
       : node.status;
     return (
-      <article className={`dagNode ${node.depends_on.length ? "downstream" : "upstream"} ${node.status.toLowerCase()}`}>
+      <article className={`dagNode ${node.depends_on.length ? "downstream" : "upstream"} ${node.status.toLowerCase()}`} key={`${node.path_id}-${node.id}`}>
         <span>{statusLabel}</span>
         <h3>{node.role}</h3>
         <p>{commitmentCopy[node.id] ?? "等待责任人确认"}</p>
-        {approvalActions("CM-2026-014", node)}
+        {approvalActions(activeCaseId, node)}
       </article>
     );
   }
 
   const orchestrationCard = aiRunKind ? (
-    <AiWorkingCard kind={aiRunKind} step={aiRunStep} />
+    <>
+      <AiWorkingCard kind={aiRunKind} step={aiRunStep} />
+      <section className="liveTrace" aria-live="polite" aria-label="Agent 实时 Trace">
+        <header><span><small>LIVE TRACE</small><strong>Agent 执行步骤同步写入</strong></span><em>每 600ms 刷新</em></header>
+        <AgentTracePanel runs={liveAgentRuns} agentType={liveAgentType} autoExpand />
+      </section>
+    </>
   ) : phase === "MANIFEST_REVIEW" && !canViewManifest ? (
     <>
       <div className="panelTitle">
@@ -907,77 +994,93 @@ export default function Home() {
     <>
       <div className="panelTitle">
         <div><span className="agentIcon">✓</span><span><small>PROFESSIONAL COMMITMENT</small><h2>专业承诺 · 审批 DAG</h2></span></div>
-        <span className="version">PATH 已完成</span>
+        <span className="version">{selectedPathViews.length} PATHS</span>
       </div>
-      <p className="lead">Path 探索已经完成。主计划、研发与供应经理现在基于 SolutionRevision 分别作出专业承诺；Agent 不能代替任何责任人审批。</p>
-      {solutionRevision ? (
-        <section className="solutionRevision" aria-label="Path Agent 替代方案">
-          <div className="solutionHeader">
-            <span><small>SOLUTION REVISION</small><strong>v{solutionRevision.revision} · {solutionRevision.path_definition}</strong></span>
-            <em>{solutionRevision.generated_by}</em>
-          </div>
-          <p>{solutionRevision.summary}</p>
-          <div className="solutionOptions">
-            {solutionRevision.options.map((option) => (
-              <article key={option.id}>
-                <span>{option.id}</span>
-                <h3>{option.title}</h3>
-                <p>{option.description}</p>
-                <dl>
-                  <div><dt>收益</dt><dd>{option.benefits.join("；") || "待分析"}</dd></div>
-                  <div><dt>风险</dt><dd>{option.risks.join("；") || "待分析"}</dd></div>
-                  <div><dt>假设</dt><dd>{option.assumptions.join("；") || "无"}</dd></div>
-                </dl>
-              </article>
-            ))}
-          </div>
-          <div className="solutionRecommendation">
-            <strong>Agent 建议（非业务决定）</strong>
-            <p>{solutionRevision.recommendation.rationale}</p>
-            <small>证据缺口：{solutionRevision.evidence_gaps.join("；") || "无"}</small>
-          </div>
-          <div className="roleReports" aria-label="三个角色的替代判断报告">
-            {solutionRevision.role_reports.map((item) => (
-              <article key={`${item.role}-${item.dimension}`}>
-                <span>{item.role}</span>
-                <strong>{item.dimension}</strong>
-                <p>{item.report}</p>
-              </article>
-            ))}
-          </div>
-          {activePathAgentRuns.length > 0 && (
-            <>
-              <button
-                className="linkButton traceToggle"
-                onClick={() => setExpandedPathTraces((current) => ({
-                  ...current,
-                  [solutionRevision.path_id]: !current[solutionRevision.path_id],
-                }))}
-              >
-                {expandedPathTraces[solutionRevision.path_id]
-                  ? "收起当前 Path Trace ↑"
-                  : `查看当前 Path Trace (${activePathAgentRuns.length}) →`}
-              </button>
-              {expandedPathTraces[solutionRevision.path_id] && (
-                <AgentTracePanel runs={activePathAgentRuns} agentType="path" />
-              )}
-            </>
-          )}
-        </section>
-      ) : <p className="autoRunNote">专业承诺尚未开放：缺少可审查的 SolutionRevision。</p>}
-      <div className="dag" aria-label="Commitment DAG">
-        {commitmentNode("SUPPLY", "主计划", "PENDING")}
-        {commitmentNode("TECH", "研发", "PENDING")}
-        <div className="dagJoin"><i /><i /></div>
-        {commitmentNode("CUSTOMER", "供应经理", "BLOCKED")}
+      <p className="lead">每条已选 Path 都有独立的 SolutionRevision 与审批 DAG。各责任人只对本人节点作出专业承诺；Agent 不能代替审批。</p>
+      <div className="pathApprovalList">
+        {selectedPathViews.map(({ path, revision, nodes, runs }) => {
+          const rootNodes = nodes.filter((node) => node.depends_on.length === 0);
+          const downstreamNodes = nodes.filter((node) => node.depends_on.length > 0);
+          const completedNodes = nodes.filter((node) => ["READY", "COMMITTED"].includes(node.status)).length;
+          return (
+            <section className="pathApprovalGroup" aria-label={`${path.title} 审批 DAG`} key={path.id}>
+              <header className="pathApprovalHeader">
+                <span><small>{path.id} · {path.definition}</small><strong>{path.title}</strong></span>
+                <em>{completedNodes} / {nodes.length} 已通过</em>
+              </header>
+              {revision ? (
+                <section className="solutionRevision" aria-label={`${path.title} SolutionRevision`}>
+                  <div className="solutionHeader">
+                    <span><small>SOLUTION REVISION</small><strong>v{revision.revision} · {revision.path_definition}</strong></span>
+                    <em>{revision.generated_by}</em>
+                  </div>
+                  <p>{revision.summary}</p>
+                  <div className="solutionOptions">
+                    {revision.options.map((option) => (
+                      <article key={option.id}>
+                        <span>{option.id}</span>
+                        <h3>{option.title}</h3>
+                        <p>{option.description}</p>
+                        <dl>
+                          <div><dt>收益</dt><dd>{option.benefits.join("；") || "待分析"}</dd></div>
+                          <div><dt>风险</dt><dd>{option.risks.join("；") || "待分析"}</dd></div>
+                          <div><dt>假设</dt><dd>{option.assumptions.join("；") || "无"}</dd></div>
+                        </dl>
+                      </article>
+                    ))}
+                  </div>
+                  <div className="solutionRecommendation">
+                    <strong>Agent 建议（非业务决定）</strong>
+                    <p>{revision.recommendation.rationale}</p>
+                    <small>证据缺口：{revision.evidence_gaps.join("；") || "无"}</small>
+                  </div>
+                  <div className="roleReports" aria-label={`${path.title} 角色判断报告`}>
+                    {revision.role_reports.map((item) => (
+                      <article key={`${item.role}-${item.dimension}`}>
+                        <span>{item.role}</span>
+                        <strong>{item.dimension}</strong>
+                        <p>{item.report}</p>
+                      </article>
+                    ))}
+                  </div>
+                  {runs.length > 0 && (
+                    <>
+                      <button
+                        className="linkButton traceToggle"
+                        onClick={() => setExpandedPathTraces((current) => ({
+                          ...current,
+                          [path.id]: !current[path.id],
+                        }))}
+                      >
+                        {expandedPathTraces[path.id]
+                          ? `收起 ${path.title} Trace ↑`
+                          : `查看 ${path.title} Trace (${runs.length}) →`}
+                      </button>
+                      {expandedPathTraces[path.id] && <AgentTracePanel runs={runs} agentType="path" />}
+                    </>
+                  )}
+                </section>
+              ) : <p className="autoRunNote">该 Path 尚缺少可审查的 SolutionRevision。</p>}
+              <div className={`dag ${rootNodes.length === 1 ? "singleRoot" : ""}`} aria-label={`${path.title} Commitment DAG`}>
+                {rootNodes.map(commitmentNode)}
+                {downstreamNodes.length > 0 && <div className="dagJoin"><i /><i /></div>}
+                {downstreamNodes.map(commitmentNode)}
+              </div>
+            </section>
+          );
+        })}
       </div>
       <div className="metricStrip">
-        <span><strong>2</strong><small>parallel review branches</small></span>
-        <span><strong>0</strong><small>preserved commitments</small></span>
-        <span><strong>0</strong><small>re-review avoided</small></span>
+        <span><strong>{selectedPathViews.length}</strong><small>selected Paths</small></span>
+        <span><strong>{commitmentNodes.length}</strong><small>commitment nodes</small></span>
+        <span><strong>{commitmentNodes.filter((node) => node.status === "PENDING").length}</strong><small>ready for human review</small></span>
       </div>
-      <button className="linkButton capabilityToggle" onClick={toggleCapabilities}>{showCapabilities ? "收起能力快照 ↑" : "查看本次能力快照 →"}</button>
-      {showCapabilities && capabilities && <CapabilityPanel details={capabilities} />}
+      {canViewManifest && (
+        <>
+          <button className="linkButton capabilityToggle" onClick={toggleCapabilities}>{showCapabilities ? "收起能力快照 ↑" : "查看本次能力快照 →"}</button>
+          {showCapabilities && capabilities && <CapabilityPanel details={capabilities} />}
+        </>
+      )}
     </>
   ) : phase === "FINAL_REVIEW" ? (
     <>
@@ -1021,8 +1124,25 @@ export default function Home() {
           <div className="ownerDecisionActions" aria-label="Case Owner 最终决策">
             <button className="decisionClose" disabled={busy || caseStatus === "CLOSED"} onClick={() => decideCase("CLOSE")}>关闭 Case</button>
             <button className="decisionOpen" disabled={busy || caseStatus === "CLOSED"} onClick={() => decideCase("KEEP_OPEN")}>保持 Open</button>
-            <button className="decisionModify" disabled={busy || caseStatus === "CLOSED"} onClick={() => decideCase("MODIFY")}>修改 · 打回 Orchestrator</button>
+            <button className="decisionModify" disabled={busy || caseStatus === "CLOSED"} onClick={() => setShowModifyGuidance((current) => !current)}>修改方案</button>
           </div>
+          {showModifyGuidance && caseStatus !== "CLOSED" && (
+            <div className="modifyGuidance" aria-label="给 Orchestrator 的修改指导">
+              <label htmlFor="orchestrator-guidance">告诉 Orchestrator 下一轮应如何调整</label>
+              <textarea
+                id="orchestrator-guidance"
+                value={modifyGuidance}
+                onChange={(event) => setModifyGuidance(event.target.value)}
+                placeholder="例如：保留物料替代 Path，同时重点探索不需要客户重新认证的交付拆分方案。"
+                rows={4}
+              />
+              <small>这段文字会成为新版 Human Proposal，并进入下一轮 Orchestrator 上下文。</small>
+              <div>
+                <button className="ghost" disabled={busy} onClick={() => { setShowModifyGuidance(false); setModifyGuidance(""); }}>取消</button>
+                <button className="primary" disabled={busy || !modifyGuidance.trim()} onClick={() => decideCase("MODIFY", modifyGuidance)}>提交指导并重新编排</button>
+              </div>
+            </div>
+          )}
           {synthesisAgentRuns.length > 0 && (
             <>
               <button className="linkButton traceToggle" onClick={() => setShowSynthesisTrace((current) => !current)}>
@@ -1049,8 +1169,8 @@ export default function Home() {
       <p className="lead">平台将基于 Case 事实匹配 Policy、Skill 与 Knowledge，枚举可探索路径；Agent 只提出方案，不会修改业务系统。</p>
       <article className="pathCard compactPath">
         <div className="pathHeading"><span className="pathBadge">CASE READY</span></div>
-        <h3>订单延期 · SO-48392</h3>
-        <p>关键物料 MCU-X7 存在 18,400 pcs 缺口，目标交付日为 2026-08-24。</p>
+        <h3>{caseDetails?.title ?? "正在同步 Case"}</h3>
+        <p>{caseDetails?.description ?? "Case 事实加载完成后，Orchestrator 才会开始规划。"}</p>
       </article>
       <div className="approvalBox">
         <span><strong>{failedAiRun === "manifest" ? "自动规划已暂停" : "AI 将自动开始规划"}</strong><small>Planner 无权发明 Path、删除强制责任或作出业务承诺。</small></span>
@@ -1114,15 +1234,15 @@ export default function Home() {
 
       <section className="workspace">
         <header className="topbar">
-          <div className="breadcrumbs"><Link href="/">Case 总览</Link> <span>/</span> CM-2026-014</div>
+          <div className="breadcrumbs"><Link href="/">Case 总览</Link> <span>/</span> {caseDetails?.id ?? activeCaseId}</div>
           <div className="topActions"><button className="ghost">审计记录</button><button className="ghost" disabled={busy} onClick={resetDemo}>重置 Demo</button></div>
         </header>
         <div className="content">
           <header className="issueHeader">
             <div>
-              <div className="eyebrow">SUPPLY CHAIN CASE <span>·</span> 高优先级</div>
-              <h1>Northstar MCU-X7 订单预计延期 12 天 <span>#CM-2026-014</span></h1>
-              <p><span className={`openBadge ${caseStatus.toLowerCase()}`}>● {caseStatus === "CLOSED" ? "Closed" : caseStatus === "PENDING" ? "Pending" : "Open"}</span> 陈澄于 {formatThreadTime(caseCreatedAt)} 创建 · 当前由 <strong>陈澄</strong> 负责</p>
+              <div className="eyebrow">SUPPLY CHAIN CASE <span>·</span> {caseDetails?.business_payload?.risk_level === "HIGH" ? "高" : caseDetails?.business_payload?.risk_level === "LOW" ? "低" : "中"}优先级</div>
+              <h1>{caseDetails?.title ?? "正在加载 Case"} <span>#{caseDetails?.id ?? activeCaseId}</span></h1>
+              <p><span className={`openBadge ${caseStatus.toLowerCase()}`}>● {caseStatus === "CLOSED" ? "Closed" : caseStatus === "PENDING" ? "Pending" : "Open"}</span> {caseDetails?.owner ?? "Case Owner"} 于 {formatThreadTime(caseCreatedAt)} 创建 · 当前由 <strong>{caseDetails?.owner ?? "—"}</strong> 负责</p>
             </div>
             <button className="primary">继续处理 <span>→</span></button>
           </header>
@@ -1134,12 +1254,16 @@ export default function Home() {
               <article className="threadItem commentItem">
                 <div className="threadAvatar humanAvatar">陈</div>
                 <div className="commentBox">
-                  <header><strong>陈澄</strong><span>Case Owner · {formatThreadTime(caseCreatedAt)}</span><b>创建 Case</b></header>
+                  <header><strong>{humanProposal.author}</strong><span>Case Owner · {formatThreadTime(caseCreatedAt)}</span><b>Human Proposal v{humanProposal.revision}</b></header>
                   <div className="commentBody">
-                    <p>订单 SO-48392 的关键物料预计晚于承诺日期 12 天，可能影响客户交付。</p>
+                    <p>{caseDetails?.description ?? "正在同步 Case 事实。"}</p>
                     <h3>Human Proposal</h3>
-                    <blockquote>建议优先评估现有认证范围内的替代物料，避免直接承诺未经客户确认的新方案。</blockquote>
-                    <div className="factChips"><span>MCU-X7</span><span>缺口 18,400 pcs</span><span>目标 2026-08-24</span></div>
+                    <blockquote>{humanProposal.content}</blockquote>
+                    <div className="factChips">
+                      {caseDetails?.business_payload?.material && <span>{caseDetails.business_payload.material}</span>}
+                      {caseDetails?.business_payload?.gap_quantity !== undefined && <span>缺口 {caseDetails.business_payload.gap_quantity.toLocaleString("zh-CN")} pcs</span>}
+                      {caseDetails?.business_payload?.target_date && <span>目标 {caseDetails.business_payload.target_date}</span>}
+                    </div>
                   </div>
                 </div>
               </article>
@@ -1205,7 +1329,7 @@ export default function Home() {
                   return (
                     <div className="threadEvent completedEvent" key={event.id}>
                       <span className="eventIcon humanEvent">{event.details.actor?.slice(0, 1) ?? "人"}</span>
-                      <p><strong>{event.details.actor ?? "Case Owner"} 决定：{copy}</strong><span>基于 Synthesis v{event.details.synthesis_revision ?? 1} · {formatThreadTime(event.created_at)}</span></p>
+                      <p><strong>{event.details.actor ?? "Case Owner"} 决定：{copy}</strong><span>{event.details.guidance ? `指导：${event.details.guidance} · ` : ""}基于 Synthesis v{event.details.synthesis_revision ?? 1} · {formatThreadTime(event.created_at)}</span></p>
                     </div>
                   );
                 }
@@ -1218,10 +1342,29 @@ export default function Home() {
                   <header><strong>Agentic CM</strong><span>{phase === "FINAL_REVIEW" ? "Synthesis Agent" : phase === "PROFESSIONAL_COMMITMENT" ? "Commitment Workflow" : approved ? "Path Agent" : "Orchestrator"} · 当前步骤</span><b className="currentLabel">{currentStage}</b></header>
                   <div className="commentBody actionBody">
                     {orchestrationCard}
-                    {canViewManifest && phase === "MANIFEST_REVIEW" && agentRuns.some((run) => run.agent_type === "orchestrator") && (
+                    {canViewManifest && latestFailedRunCount > 0 && (
+                      <section className="failedAgentTraces" aria-label="最新失败 Agent Trace">
+                        <header>
+                          <span><small>AGENT FAILURE</small><strong>最新失败运行 · Trace 已自动展开</strong></span>
+                          <em>{latestFailedRunCount} FAILED</em>
+                        </header>
+                        {latestFailedOrchestratorRuns.length > 0 && (
+                          <AgentTracePanel runs={latestFailedOrchestratorRuns} agentType="orchestrator" autoExpand />
+                        )}
+                        {latestFailedPathRuns.length > 0 && (
+                          <AgentTracePanel runs={latestFailedPathRuns} agentType="path" autoExpand />
+                        )}
+                        {latestFailedSynthesisRuns.length > 0 && (
+                          <AgentTracePanel runs={latestFailedSynthesisRuns} agentType="synthesis" autoExpand />
+                        )}
+                      </section>
+                    )}
+                    {canViewManifest && agentRuns.some((run) => run.agent_type === "orchestrator") && (
                       <>
                         <button className="linkButton traceToggle" onClick={() => setShowOrchestratorTrace((current) => !current)}>
-                          {showOrchestratorTrace ? "收起 Orchestrator Trace ↑" : `查看 Orchestrator Trace (${agentRuns.filter((run) => run.agent_type === "orchestrator").length}) →`}
+                          {showOrchestratorTrace
+                            ? "收起 Orchestrator Trace ↑"
+                            : `${agentRuns.some((run) => run.status === "FAILED") ? "查看失败" : "查看"} Orchestrator Trace (${agentRuns.filter((run) => run.agent_type === "orchestrator").length}) →`}
                         </button>
                         {showOrchestratorTrace && (
                           <AgentTracePanel runs={agentRuns} agentType="orchestrator" />
@@ -1255,12 +1398,12 @@ export default function Home() {
               <section className="panel facts">
                 <div className="compactTitle"><h2>Case 事实</h2><button>查看全部</button></div>
                 <dl>
-                  <div><dt>Case Owner</dt><dd>陈澄</dd></div>
-                  <div><dt>订单</dt><dd>SO-48392</dd></div>
-                  <div><dt>客户</dt><dd>Northstar Mobility</dd></div>
-                  <div><dt>关键物料</dt><dd>MCU-X7</dd></div>
-                  <div><dt>缺口数量</dt><dd>18,400 pcs</dd></div>
-                  <div><dt>目标交付日</dt><dd>2026-08-24</dd></div>
+                  <div><dt>Case Owner</dt><dd>{caseDetails?.owner ?? "—"}</dd></div>
+                  <div><dt>订单</dt><dd>{caseDetails?.business_payload?.order_id ?? "—"}</dd></div>
+                  <div><dt>客户</dt><dd>{caseDetails?.business_payload?.customer ?? "—"}</dd></div>
+                  <div><dt>关键物料</dt><dd>{caseDetails?.business_payload?.material ?? "—"}</dd></div>
+                  <div><dt>缺口数量</dt><dd>{caseDetails?.business_payload?.gap_quantity !== undefined ? `${caseDetails.business_payload.gap_quantity.toLocaleString("zh-CN")} pcs` : "—"}</dd></div>
+                  <div><dt>目标交付日</dt><dd>{caseDetails?.business_payload?.target_date ?? "—"}</dd></div>
                 </dl>
               </section>
               <section className="notice"><strong>演示安全边界</strong><p>不连接或修改 ERP、库存、订单及客户系统；所有执行均为 sandbox 推演。</p></section>

@@ -231,40 +231,67 @@ class OpenAICompatiblePlannerAdapter:
             "stream": False,
         }
         last_error: Exception | None = None
-        for attempt in range(2):
-            trace(
-                "planner.request" if attempt == 0 else "planner.repair_request",
-                "STARTED",
-                "向 OpenAI-compatible Planner 发送结构化请求"
-                if attempt == 0 else "上次响应无效，发送一次结构化修复请求",
-                {
-                    "attempt": attempt + 1,
-                    "endpoint": f"{self._base_url}/chat/completions",
-                    "request": request,
-                    "authentication": {
-                        "header": self._api_key_header,
-                        "credential_present": bool(self._api_key),
-                        "credential_value_logged": False,
-                    },
-                },
-            )
-            try:
-                response = await create_chat_completion(self._client, request)
-            except CompatibleModelClientError as exc:
-                trace(
-                    "planner.request",
-                    "FAILED",
-                    "模型服务请求失败",
-                    {"attempt": attempt + 1, "http_status": exc.status, "error_type": exc.cause_type},
+        request_attempt = 0
+        for schema_attempt in range(2):
+            response = None
+            for network_attempt in range(2):
+                request_attempt += 1
+                is_network_retry = network_attempt == 1
+                step = (
+                    "planner.retry_request" if is_network_retry
+                    else "planner.request" if schema_attempt == 0
+                    else "planner.repair_request"
                 )
-                raise PlannerExecutionError(f"Model planning request failed (status={exc.status})") from exc
+                trace(
+                    step,
+                    "STARTED",
+                    "模型连接或请求超时，自动重试一次"
+                    if is_network_retry
+                    else "向 OpenAI-compatible Planner 发送结构化请求"
+                    if schema_attempt == 0
+                    else "上次响应无效，发送一次结构化修复请求",
+                    {
+                        "attempt": request_attempt,
+                        "schema_attempt": schema_attempt + 1,
+                        "network_attempt": network_attempt + 1,
+                        "endpoint": f"{self._base_url}/chat/completions",
+                        "request": request,
+                        "authentication": {
+                            "header": self._api_key_header,
+                            "credential_present": bool(self._api_key),
+                            "credential_value_logged": False,
+                        },
+                    },
+                )
+                try:
+                    response = await create_chat_completion(self._client, request)
+                    break
+                except CompatibleModelClientError as exc:
+                    trace(
+                        "planner.request",
+                        "FAILED",
+                        "模型服务请求失败",
+                        {
+                            "attempt": request_attempt,
+                            "http_status": exc.status,
+                            "error_type": exc.cause_type,
+                            "will_retry": exc.status == "unavailable" and network_attempt == 0,
+                        },
+                    )
+                    if exc.status == "unavailable" and network_attempt == 0:
+                        continue
+                    raise PlannerExecutionError(
+                        f"Model planning request failed (status={exc.status})"
+                    ) from exc
+            if response is None:
+                raise PlannerExecutionError("Model planning request failed without a response")
             try:
                 trace(
                     "planner.response",
                     "COMPLETED",
                     "收到模型响应",
                     {
-                        "attempt": attempt + 1,
+                        "attempt": request_attempt,
                         "http_status": response.http_status,
                         "response_id": response.response_id,
                         "finish_reason": response.finish_reason,
@@ -281,9 +308,9 @@ class OpenAICompatiblePlannerAdapter:
                     "planner.response_validation",
                     "FAILED",
                     "模型响应未通过结构化校验",
-                    {"attempt": attempt + 1, "error_type": type(exc).__name__, "error": str(exc)},
+                    {"attempt": request_attempt, "error_type": type(exc).__name__, "error": str(exc)},
                 )
-                if attempt == 0:
+                if schema_attempt == 0:
                     request["messages"].append({
                         "role": "system",
                         "content": "The previous output was invalid. Return one non-empty JSON object matching the exact schema.",
