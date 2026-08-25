@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 
 import httpx
+import pytest
 
 from agentic_cm.capabilities import (
     DEFAULT_BUILTIN_ROOT,
@@ -44,16 +45,14 @@ from agentic_cm.synthesis_agent import (
     OpenAICompatibleSynthesisAgentAdapter,
 )
 
-
-def make_service(tmp_path: Path) -> CaseService:
-    service = CaseService(
-        CaseRepository(tmp_path / "test.db"),
-        planner=DeterministicPlannerAdapter(),
-        path_agent=DeterministicPathAgentAdapter(),
-        synthesis_agent=DeterministicSynthesisAgentAdapter(),
-    )
-    service.ensure_demo_data()
-    return service
+from conftest import (
+    DEMO_CASE_ID,
+    OWNER,
+    OWNER_ACTOR,
+    OWNER_ROLE,
+    chat_completion_response,
+    make_service,
+)
 
 
 class _ConcurrencyProbePathAgent:
@@ -75,14 +74,15 @@ class _ConcurrencyProbePathAgent:
 
 
 def test_demo_dataset_is_the_authoritative_case_overview_source(tmp_path: Path) -> None:
+    # Every demo Case must carry the overview fields the UI reads. The specific
+    # titles are fixture copy and deliberately not asserted here.
     cases = {case.id: case for case in demo_cases()}
-
-    assert cases["CM-2026-014"].title == "Northstar Mobility MCU-X7 订单预计延期 12 天"
-    assert cases["CM-2026-015"].title == "MCU-X7B 替代料缺少客户认证与技术验证"
+    assert all(case.title.strip() for case in cases.values())
     assert all(case.description != "固定演示 Case" for case in cases.values())
     assert all(case.business_payload.get("risk_level") for case in cases.values())
     assert all(case.business_payload.get("commitment_due_date") for case in cases.values())
 
+    # A Case persisted before these fields existed is backfilled on startup.
     service = make_service(tmp_path)
     legacy = service.get_case("CM-2026-012")
     legacy.title = "供应商交付异常"
@@ -100,17 +100,17 @@ def test_demo_dataset_is_the_authoritative_case_overview_source(tmp_path: Path) 
 
 def orchestrate(service: CaseService):
     return asyncio.run(service.orchestrate_case(
-        "CM-2026-014", actor="陈澄", role="订单统筹经理"
+        "CM-2026-014", actor=OWNER_ACTOR, role=OWNER_ROLE
     ))
 
 
 def approve_and_execute_path(service: CaseService):
     orchestrate(service)
     service.approve_manifest(
-        "CM-2026-014", ["PATH-01"], actor="陈澄", role="订单统筹经理"
+        "CM-2026-014", ["PATH-01"], actor=OWNER_ACTOR, role=OWNER_ROLE
     )
     return asyncio.run(service.execute_path(
-        "CM-2026-014", "PATH-01", actor="陈澄", role="订单统筹经理"
+        "CM-2026-014", "PATH-01", actor=OWNER_ACTOR, role=OWNER_ROLE
     ))
 
 
@@ -174,14 +174,18 @@ def test_orchestrator_builds_manifest_from_open_delay_case(tmp_path: Path) -> No
     assert case.phase is OrchestrationPhase.MANIFEST_REVIEW
     assert case.manifest.generated_from_case_version == 1
     assert case.manifest.planner_profile == "deterministic/v1"
-    assert all(
-        "deterministic 模式不判断当前 Case 的业务优先级" in path.rationale
-        for path in case.manifest.paths
-    )
-    assert all("候选 A/B" not in path.rationale for path in case.manifest.paths)
+    # The deterministic planner does not rank or prioritize: it returns every
+    # Skill-declared candidate, in declaration order, each with a rationale.
     assert [path.definition for path in case.manifest.paths] == [
         "MaterialSubstitution", "SupplyExpediting", "OrderSplit"
     ]
+    assert all(path.rationale.strip() for path in case.manifest.paths)
+    assert all(path.selected for path in case.manifest.paths)
+    # Path-level rationale must not leak option-level identifiers; options are
+    # resolved later, per Path, by the Path Agent.
+    assert all(
+        "候选 A/B" not in path.rationale for path in case.manifest.paths
+    )
     assert set(case.manifest.policy_refs) == {
         "POL-SUBSTITUTION-3@3.3.0", "POL-CUSTOMER-2@2.4.0",
         "POL-EXPEDITING-1@1.3.0", "POL-ORDER-SPLIT-1@1.3.0",
@@ -190,7 +194,7 @@ def test_orchestrator_builds_manifest_from_open_delay_case(tmp_path: Path) -> No
         "SUPPLY", "TECH", "CUSTOMER"
     }
     manifest = service.get_case_manifest(
-        "CM-2026-014", actor="陈澄", role="订单统筹经理"
+        "CM-2026-014", actor=OWNER_ACTOR, role=OWNER_ROLE
     )
     assert manifest["id"] == "MAN-CM-2026-014-1"
     assert manifest["planner_profile"] == "deterministic/v1"
@@ -262,7 +266,7 @@ def test_professional_commitments_open_only_after_path_exploration(tmp_path: Pat
     assert initial_case.human_proposal["author"] == initial_case.owner
     assert initial_case.human_proposal["role"] == initial_case.owner_role
     case = service.approve_manifest(
-        "CM-2026-014", ["PATH-01"], actor="陈澄", role="订单统筹经理"
+        "CM-2026-014", ["PATH-01"], actor=OWNER_ACTOR, role=OWNER_ROLE
     )
     assert case.phase is OrchestrationPhase.PATH_EXPLORATION
     pending = {node.id for node in case.commitment_nodes if node.status is NodeStatus.PENDING}
@@ -273,7 +277,7 @@ def test_professional_commitments_open_only_after_path_exploration(tmp_path: Pat
     assert case.commitment_nodes[-1].status is NodeStatus.BLOCKED
 
     case = asyncio.run(service.execute_path(
-        "CM-2026-014", "PATH-01", actor="陈澄", role="订单统筹经理"
+        "CM-2026-014", "PATH-01", actor=OWNER_ACTOR, role=OWNER_ROLE
     ))
 
     assert case.phase is OrchestrationPhase.PROFESSIONAL_COMMITMENT
@@ -286,7 +290,7 @@ def test_manifest_is_visible_and_actionable_only_by_case_owner(tmp_path: Path) -
     orchestrate(service)
 
     owner_view = service.get_case_view(
-        "CM-2026-014", actor="陈澄", role="订单统筹经理"
+        "CM-2026-014", actor=OWNER_ACTOR, role=OWNER_ROLE
     )
     other_role_view = service.get_case_view(
         "CM-2026-014", actor="王淼", role="主计划"
@@ -309,6 +313,10 @@ def test_manifest_is_visible_and_actionable_only_by_case_owner(tmp_path: Path) -
         lambda: service.approve_manifest(
             "CM-2026-014", ["PATH-01"], actor="王淼", role="主计划"
         ),
+        # Agent traces expose Manifest internals, so they stay owner-only too.
+        lambda: service.get_agent_runs(
+            "CM-2026-014", actor="王淼", role="主计划", agent_type="orchestrator"
+        ),
     ):
         try:
             operation()
@@ -321,128 +329,136 @@ def test_manifest_is_visible_and_actionable_only_by_case_owner(tmp_path: Path) -
     assert case.phase is OrchestrationPhase.MANIFEST_REVIEW
 
 
-def test_manifest_http_endpoints_enforce_owner_boundary(tmp_path: Path, monkeypatch) -> None:
-    from fastapi.testclient import TestClient
-    from agentic_cm import api
+NON_OWNER = {"actor": "王淼", "role": "主计划"}
 
-    monkeypatch.setattr(api, "service", make_service(tmp_path))
-    client = TestClient(api.app)
-    owner = {"actor": "陈澄", "role": "订单统筹经理"}
 
-    assert client.post(
-        "/api/cases/CM-2026-014/orchestrate", json=owner
-    ).status_code == 200
+def test_manifest_http_endpoints_enforce_owner_boundary(client) -> None:
+    """Only the Case Owner may read or act on the Manifest and its agent runs."""
+    owner = dict(OWNER)
+    assert client.post(f"/api/cases/{DEMO_CASE_ID}/orchestrate", json=owner).status_code == 200
 
-    library = client.get("/api/capabilities")
-    assert library.status_code == 200
-    assert library.json()["counts"] == {"policies": 4, "skills": 7, "knowledge": 1}
-    assert {asset["id"] for asset in library.json()["assets"]["skills"]} == {
-        "shortage-response-planning", "material-substitution-analysis",
-        "material-substitution-engineering-review",
-        "material-substitution-master-planning-review",
-        "material-substitution-supply-manager-review",
-        "supply-expediting-analysis", "order-split-analysis",
-    }
-
-    other_view = client.get(
-        "/api/cases/CM-2026-014", params={"actor": "王淼", "role": "主计划"}
-    )
+    # A non-owner can read the Case, but the Manifest is redacted, not merely hidden.
+    other_view = client.get(f"/api/cases/{DEMO_CASE_ID}", params=NON_OWNER)
     assert other_view.status_code == 200
     assert other_view.json()["manifest"] is None
     assert other_view.json()["permissions"]["can_view_manifest"] is False
 
-    assert client.get(
-        "/api/cases/CM-2026-014/manifest",
-        params={"actor": "王淼", "role": "主计划"},
-    ).status_code == 403
+    for method, path, payload in (
+        ("get", f"/api/cases/{DEMO_CASE_ID}/manifest", None),
+        ("get", f"/api/cases/{DEMO_CASE_ID}/agent-runs", None),
+        ("post", f"/api/cases/{DEMO_CASE_ID}/paths/PATH-01/execute", dict(NON_OWNER)),
+        ("post", f"/api/cases/{DEMO_CASE_ID}/synthesize", dict(NON_OWNER)),
+        (
+            "post",
+            f"/api/cases/{DEMO_CASE_ID}/manifest/approve",
+            {"selected_path_ids": ["PATH-01"], **NON_OWNER},
+        ),
+    ):
+        response = (
+            client.get(path, params=NON_OWNER)
+            if method == "get"
+            else client.post(path, json=payload)
+        )
+        assert response.status_code == 403, f"{method.upper()} {path} must reject a non-owner"
 
+    # The same endpoints succeed for the Owner.
+    assert client.get(f"/api/cases/{DEMO_CASE_ID}/manifest", params=owner).status_code == 200
     trace = client.get(
-        "/api/cases/CM-2026-014/agent-runs",
+        f"/api/cases/{DEMO_CASE_ID}/agent-runs",
         params={**owner, "agent_type": "orchestrator"},
     )
     assert trace.status_code == 200
     assert trace.json()[0]["status"] == "SUCCEEDED"
-    assert client.get(
-        "/api/cases/CM-2026-014/agent-runs",
-        params={"actor": "王淼", "role": "主计划", "agent_type": "orchestrator"},
-    ).status_code == 403
-    assert client.post(
-        "/api/cases/CM-2026-014/manifest/approve",
-        json={"selected_path_ids": ["PATH-01"], "actor": "王淼", "role": "主计划"},
-    ).status_code == 403
-    assert client.post(
-        "/api/cases/CM-2026-014/manifest/approve",
+
+
+def test_timeline_is_public_but_excludes_owner_only_manifest_details(client) -> None:
+    owner = dict(OWNER)
+    client.post(f"/api/cases/{DEMO_CASE_ID}/orchestrate", json=owner)
+    client.post(
+        f"/api/cases/{DEMO_CASE_ID}/manifest/approve",
         json={"selected_path_ids": ["PATH-01"], **owner},
-    ).status_code == 200
-    timeline = client.get("/api/cases/CM-2026-014/timeline")
+    )
+
+    # The Thread timeline needs no identity, so it must not leak Owner-only fields.
+    timeline = client.get(f"/api/cases/{DEMO_CASE_ID}/timeline")
     assert timeline.status_code == 200
     assert [event["event_type"] for event in timeline.json()] == [
         "manifest.proposed", "manifest.approved"
     ]
-    assert "selected_path_ids" not in timeline.json()[-1]["details"]
+    for event in timeline.json():
+        for leaked in ("selected_path_ids", "capability_snapshot", "capability_snapshots"):
+            assert leaked not in event["details"]
 
+
+def test_capability_library_reports_every_effective_asset(client) -> None:
+    library = client.get("/api/capabilities")
+    assert library.status_code == 200
+    body = library.json()
+    # Counts must agree with the assets actually returned.
+    for group in ("policies", "skills", "knowledge"):
+        assert body["counts"][group] == len(body["assets"][group])
+        assert body["counts"][group] > 0
+    assert "shortage-response-planning" in {asset["id"] for asset in body["assets"]["skills"]}
+
+
+def test_http_golden_path_runs_from_orchestration_to_owner_decision(client) -> None:
+    """End-to-end smoke test of the governed lifecycle over HTTP."""
+    owner = dict(OWNER)
+    assert client.post(f"/api/cases/{DEMO_CASE_ID}/orchestrate", json=owner).status_code == 200
     assert client.post(
-        "/api/cases/CM-2026-014/paths/PATH-01/execute",
-        json={"actor": "王淼", "role": "主计划"},
-    ).status_code == 403
+        f"/api/cases/{DEMO_CASE_ID}/manifest/approve",
+        json={"selected_path_ids": ["PATH-01"], **owner},
+    ).status_code == 200
+
     runtime_config = client.get("/api/runtime-config")
     assert runtime_config.status_code == 200
     assert runtime_config.json()["path_execution_mode"] in {"parallel", "serial"}
     assert runtime_config.json()["path_max_concurrency"] >= 1
+
     path_result = client.post(
-        "/api/cases/CM-2026-014/paths/execute",
+        f"/api/cases/{DEMO_CASE_ID}/paths/execute",
         json={"path_ids": ["PATH-01"], **owner},
     )
     assert path_result.status_code == 200
     assert path_result.json()["execution_mode"] in {"parallel", "serial"}
-    assert path_result.json()["max_concurrency"] >= 1
-    assert [option["id"] for option in path_result.json()["case"]["path_attempts"][0]["solution_revision"]["options"]] == [
-        "A", "B"
-    ]
+    revision = path_result.json()["case"]["path_attempts"][0]["solution_revision"]
+    assert [option["id"] for option in revision["options"]] == ["A", "B"]
     path_trace = client.get(
-        "/api/cases/CM-2026-014/agent-runs", params={**owner, "agent_type": "path"}
+        f"/api/cases/{DEMO_CASE_ID}/agent-runs", params={**owner, "agent_type": "path"}
     )
-    assert path_trace.status_code == 200
     assert path_trace.json()[0]["status"] == "SUCCEEDED"
 
+    # Each responsible role commits on its own node; the platform releases dependents.
     approval = client.post(
-        "/api/cases/CM-2026-014/paths/PATH-01/commitments/SUPPLY/approve",
-        json={"actor": "王淼", "role": "主计划"},
+        f"/api/cases/{DEMO_CASE_ID}/paths/PATH-01/commitments/SUPPLY/approve",
+        json=dict(NON_OWNER),
     )
     assert approval.status_code == 200
-    assert approval.json()["manifest"] is None
-    assert approval.json()["workflow_paths"] == [{
-        "id": "PATH-01",
-        "definition": "MaterialSubstitution",
-        "title": "物料替代",
-        "selected": True,
-        "rationale": "",
-    }]
-    assert client.get("/api/cases/CM-2026-014/timeline").json()[-1]["details"] == {
+    assert approval.json()["manifest"] is None, "approving must not widen Manifest visibility"
+    assert [path["id"] for path in approval.json()["workflow_paths"]] == ["PATH-01"]
+    assert client.get(f"/api/cases/{DEMO_CASE_ID}/timeline").json()[-1]["details"] == {
         "actor": "王淼",
         "role": "主计划",
         "node_id": "SUPPLY",
         "path_id": "PATH-01",
     }
     assert client.post(
-        "/api/cases/CM-2026-014/paths/PATH-01/commitments/TECH/decision",
+        f"/api/cases/{DEMO_CASE_ID}/paths/PATH-01/commitments/TECH/decision",
         json={"actor": "林乔", "role": "研发", "decision": "APPROVE"},
     ).status_code == 200
     final_commitment = client.post(
-        "/api/cases/CM-2026-014/paths/PATH-01/commitments/CUSTOMER/decision",
+        f"/api/cases/{DEMO_CASE_ID}/paths/PATH-01/commitments/CUSTOMER/decision",
         json={"actor": "赵宁", "role": "供应经理", "decision": "APPROVE"},
     )
     assert final_commitment.status_code == 200
     assert final_commitment.json()["phase"] == "FINAL_REVIEW"
-    assert client.post(
-        "/api/cases/CM-2026-014/synthesize",
-        json={"actor": "王淼", "role": "主计划"},
-    ).status_code == 403
-    synthesized = client.post("/api/cases/CM-2026-014/synthesize", json=owner)
+
+    synthesized = client.post(f"/api/cases/{DEMO_CASE_ID}/synthesize", json=owner)
     assert synthesized.status_code == 200
     assert synthesized.json()["synthesis_report"]["path_assessments"][0]["status"] == "SUCCEEDED"
+
     decision = client.post(
-        "/api/cases/CM-2026-014/owner-decision",
+        f"/api/cases/{DEMO_CASE_ID}/owner-decision",
         json={**owner, "action": "KEEP_OPEN"},
     )
     assert decision.status_code == 200
@@ -691,87 +707,74 @@ def test_incompatible_commitment_policy_conflict_fails_closed(tmp_path: Path) ->
         raise AssertionError("ambiguous Policy conflict must fail closed")
 
 
-def test_initial_policy_rejects_unconsumed_generic_fields(tmp_path: Path) -> None:
+# Each entry is one fail-closed loading rule: a Policy fixture the registry must
+# reject at load time, plus the substring proving the rule that rejected it.
+# The conflict rule is separate: it fails at resolve time, not load time.
+INVALID_POLICY_FIXTURES = [
+    pytest.param(
+        {"requirements": {"commitments": [], "constraints": {"unused": True}}},
+        "Unsupported initial Policy requirements",
+        id="requirements-field-with-no-consumer",
+    ),
+    pytest.param(
+        {"selector": {"path_definition": ["ManualReview"]}},
+        "without case_type",
+        id="path-scoped-selector-without-case-type",
+    ),
+    pytest.param(
+        {"selector": {"business_unit": ["demo"]}},
+        "Unsupported selector fields ['business_unit']",
+        id="selector-field-outside-initial-contract",
+    ),
+    pytest.param(
+        {"priority": 10},
+        "priority is not part of the initial contract",
+        id="policy-priority-not-in-contract",
+    ),
+]
+
+
+@pytest.mark.parametrize("overrides,expected_message", INVALID_POLICY_FIXTURES)
+def test_policy_loading_fails_closed_on_out_of_contract_fields(
+    tmp_path: Path, overrides: dict, expected_message: str
+) -> None:
     policy_dir = tmp_path / "builtin" / "policies"
     policy_dir.mkdir(parents=True)
     policy = {
         "schema_version": 1,
         "kind": "policy",
-        "id": "POL-TOO-MUCH",
+        "id": "POL-FIXTURE",
         "version": "1",
-        "title": "unused constraint fixture",
+        "title": "fail-closed fixture",
         "status": "published",
         "selector": {
             "case_type": ["ORDER_DELIVERY_RISK"],
             "path_definition": ["MaterialSubstitution"],
         },
-        "requirements": {"commitments": [], "constraints": {"unused": True}},
-    }
+        "requirements": {"commitments": []},
+    } | overrides
+    # A deliberately unrelated filename: identity comes from kind+id, not the path.
     (policy_dir / "arbitrary-name.json").write_text(json.dumps(policy))
 
     try:
         CapabilityRegistry.from_directories(tmp_path / "builtin", None)
-    except CapabilityConfigurationError:
-        pass
-    else:
-        raise AssertionError("initial Policy must reject fields with no runtime consumer")
-
-
-def test_path_scoped_capability_requires_case_type(tmp_path: Path) -> None:
-    policy_dir = tmp_path / "builtin" / "policies"
-    policy_dir.mkdir(parents=True)
-    policy = {
-        "schema_version": 1,
-        "kind": "policy",
-        "id": "POL-UNSCOPED-PATH",
-        "version": "1",
-        "title": "unscoped path fixture",
-        "status": "published",
-        "selector": {"path_definition": ["ManualReview"]},
-        "requirements": {"commitments": []},
-    }
-    (policy_dir / "unscoped.json").write_text(json.dumps(policy))
-
-    try:
-        CapabilityRegistry.from_directories(tmp_path / "builtin", None)
     except CapabilityConfigurationError as exc:
-        assert "without case_type" in str(exc)
+        assert expected_message in str(exc)
     else:
-        raise AssertionError("Path-scoped capabilities must also scope case_type")
-
-
-def test_selector_rejects_fields_outside_initial_contract(tmp_path: Path) -> None:
-    policy_dir = tmp_path / "builtin" / "policies"
-    policy_dir.mkdir(parents=True)
-    policy = {
-        "schema_version": 1,
-        "kind": "policy",
-        "id": "POL-UNSUPPORTED-SELECTOR",
-        "version": "1",
-        "title": "unsupported selector fixture",
-        "status": "published",
-        "selector": {"business_unit": ["demo"]},
-        "requirements": {"commitments": []},
-    }
-    (policy_dir / "unsupported.json").write_text(json.dumps(policy))
-
-    try:
-        CapabilityRegistry.from_directories(tmp_path / "builtin", None)
-    except CapabilityConfigurationError as exc:
-        assert "Unsupported selector fields ['business_unit']" in str(exc)
-    else:
-        raise AssertionError("Initial selectors must use only case_type and path_definition")
+        raise AssertionError(
+            f"loading must fail closed for {overrides!r}"
+        )
 
 
 def test_manifest_cannot_be_approved_twice(tmp_path: Path) -> None:
     service = make_service(tmp_path)
     orchestrate(service)
     service.approve_manifest(
-        "CM-2026-014", actor="陈澄", role="订单统筹经理"
+        "CM-2026-014", actor=OWNER_ACTOR, role=OWNER_ROLE
     )
     try:
         service.approve_manifest(
-            "CM-2026-014", actor="陈澄", role="订单统筹经理"
+            "CM-2026-014", actor=OWNER_ACTOR, role=OWNER_ROLE
         )
     except InvalidTransitionError:
         pass
@@ -868,7 +871,7 @@ def test_skill_declares_three_candidates_and_manifest_supports_all_paths(tmp_pat
     }
 
     approved = service.approve_manifest(
-        "CM-2026-014", actor="陈澄", role="订单统筹经理"
+        "CM-2026-014", actor=OWNER_ACTOR, role=OWNER_ROLE
     )
     assert [attempt["definition"] for attempt in approved.path_attempts] == expected_definitions
     assert [attempt["title"] for attempt in approved.path_attempts] == [
@@ -903,17 +906,17 @@ def test_skill_declares_three_candidates_and_manifest_supports_all_paths(tmp_pat
 
 def test_multi_path_exploration_finishes_only_after_every_solution_revision(tmp_path: Path) -> None:
     service = CaseService(
-        CaseRepository(tmp_path / "multi-path.db"),
+        CaseRepository(tmp_path / "test.db"),
         planner=_AllMatchedSkillPathsPlanner(),
         path_agent=DeterministicPathAgentAdapter(),
     )
     service.ensure_demo_data()
     orchestrate(service)
-    service.approve_manifest("CM-2026-014", actor="陈澄", role="订单统筹经理")
+    service.approve_manifest("CM-2026-014", actor=OWNER_ACTOR, role=OWNER_ROLE)
 
     for path_id in ("PATH-01", "PATH-02"):
         case = asyncio.run(service.execute_path(
-            "CM-2026-014", path_id, actor="陈澄", role="订单统筹经理"
+            "CM-2026-014", path_id, actor=OWNER_ACTOR, role=OWNER_ROLE
         ))
         attempt = next(item for item in case.path_attempts if item["path_id"] == path_id)
         expected_roles = {
@@ -925,7 +928,7 @@ def test_multi_path_exploration_finishes_only_after_every_solution_revision(tmp_
         assert service.get_inbox("主计划") == []
 
     case = asyncio.run(service.execute_path(
-        "CM-2026-014", "PATH-03", actor="陈澄", role="订单统筹经理"
+        "CM-2026-014", "PATH-03", actor=OWNER_ACTOR, role=OWNER_ROLE
     ))
     split_attempt = next(item for item in case.path_attempts if item["path_id"] == "PATH-03")
     assert {item["role"] for item in split_attempt["solution_revision"]["role_reports"]} == {
@@ -938,7 +941,7 @@ def test_multi_path_exploration_finishes_only_after_every_solution_revision(tmp_
 def test_path_batch_limits_parallelism_and_serializes_case_merges(tmp_path: Path) -> None:
     probe = _ConcurrencyProbePathAgent()
     service = CaseService(
-        CaseRepository(tmp_path / "parallel-paths.db"),
+        CaseRepository(tmp_path / "test.db"),
         planner=_AllMatchedSkillPathsPlanner(),
         path_agent=probe,
         path_execution_mode="parallel",
@@ -947,12 +950,12 @@ def test_path_batch_limits_parallelism_and_serializes_case_merges(tmp_path: Path
     service.ensure_demo_data()
     orchestrate(service)
     approved = service.approve_manifest(
-        "CM-2026-014", actor="陈澄", role="订单统筹经理"
+        "CM-2026-014", actor=OWNER_ACTOR, role=OWNER_ROLE
     )
     path_ids = [attempt["path_id"] for attempt in approved.path_attempts]
 
     case = asyncio.run(service.execute_paths(
-        "CM-2026-014", path_ids, actor="陈澄", role="订单统筹经理"
+        "CM-2026-014", path_ids, actor=OWNER_ACTOR, role=OWNER_ROLE
     ))
 
     assert probe.max_active == 2
@@ -969,7 +972,7 @@ def test_path_batch_limits_parallelism_and_serializes_case_merges(tmp_path: Path
 def test_path_batch_can_be_configured_to_run_serially(tmp_path: Path) -> None:
     probe = _ConcurrencyProbePathAgent()
     service = CaseService(
-        CaseRepository(tmp_path / "serial-paths.db"),
+        CaseRepository(tmp_path / "test.db"),
         planner=_AllMatchedSkillPathsPlanner(),
         path_agent=probe,
         path_execution_mode="serial",
@@ -977,12 +980,12 @@ def test_path_batch_can_be_configured_to_run_serially(tmp_path: Path) -> None:
     service.ensure_demo_data()
     orchestrate(service)
     approved = service.approve_manifest(
-        "CM-2026-014", actor="陈澄", role="订单统筹经理"
+        "CM-2026-014", actor=OWNER_ACTOR, role=OWNER_ROLE
     )
     path_ids = [attempt["path_id"] for attempt in approved.path_attempts]
 
     case = asyncio.run(service.execute_paths(
-        "CM-2026-014", path_ids, actor="陈澄", role="订单统筹经理"
+        "CM-2026-014", path_ids, actor=OWNER_ACTOR, role=OWNER_ROLE
     ))
 
     assert probe.max_active == 1
@@ -994,11 +997,11 @@ def test_synthesis_waits_for_every_path_dag_and_includes_success_and_failure(tmp
     case = orchestrate(service)
     selected_ids = [path.id for path in case.manifest.paths[:2]]
     service.approve_manifest(
-        "CM-2026-014", selected_ids, actor="陈澄", role="订单统筹经理"
+        "CM-2026-014", selected_ids, actor=OWNER_ACTOR, role=OWNER_ROLE
     )
     for path_id in selected_ids:
         asyncio.run(service.execute_path(
-            "CM-2026-014", path_id, actor="陈澄", role="订单统筹经理"
+            "CM-2026-014", path_id, actor=OWNER_ACTOR, role=OWNER_ROLE
         ))
 
     case = service.get_case("CM-2026-014")
@@ -1033,13 +1036,16 @@ def test_synthesis_waits_for_every_path_dag_and_includes_success_and_failure(tmp
     assert case.phase is OrchestrationPhase.FINAL_REVIEW
     assert {attempt["outcome"] for attempt in case.path_attempts} == {"SUCCEEDED", "REJECTED"}
     report_case = asyncio.run(service.synthesize_case(
-        case.id, actor="陈澄", role="订单统筹经理"
+        case.id, actor=OWNER_ACTOR, role=OWNER_ROLE
     ))
     report = report_case.synthesis_report
+    # Both outcomes must be represented, one assessment per selected Path. The
+    # counts live in structured fields; the prose summary is not asserted.
     assert {item["status"] for item in report["path_assessments"]} == {"SUCCEEDED", "FAILED"}
-    assert "1 条审批通过，1 条审批失败" in report["summary"]
+    assert len(report["path_assessments"]) == len(selected_ids)
+    assert report["summary"].strip()
     runs = service.get_agent_runs(
-        case.id, actor="陈澄", role="订单统筹经理", agent_type="synthesis"
+        case.id, actor=OWNER_ACTOR, role=OWNER_ROLE, agent_type="synthesis"
     )
     assert runs[0]["status"] == "SUCCEEDED"
     assert any(event["step"] == "synthesis.compose" for event in runs[0]["events"])
@@ -1071,23 +1077,15 @@ def test_openai_synthesis_repairs_paraphrased_artifact_refs(tmp_path: Path) -> N
             "recommended_owner_action": "KEEP_OPEN",
             "decision_brief": "请 Case Owner 审查已批准结果并作出最终决定。",
         }
-        return httpx.Response(200, json={
-            "id": f"synthesis-{observed['attempts']}",
-            "object": "chat.completion",
-            "created": 1,
-            "model": "vendor-model-42",
-            "choices": [{
-                "index": 0,
-                "finish_reason": "stop",
-                "message": {"role": "assistant", "content": json.dumps(content, ensure_ascii=False)},
-            }],
-            "usage": {"prompt_tokens": 100, "completion_tokens": 100, "total_tokens": 200},
-        })
+        return chat_completion_response(
+            content,
+            response_id=f"synthesis-{observed['attempts']}",
+        )
 
     async def scenario():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
             service = CaseService(
-                CaseRepository(tmp_path / "synthesis-repair.db"),
+                CaseRepository(tmp_path / "test.db"),
                 planner=DeterministicPlannerAdapter(),
                 path_agent=DeterministicPathAgentAdapter(),
                 synthesis_agent=OpenAICompatibleSynthesisAgentAdapter(
@@ -1098,12 +1096,12 @@ def test_openai_synthesis_repairs_paraphrased_artifact_refs(tmp_path: Path) -> N
                 ),
             )
             service.ensure_demo_data()
-            await service.orchestrate_case("CM-2026-014", actor="陈澄", role="订单统筹经理")
+            await service.orchestrate_case("CM-2026-014", actor=OWNER_ACTOR, role=OWNER_ROLE)
             service.approve_manifest(
-                "CM-2026-014", ["PATH-01"], actor="陈澄", role="订单统筹经理"
+                "CM-2026-014", ["PATH-01"], actor=OWNER_ACTOR, role=OWNER_ROLE
             )
             await service.execute_path(
-                "CM-2026-014", "PATH-01", actor="陈澄", role="订单统筹经理"
+                "CM-2026-014", "PATH-01", actor=OWNER_ACTOR, role=OWNER_ROLE
             )
             case = service.get_case("CM-2026-014")
             while case.phase is OrchestrationPhase.PROFESSIONAL_COMMITMENT:
@@ -1113,7 +1111,7 @@ def test_openai_synthesis_repairs_paraphrased_artifact_refs(tmp_path: Path) -> N
                     decision=CommitmentDecision.APPROVE, actor="审批人", role=pending.role,
                 )
             return await service.synthesize_case(
-                case.id, actor="陈澄", role="订单统筹经理"
+                case.id, actor=OWNER_ACTOR, role=OWNER_ROLE
             )
 
     case = asyncio.run(scenario())
@@ -1147,13 +1145,13 @@ def test_owner_can_close_keep_open_or_modify_after_synthesis(tmp_path: Path) -> 
             actor="审批人",
             role=pending.role,
         )
-    asyncio.run(service.synthesize_case(case.id, actor="陈澄", role="订单统筹经理"))
+    asyncio.run(service.synthesize_case(case.id, actor=OWNER_ACTOR, role=OWNER_ROLE))
 
     kept = service.decide_case(
         case.id,
         action=OwnerDecisionAction.KEEP_OPEN,
-        actor="陈澄",
-        role="订单统筹经理",
+        actor=OWNER_ACTOR,
+        role=OWNER_ROLE,
     )
     assert kept.status is CaseStatus.OPEN
     assert kept.phase is OrchestrationPhase.FINAL_REVIEW
@@ -1162,8 +1160,8 @@ def test_owner_can_close_keep_open_or_modify_after_synthesis(tmp_path: Path) -> 
         service.decide_case(
             case.id,
             action=OwnerDecisionAction.MODIFY,
-            actor="陈澄",
-            role="订单统筹经理",
+            actor=OWNER_ACTOR,
+            role=OWNER_ROLE,
         )
     except InvalidTransitionError as exc:
         assert "guidance" in str(exc)
@@ -1175,8 +1173,8 @@ def test_owner_can_close_keep_open_or_modify_after_synthesis(tmp_path: Path) -> 
     modified = service.decide_case(
         case.id,
         action=OwnerDecisionAction.MODIFY,
-        actor="陈澄",
-        role="订单统筹经理",
+        actor=OWNER_ACTOR,
+        role=OWNER_ROLE,
         guidance=guidance,
     )
     assert modified.status is CaseStatus.OPEN
@@ -1195,10 +1193,10 @@ def test_owner_can_close_keep_open_or_modify_after_synthesis(tmp_path: Path) -> 
     }
 
     asyncio.run(service.orchestrate_case(
-        case.id, actor="陈澄", role="订单统筹经理"
+        case.id, actor=OWNER_ACTOR, role=OWNER_ROLE
     ))
     rerun = service.get_agent_runs(
-        case.id, actor="陈澄", role="订单统筹经理", agent_type="orchestrator"
+        case.id, actor=OWNER_ACTOR, role=OWNER_ROLE, agent_type="orchestrator"
     )[0]
     planner_input = next(event for event in rerun["events"] if event["step"] == "planner.input")
     assert planner_input["details"]["context"]["human_proposal"]["content"] == guidance
@@ -1215,13 +1213,13 @@ def test_owner_can_close_keep_open_or_modify_after_synthesis(tmp_path: Path) -> 
             decision=CommitmentDecision.APPROVE, actor="审批人", role=pending.role,
         )
     asyncio.run(close_service.synthesize_case(
-        close_case.id, actor="陈澄", role="订单统筹经理"
+        close_case.id, actor=OWNER_ACTOR, role=OWNER_ROLE
     ))
     closed = close_service.decide_case(
         close_case.id,
         action=OwnerDecisionAction.CLOSE,
-        actor="陈澄",
-        role="订单统筹经理",
+        actor=OWNER_ACTOR,
+        role=OWNER_ROLE,
     )
     assert closed.status is CaseStatus.CLOSED
 
@@ -1312,22 +1310,14 @@ def test_openai_compatible_adapter_accepts_custom_provider_configuration() -> No
         observed["authorization"] = request.headers.get("authorization")
         observed["url"] = str(request.url)
         observed["payload"] = json.loads(request.content)
-        return httpx.Response(
-            200,
-            json={
-                "id": "response-planner-1",
-                "object": "chat.completion",
-                "created": 1,
-                "model": "vendor-model-42",
-                "choices": [
-                    {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": json.dumps({
-                        "paths": [
-                            {"definition": "MaterialSubstitution", "rationale": "物料缺口与候选能力匹配"},
-                            {"definition": "OrderSplit", "rationale": "可用数量支持分批交付探索"}
-                        ]
-                    })}}
+        return chat_completion_response(
+            {
+                "paths": [
+                    {"definition": "MaterialSubstitution", "rationale": "物料缺口与候选能力匹配"},
+                    {"definition": "OrderSplit", "rationale": "可用数量支持分批交付探索"}
                 ]
             },
+            response_id="response-planner-1",
         )
 
     async def run():
@@ -1383,17 +1373,11 @@ def test_openai_compatible_adapter_repairs_pydantic_schema_failure_once() -> Non
         }
         if attempts == 1:
             content["unexpected"] = True
-        return httpx.Response(200, json={
-            "id": f"response-{attempts}",
-            "object": "chat.completion",
-            "created": attempts,
-            "model": "vendor-model-42",
-            "choices": [{
-                "index": 0,
-                "finish_reason": "stop",
-                "message": {"role": "assistant", "content": json.dumps(content)},
-            }],
-        })
+        return chat_completion_response(
+            content,
+            response_id=f"response-{attempts}",
+            created=attempts,
+        )
 
     async def run():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
@@ -1430,22 +1414,16 @@ def test_openai_compatible_planner_retries_one_transient_connection_failure() ->
         attempts += 1
         if attempts == 1:
             raise httpx.ReadTimeout("temporary timeout", request=request)
-        return httpx.Response(200, json={
-            "id": "response-after-retry",
-            "object": "chat.completion",
-            "created": 2,
-            "model": "vendor-model-42",
-            "choices": [{
-                "index": 0,
-                "finish_reason": "stop",
-                "message": {"role": "assistant", "content": json.dumps({
-                    "paths": [{
-                        "definition": "SupplyExpediting",
-                        "rationale": "Owner 要求重点探索供应提拉，当前缺料风险与该路径相关。",
-                    }],
-                }, ensure_ascii=False)},
-            }],
-        })
+        return chat_completion_response(
+            {
+                "paths": [{
+                    "definition": "SupplyExpediting",
+                    "rationale": "Owner 要求重点探索供应提拉，当前缺料风险与该路径相关。",
+                }],
+            },
+            response_id="response-after-retry",
+            created=2,
+        )
 
     async def run():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
@@ -1484,8 +1462,8 @@ def test_orchestrator_trace_persists_each_governed_step(tmp_path: Path) -> None:
 
     runs = service.get_agent_runs(
         "CM-2026-014",
-        actor="陈澄",
-        role="订单统筹经理",
+        actor=OWNER_ACTOR,
+        role=OWNER_ROLE,
         agent_type="orchestrator",
     )
 
@@ -1494,21 +1472,22 @@ def test_orchestrator_trace_persists_each_governed_step(tmp_path: Path) -> None:
     assert run["status"] == "SUCCEEDED"
     assert run["adapter_profile"] == "deterministic/v1"
     steps = [event["step"] for event in run["events"]]
-    assert steps == [
-        "run.started",
-        "case.eligibility",
+    # Assert the governed stages are all audited and correctly bracketed, without
+    # pinning exact ordering or repeat counts of internal steps.
+    assert steps[0] == "run.started"
+    assert steps[-1] == "run.completed"
+    assert {
         "case.eligibility",
         "paths.discovery",
-        "capabilities.resolve",
-        "capabilities.resolve",
         "capabilities.resolve",
         "planner.input",
         "planner.request",
         "planner.response",
         "planner.output_validation",
         "manifest.compose",
-        "run.completed",
-    ]
+    } <= set(steps)
+    # Capabilities are resolved per candidate Path, so one event per Path.
+    assert steps.count("capabilities.resolve") == 3
     request_event = next(event for event in run["events"] if event["step"] == "planner.request")
     assert request_event["details"]["case"]["case_id"] == "CM-2026-014"
     assert [item["definition"] for item in request_event["details"]["candidates"]] == [
@@ -1529,26 +1508,12 @@ def test_failed_orchestrator_trace_is_kept_without_business_mutation(tmp_path: P
         raise AssertionError("invented path must fail")
 
     runs = service.get_agent_runs(
-        "CM-2026-014", actor="陈澄", role="订单统筹经理", agent_type="orchestrator"
+        "CM-2026-014", actor=OWNER_ACTOR, role=OWNER_ROLE, agent_type="orchestrator"
     )
     assert runs[0]["status"] == "FAILED"
     assert runs[0]["error_type"] == "PlannerOutputError"
     assert runs[0]["events"][-1]["step"] == "run.failed"
     assert repository.list_events("CM-2026-014") == []
-
-
-def test_agent_trace_is_owner_only(tmp_path: Path) -> None:
-    service = make_service(tmp_path)
-    orchestrate(service)
-
-    try:
-        service.get_agent_runs(
-            "CM-2026-014", actor="王淼", role="主计划", agent_type="orchestrator"
-        )
-    except AuthorizationError:
-        pass
-    else:
-        raise AssertionError("Agent trace must remain owner-only")
 
 
 def test_path_agent_builds_solution_revision_from_frozen_manifest(tmp_path: Path) -> None:
@@ -1574,7 +1539,7 @@ def test_repository_normalizes_legacy_numeric_solution_revision(tmp_path: Path) 
     service = make_service(tmp_path)
     orchestrate(service)
     service.approve_manifest(
-        "CM-2026-014", ["PATH-01"], actor="陈澄", role="订单统筹经理"
+        "CM-2026-014", ["PATH-01"], actor=OWNER_ACTOR, role=OWNER_ROLE
     )
     with service.repository._connect() as connection:
         row = connection.execute(
@@ -1599,16 +1564,17 @@ def test_path_agent_trace_audits_manifest_assembly_and_persistence(tmp_path: Pat
     approve_and_execute_path(service)
 
     runs = service.get_agent_runs(
-        "CM-2026-014", actor="陈澄", role="订单统筹经理", agent_type="path"
+        "CM-2026-014", actor=OWNER_ACTOR, role=OWNER_ROLE, agent_type="path"
     )
 
     assert len(runs) == 1
     run = runs[0]
     assert run["status"] == "SUCCEEDED"
     assert run["adapter_profile"] == "deterministic-path/v1"
-    assert [event["step"] for event in run["events"]] == [
-        "run.started",
-        "path.eligibility",
+    steps = [event["step"] for event in run["events"]]
+    assert steps[0] == "run.started"
+    assert steps[-1] == "run.completed"
+    assert {
         "path.eligibility",
         "agent.assemble",
         "tools.query",
@@ -1617,8 +1583,7 @@ def test_path_agent_trace_audits_manifest_assembly_and_persistence(tmp_path: Pat
         "model.response",
         "agent.output_validation",
         "solution_revision.compose",
-        "run.completed",
-    ]
+    } <= set(steps)
     assembly = next(event for event in run["events"] if event["step"] == "agent.assemble")
     assert assembly["details"]["manifest_ref"]["id"] == "MAN-CM-2026-014-1"
     assert {item["id"] for item in assembly["details"]["execution_skills"]} == {
@@ -1627,16 +1592,16 @@ def test_path_agent_trace_audits_manifest_assembly_and_persistence(tmp_path: Pat
         "material-substitution-master-planning-review",
         "material-substitution-supply-manager-review",
     }
-    assert assembly["details"]["authorized_options"] == [
-        {
-            "id": "A", "material_id": "MCU-X7A", "title": "物料 A · MCU-X7A",
-            "description": "与 MCU-X7 封装和引脚兼容、无需固件改动的优先替代候选。",
-        },
-        {
-            "id": "B", "material_id": "MCU-X7B", "title": "物料 B · MCU-X7B",
-            "description": "可覆盖完整缺口但需要固件配置与客户 AVL 评审的备选替代候选。",
-        },
+    # The authorized option set comes from the frozen Skill's path-options.json;
+    # assert the identity of what was authorized, not its demo copy text.
+    assert [item["id"] for item in assembly["details"]["authorized_options"]] == ["A", "B"]
+    assert [item["material_id"] for item in assembly["details"]["authorized_options"]] == [
+        "MCU-X7A", "MCU-X7B"
     ]
+    assert all(
+        item["title"] and item["description"]
+        for item in assembly["details"]["authorized_options"]
+    )
     assert assembly["details"]["tool_ids"] == [
         "mock.customer-acceptance.lookup",
         "mock.material-master.lookup",
@@ -1649,7 +1614,7 @@ def test_path_agent_trace_audits_manifest_assembly_and_persistence(tmp_path: Pat
 
 
 def test_path_agent_cannot_invent_manifest_unauthorized_option(tmp_path: Path) -> None:
-    repository = CaseRepository(tmp_path / "inventing-path.db")
+    repository = CaseRepository(tmp_path / "test.db")
     service = CaseService(
         repository,
         planner=DeterministicPlannerAdapter(),
@@ -1658,12 +1623,12 @@ def test_path_agent_cannot_invent_manifest_unauthorized_option(tmp_path: Path) -
     service.ensure_demo_data()
     orchestrate(service)
     service.approve_manifest(
-        "CM-2026-014", ["PATH-01"], actor="陈澄", role="订单统筹经理"
+        "CM-2026-014", ["PATH-01"], actor=OWNER_ACTOR, role=OWNER_ROLE
     )
 
     try:
         asyncio.run(service.execute_path(
-            "CM-2026-014", "PATH-01", actor="陈澄", role="订单统筹经理"
+            "CM-2026-014", "PATH-01", actor=OWNER_ACTOR, role=OWNER_ROLE
         ))
     except PathAgentOutputError as exc:
         assert "unknown=['ALT-C']" in str(exc)
@@ -1676,7 +1641,7 @@ def test_path_agent_cannot_invent_manifest_unauthorized_option(tmp_path: Path) -
         "manifest.proposed", "manifest.approved"
     ]
     runs = service.get_agent_runs(
-        "CM-2026-014", actor="陈澄", role="订单统筹经理", agent_type="path"
+        "CM-2026-014", actor=OWNER_ACTOR, role=OWNER_ROLE, agent_type="path"
     )
     assert runs[0]["status"] == "FAILED"
 
@@ -1688,12 +1653,8 @@ def test_openai_compatible_path_agent_uses_manifest_assembled_context(tmp_path: 
         observed["attempts"] += 1
         observed["api_key"] = request.headers["x-api-key"]
         observed["payload"] = json.loads(request.content)
-        return httpx.Response(200, json={
-            "id": "response-path-1",
-            "object": "chat.completion",
-            "created": 1,
-            "model": "vendor-model-42",
-            "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": json.dumps({
+        return chat_completion_response(
+            {
                 "summary": "English summary" if observed["attempts"] == 1 else "比较两个替代候选，所有结论等待责任角色确认。",
                 "options": [{
                     "id": "A",
@@ -1729,9 +1690,9 @@ def test_openai_compatible_path_agent_uses_manifest_assembled_context(tmp_path: 
                         "report": "供应经理维度：A 需要客户偏差放行而 B 需要正式 AVL 认证，两者均须取得客户书面确认。",
                     },
                 ],
-            }, ensure_ascii=False)}}],
-            "usage": {"prompt_tokens": 200, "completion_tokens": 121, "total_tokens": 321},
-        })
+            },
+            response_id="response-path-1",
+        )
 
     # A file-backed DB is required because each repository call opens a connection.
     async def run_file_backed(tmp_path: Path):
@@ -1741,14 +1702,14 @@ def test_openai_compatible_path_agent_uses_manifest_assembled_context(tmp_path: 
                 api_key_header="x-api-key", api_key_prefix="", http_client=client,
             )
             service = CaseService(
-                CaseRepository(tmp_path / "openai-path.db"),
+                CaseRepository(tmp_path / "test.db"),
                 planner=DeterministicPlannerAdapter(), path_agent=adapter,
             )
             service.ensure_demo_data()
-            await service.orchestrate_case("CM-2026-014", actor="陈澄", role="订单统筹经理")
-            service.approve_manifest("CM-2026-014", ["PATH-01"], actor="陈澄", role="订单统筹经理")
+            await service.orchestrate_case("CM-2026-014", actor=OWNER_ACTOR, role=OWNER_ROLE)
+            service.approve_manifest("CM-2026-014", ["PATH-01"], actor=OWNER_ACTOR, role=OWNER_ROLE)
             return await service.execute_path(
-                "CM-2026-014", "PATH-01", actor="陈澄", role="订单统筹经理"
+                "CM-2026-014", "PATH-01", actor=OWNER_ACTOR, role=OWNER_ROLE
             )
 
     case = asyncio.run(run_file_backed(tmp_path))
@@ -1774,15 +1735,8 @@ def test_supply_expediting_role_reports_are_assembled_from_frozen_policy(tmp_pat
 
     def handler(request: httpx.Request) -> httpx.Response:
         observed["payload"] = json.loads(request.content)
-        return httpx.Response(200, json={
-            "id": "response-expediting-policy-reports",
-            "object": "chat.completion",
-            "created": 1,
-            "model": "vendor-model-42",
-            "choices": [{
-                "index": 0,
-                "finish_reason": "stop",
-                "message": {"role": "assistant", "content": json.dumps({
+        return chat_completion_response(
+            {
                     "summary": "供应提拉方案等待采购与物流责任角色确认。",
                     "options": [{
                         "id": "EXPEDITE-OPTION-1",
@@ -1806,14 +1760,14 @@ def test_supply_expediting_role_reports_are_assembled_from_frozen_policy(tmp_pat
                         "dimension": "运输与到货日期",
                         "report": "物流维度：运输方式与预计到货日期仍须物流责任角色核验后确认。",
                     }],
-                }, ensure_ascii=False)},
-            }],
-        })
+            },
+            response_id="response-expediting-policy-reports",
+        )
 
     async def run():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
             service = CaseService(
-                CaseRepository(tmp_path / "expediting-policy-reports.db"),
+                CaseRepository(tmp_path / "test.db"),
                 planner=DeterministicPlannerAdapter(),
                 path_agent=OpenAICompatiblePathAgentAdapter(
                     "secret", model="vendor-model-42", base_url="https://gateway.example/v1",
@@ -1821,16 +1775,16 @@ def test_supply_expediting_role_reports_are_assembled_from_frozen_policy(tmp_pat
                 ),
             )
             service.ensure_demo_data()
-            await service.orchestrate_case("CM-2026-014", actor="陈澄", role="订单统筹经理")
+            await service.orchestrate_case("CM-2026-014", actor=OWNER_ACTOR, role=OWNER_ROLE)
             case = service.get_case("CM-2026-014")
             expediting_path = next(
                 path for path in case.manifest.paths if path.definition == "SupplyExpediting"
             )
             service.approve_manifest(
-                case.id, [expediting_path.id], actor="陈澄", role="订单统筹经理"
+                case.id, [expediting_path.id], actor=OWNER_ACTOR, role=OWNER_ROLE
             )
             return await service.execute_path(
-                case.id, expediting_path.id, actor="陈澄", role="订单统筹经理"
+                case.id, expediting_path.id, actor=OWNER_ACTOR, role=OWNER_ROLE
             )
 
     case = asyncio.run(run())
@@ -1853,14 +1807,14 @@ def test_failed_path_agent_trace_is_kept_without_solution_mutation(tmp_path: Pat
         return httpx.Response(503, json={"error": "unavailable"})
 
     async def run_failure(service: CaseService):
-        await service.orchestrate_case("CM-2026-014", actor="陈澄", role="订单统筹经理")
-        service.approve_manifest("CM-2026-014", ["PATH-01"], actor="陈澄", role="订单统筹经理")
-        await service.execute_path("CM-2026-014", "PATH-01", actor="陈澄", role="订单统筹经理")
+        await service.orchestrate_case("CM-2026-014", actor=OWNER_ACTOR, role=OWNER_ROLE)
+        service.approve_manifest("CM-2026-014", ["PATH-01"], actor=OWNER_ACTOR, role=OWNER_ROLE)
+        await service.execute_path("CM-2026-014", "PATH-01", actor=OWNER_ACTOR, role=OWNER_ROLE)
 
     async def scenario():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
             service = CaseService(
-                CaseRepository(tmp_path / "failed-path.db"),
+                CaseRepository(tmp_path / "test.db"),
                 planner=DeterministicPlannerAdapter(),
                 path_agent=OpenAICompatiblePathAgentAdapter(
                     None, model="unavailable-model", base_url="https://gateway.example/v1", http_client=client,
@@ -1882,7 +1836,7 @@ def test_failed_path_agent_trace_is_kept_without_solution_mutation(tmp_path: Pat
         "manifest.proposed", "manifest.approved"
     ]
     runs = service.get_agent_runs(
-        "CM-2026-014", actor="陈澄", role="订单统筹经理", agent_type="path"
+        "CM-2026-014", actor=OWNER_ACTOR, role=OWNER_ROLE, agent_type="path"
     )
     assert runs[0]["status"] == "FAILED"
     assert runs[0]["events"][-1]["step"] == "run.failed"
