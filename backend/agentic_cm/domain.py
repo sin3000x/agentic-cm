@@ -50,6 +50,31 @@ class OwnerDecisionAction(StrEnum):
     MODIFY = "MODIFY"
 
 
+class CaseEvent(StrEnum):
+    """Append-only domain event types.
+
+    Both the write side and the public timeline projection reference these, so
+    a mistyped name is a resolution error rather than a silently dropped
+    timeline entry.
+    """
+
+    MANIFEST_PROPOSED = "manifest.proposed"
+    MANIFEST_APPROVED = "manifest.approved"
+    SOLUTION_REVISION_PROPOSED = "solution_revision.proposed"
+    COMMITMENT_APPROVED = "commitment.approved"
+    COMMITMENT_REVISION_REQUESTED = "commitment.revision_requested"
+    COMMITMENT_REJECTED = "commitment.rejected"
+    SYNTHESIS_PROPOSED = "synthesis.proposed"
+    OWNER_DECISION = "owner.decision"
+
+    # Startup backfills of Cases persisted by earlier versions. These are
+    # deliberately absent from the public timeline.
+    CASE_DEMO_METADATA_MIGRATED = "case.demo_metadata_migrated"
+    CASE_PHASE_MIGRATED = "case.phase_migrated"
+    COMMITMENT_PENDING_MIGRATION = "commitment.pending_migration"
+    PATH_ATTEMPT_TERMINAL_MIGRATED = "path_attempt.terminal_migrated"
+
+
 @dataclass(frozen=True)
 class CommitmentNode:
     id: str

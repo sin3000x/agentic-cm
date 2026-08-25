@@ -11,6 +11,7 @@ from .config import (
 )
 from .demo import DEMO_DATASET_ID, LEGACY_DEMO_TITLES, demo_cases
 from .domain import (
+    CaseEvent,
     CaseStatus,
     CommitmentDecision,
     CommitmentNode,
@@ -91,7 +92,7 @@ class CaseService:
                     **case.business_payload,
                 }
                 case.touch()
-                self.repository.save(case, "case.demo_metadata_migrated", {
+                self.repository.save(case, CaseEvent.CASE_DEMO_METADATA_MIGRATED, {
                     "dataset_id": DEMO_DATASET_ID,
                     "fields": ["title", "description", "business_payload"],
                 })
@@ -103,7 +104,7 @@ class CaseService:
             ):
                 case.phase = OrchestrationPhase.PROFESSIONAL_COMMITMENT
                 case.touch()
-                self.repository.save(case, "case.phase_migrated", {
+                self.repository.save(case, CaseEvent.CASE_PHASE_MIGRATED, {
                     "from": OrchestrationPhase.PATH_EXPLORATION.value,
                     "to": OrchestrationPhase.PROFESSIONAL_COMMITMENT.value,
                     "reason": "all Path explorations already produced SolutionRevisions",
@@ -124,7 +125,7 @@ class CaseService:
                     for node in case.commitment_nodes
                 ]
                 case.touch()
-                self.repository.save(case, "commitment.pending_migration", {
+                self.repository.save(case, CaseEvent.COMMITMENT_PENDING_MIGRATION, {
                     "reason": "introduce explicit role Inbox approval before READY",
                 })
             if case.phase is OrchestrationPhase.PROFESSIONAL_COMMITMENT:
@@ -142,7 +143,7 @@ class CaseService:
                 if self._all_selected_paths_terminal(case):
                     case.phase = OrchestrationPhase.FINAL_REVIEW
                     case.touch()
-                    self.repository.save(case, "case.phase_migrated", {
+                    self.repository.save(case, CaseEvent.CASE_PHASE_MIGRATED, {
                         "from": OrchestrationPhase.PROFESSIONAL_COMMITMENT.value,
                         "to": OrchestrationPhase.FINAL_REVIEW.value,
                         "reason": "all selected Path approval DAGs are terminal",
@@ -152,7 +153,7 @@ class CaseService:
                     for attempt in case.path_attempts
                 ]:
                     case.touch()
-                    self.repository.save(case, "path_attempt.terminal_migrated", {
+                    self.repository.save(case, CaseEvent.PATH_ATTEMPT_TERMINAL_MIGRATED, {
                         "reason": "derive terminal Path outcomes from existing approval DAG states",
                     })
 
@@ -235,15 +236,21 @@ class CaseService:
 
     def get_case_timeline(self, case_id: str) -> list[dict]:
         self.get_case(case_id)
+        # Only these events reach the Thread, and only these fields of each.
+        # Manifest, Policy, and capability snapshots stay Owner-only.
         public_fields = {
-            "manifest.proposed": ("revision",),
-            "manifest.approved": ("actor",),
-            "solution_revision.proposed": ("path_id", "revision", "option_count"),
-            "commitment.approved": ("actor", "role", "node_id", "path_id"),
-            "commitment.revision_requested": ("actor", "role", "node_id", "path_id"),
-            "commitment.rejected": ("actor", "role", "node_id", "path_id"),
-            "synthesis.proposed": ("revision", "successful_path_count", "failed_path_count"),
-            "owner.decision": ("actor", "role", "action", "synthesis_revision", "guidance"),
+            CaseEvent.MANIFEST_PROPOSED: ("revision",),
+            CaseEvent.MANIFEST_APPROVED: ("actor",),
+            CaseEvent.SOLUTION_REVISION_PROPOSED: ("path_id", "revision", "option_count"),
+            CaseEvent.COMMITMENT_APPROVED: ("actor", "role", "node_id", "path_id"),
+            CaseEvent.COMMITMENT_REVISION_REQUESTED: ("actor", "role", "node_id", "path_id"),
+            CaseEvent.COMMITMENT_REJECTED: ("actor", "role", "node_id", "path_id"),
+            CaseEvent.SYNTHESIS_PROPOSED: (
+                "revision", "successful_path_count", "failed_path_count"
+            ),
+            CaseEvent.OWNER_DECISION: (
+                "actor", "role", "action", "synthesis_revision", "guidance"
+            ),
         }
         timeline: list[dict] = []
         for event in self.repository.list_events(case_id):
@@ -295,7 +302,7 @@ class CaseService:
             case.touch()
             self.repository.save(
                 case,
-                "manifest.proposed",
+                CaseEvent.MANIFEST_PROPOSED,
                 {
                     "manifest_id": manifest.id,
                     "revision": manifest.revision,
@@ -387,7 +394,7 @@ class CaseService:
         case.path_attempt = attempts[0]
         case.commitment_nodes = nodes
         case.touch()
-        self.repository.save(case, "manifest.approved", {
+        self.repository.save(case, CaseEvent.MANIFEST_APPROVED, {
             "manifest_id": case.manifest.id,
             "revision": case.manifest.revision,
             "actor": actor,
@@ -519,7 +526,7 @@ class CaseService:
                     for node in case.commitment_nodes
                 ]
                 case.touch()
-                self.repository.save(case, "solution_revision.proposed", {
+                self.repository.save(case, CaseEvent.SOLUTION_REVISION_PROPOSED, {
                     "path_id": path_id,
                     "revision": solution_revision["revision"],
                     "option_count": len(solution_revision["options"]),
@@ -665,10 +672,10 @@ class CaseService:
                 else node
                 for node in nodes
             ]
-            event_type = "commitment.approved"
+            event_type = CaseEvent.COMMITMENT_APPROVED
         elif decision is CommitmentDecision.REVISE:
             nodes[target_index] = replace(target, status=NodeStatus.STALE)
-            event_type = "commitment.revision_requested"
+            event_type = CaseEvent.COMMITMENT_REVISION_REQUESTED
             self._update_path_attempt(case, path_id, phase="REVISING", outcome=None)
             case.phase = OrchestrationPhase.PATH_EXPLORATION
         elif decision is CommitmentDecision.REJECT:
@@ -681,7 +688,7 @@ class CaseService:
                 else node
                 for node in nodes
             ]
-            event_type = "commitment.rejected"
+            event_type = CaseEvent.COMMITMENT_REJECTED
             self._update_path_attempt(case, path_id, phase="DONE", outcome="REJECTED")
         else:
             raise InvalidTransitionError(f"Unsupported Commitment decision: {decision}")
@@ -737,7 +744,7 @@ class CaseService:
                 item["status"] == "SUCCEEDED" for item in report["path_assessments"]
             )
             failed = len(report["path_assessments"]) - successful
-            self.repository.save(case, "synthesis.proposed", {
+            self.repository.save(case, CaseEvent.SYNTHESIS_PROPOSED, {
                 "revision": report["revision"],
                 "successful_path_count": successful,
                 "failed_path_count": failed,
@@ -806,7 +813,7 @@ class CaseService:
         # The Case timestamp is the decision instant, not a fresh "now".
         case.version += 1
         case.updated_at = decision["decided_at"]
-        self.repository.save(case, "owner.decision", decision)
+        self.repository.save(case, CaseEvent.OWNER_DECISION, decision)
         return case
 
     @staticmethod
