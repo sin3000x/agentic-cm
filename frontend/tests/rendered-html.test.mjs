@@ -117,8 +117,14 @@ test("approved Manifest launches a real Path Agent and exposes its audited Solut
   assert.match(source, /startAutomaticManifest\(\)/);
   assert.match(source, /startAutomaticAlternatives\(pendingPathIds\)/);
   assert.match(source, /await generateAlternatives\(approvedPathIds\)/);
-  assert.match(source, /AI 正在为你组装可审查的 Manifest/);
-  assert.match(source, /AI 正在为你推演替代方案/);
+  assert.match(source, /Orchestrator Agent 正在为您组装探索清单/);
+  assert.match(source, /Path Agent 正在为您推演解决方案/);
+  assert.match(source, /phase === "PATH_EXPLORATION"/);
+  assert.match(source, /phase === "PROFESSIONAL_COMMITMENT"/);
+  assert.match(source, /专业承诺 · 审批 DAG/);
+  assert.match(source, /全部完成后，本阶段自动结束，平台才会开放专业承诺审批/);
+  assert.match(source, /PROFESSIONAL_COMMITMENT: 3/);
+  assert.match(source, /explorationCompleted \? "Path 探索完成，进入专业承诺"/);
   assert.match(source, /<AiWorkingCard kind=\{aiRunKind\} step=\{aiRunStep\}/);
   assert.doesNotMatch(source, /onClick=\{generateManifest\}>生成 Manifest/);
   assert.doesNotMatch(source, />生成替代方案<\/button>/);
@@ -143,6 +149,7 @@ test("approved Manifest launches a real Path Agent and exposes its audited Solut
   assert.match(styles, /\.solutionOptions/);
   assert.match(styles, /\.roleReports/);
   assert.match(styles, /\.aiWorkingCard/);
+  assert.match(styles, /\.pathExplorationProgress/);
   assert.match(styles, /@keyframes aiScan/);
   assert.match(styles, /prefers-reduced-motion/);
 });

@@ -48,6 +48,20 @@ class CaseService:
         for case in self.repository.list_cases():
             if (
                 case.phase is OrchestrationPhase.PATH_EXPLORATION
+                and case.path_attempts
+                and all(attempt.get("solution_revision") for attempt in case.path_attempts)
+                and not any(attempt.get("phase") == "REVISING" for attempt in case.path_attempts)
+            ):
+                case.phase = OrchestrationPhase.PROFESSIONAL_COMMITMENT
+                case.version += 1
+                case.updated_at = datetime.now(timezone.utc).isoformat()
+                self.repository.save(case, "case.phase_migrated", {
+                    "from": OrchestrationPhase.PATH_EXPLORATION.value,
+                    "to": OrchestrationPhase.PROFESSIONAL_COMMITMENT.value,
+                    "reason": "all Path explorations already produced SolutionRevisions",
+                })
+            if (
+                case.phase is OrchestrationPhase.PROFESSIONAL_COMMITMENT
                 and case.commitment_nodes
                 and not self.repository.has_event(case.id, "commitment.approved")
                 and any(
@@ -374,6 +388,8 @@ class CaseService:
             (dict(attempt) for attempt in case.path_attempts if attempt.get("path_id") == path_id),
             case.path_attempt,
         )
+        if all(attempt.get("solution_revision") for attempt in case.path_attempts):
+            case.phase = OrchestrationPhase.PROFESSIONAL_COMMITMENT
         ready_ids = {
             node.id for node in case.commitment_nodes
             if node.path_id == path_id and node.status is NodeStatus.READY
@@ -396,6 +412,7 @@ class CaseService:
             "revision": solution_revision["revision"],
             "option_count": len(solution_revision["options"]),
             "generated_by": solution_revision["generated_by"],
+            "next_phase": case.phase.value,
         })
         trace(
             "run.completed",
@@ -418,6 +435,8 @@ class CaseService:
     def get_inbox(self, role: str) -> list[dict]:
         items: list[dict] = []
         for case in self.repository.list_cases():
+            if case.phase is not OrchestrationPhase.PROFESSIONAL_COMMITMENT:
+                continue
             path_titles = {
                 path.id: path.title for path in (case.manifest.paths if case.manifest else ())
             }
@@ -461,8 +480,8 @@ class CaseService:
         role: str,
     ):
         case = self.get_case(case_id)
-        if case.phase is not OrchestrationPhase.PATH_EXPLORATION:
-            raise InvalidTransitionError("Case is not exploring a Path")
+        if case.phase is not OrchestrationPhase.PROFESSIONAL_COMMITMENT:
+            raise InvalidTransitionError("Case is not in professional commitment review")
         target_index = next(
             (
                 index for index, node in enumerate(case.commitment_nodes)
@@ -501,6 +520,7 @@ class CaseService:
             nodes[target_index] = replace(target, status=NodeStatus.STALE)
             event_type = "commitment.revision_requested"
             self._update_path_attempt(case, path_id, phase="REVISING", outcome=None)
+            case.phase = OrchestrationPhase.PATH_EXPLORATION
         elif decision is CommitmentDecision.REJECT:
             nodes[target_index] = replace(target, status=NodeStatus.REJECTED)
             nodes = [

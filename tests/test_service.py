@@ -163,7 +163,7 @@ def test_paths_owning_skill_requires_one_case_type_binding(tmp_path: Path) -> No
         raise AssertionError("A paths-owning Skill must belong to one Case type")
 
 
-def test_manifest_approval_routes_parallel_nodes_to_role_inboxes(tmp_path: Path) -> None:
+def test_professional_commitments_open_only_after_path_exploration(tmp_path: Path) -> None:
     service = make_service(tmp_path)
     orchestrate(service)
     initial_case = service.get_case("CM-2026-014")
@@ -176,10 +176,18 @@ def test_manifest_approval_routes_parallel_nodes_to_role_inboxes(tmp_path: Path)
     assert case.phase is OrchestrationPhase.PATH_EXPLORATION
     pending = {node.id for node in case.commitment_nodes if node.status is NodeStatus.PENDING}
     assert pending == {"SUPPLY", "TECH"}
-    assert {item["node"].id for item in service.get_inbox("主计划")} == {"SUPPLY"}
-    assert {item["node"].id for item in service.get_inbox("研发")} == {"TECH"}
+    assert service.get_inbox("主计划") == []
+    assert service.get_inbox("研发") == []
     assert [attempt["definition"] for attempt in case.path_attempts] == ["MaterialSubstitution"]
     assert case.commitment_nodes[-1].status is NodeStatus.BLOCKED
+
+    case = asyncio.run(service.execute_path(
+        "CM-2026-014", "PATH-01", actor="陈澄", role="订单统筹经理"
+    ))
+
+    assert case.phase is OrchestrationPhase.PROFESSIONAL_COMMITMENT
+    assert {item["node"].id for item in service.get_inbox("主计划")} == {"SUPPLY"}
+    assert {item["node"].id for item in service.get_inbox("研发")} == {"TECH"}
 
 
 def test_manifest_is_visible_and_actionable_only_by_case_owner(tmp_path: Path) -> None:
@@ -312,10 +320,7 @@ def test_manifest_http_endpoints_enforce_owner_boundary(tmp_path: Path, monkeypa
 
 def test_role_inbox_approval_makes_node_ready_and_releases_dependents(tmp_path: Path) -> None:
     service = make_service(tmp_path)
-    orchestrate(service)
-    service.approve_manifest(
-        "CM-2026-014", ["PATH-01"], actor="陈澄", role="订单统筹经理"
-    )
+    approve_and_execute_path(service)
 
     try:
         service.approve_commitment(
@@ -356,10 +361,7 @@ def test_role_inbox_approval_makes_node_ready_and_releases_dependents(tmp_path: 
 
 def test_commitment_revision_request_enters_revising_and_leaves_inbox(tmp_path: Path) -> None:
     service = make_service(tmp_path)
-    orchestrate(service)
-    service.approve_manifest(
-        "CM-2026-014", ["PATH-01"], actor="陈澄", role="订单统筹经理"
-    )
+    approve_and_execute_path(service)
 
     case = service.decide_commitment(
         "CM-2026-014", "PATH-01", "SUPPLY",
@@ -372,16 +374,14 @@ def test_commitment_revision_request_enters_revising_and_leaves_inbox(tmp_path: 
         "CUSTOMER": NodeStatus.BLOCKED,
     }
     assert case.path_attempts[0]["phase"] == "REVISING"
+    assert case.phase is OrchestrationPhase.PATH_EXPLORATION
     assert service.get_inbox("主计划") == []
     assert service.get_case_timeline("CM-2026-014")[-1]["event_type"] == "commitment.revision_requested"
 
 
 def test_commitment_rejection_ends_path_and_invalidates_open_nodes(tmp_path: Path) -> None:
     service = make_service(tmp_path)
-    orchestrate(service)
-    service.approve_manifest(
-        "CM-2026-014", ["PATH-01"], actor="陈澄", role="订单统筹经理"
-    )
+    approve_and_execute_path(service)
 
     case = service.decide_commitment(
         "CM-2026-014", "PATH-01", "TECH",
@@ -736,6 +736,30 @@ def test_skill_declares_three_candidates_and_manifest_supports_all_paths(tmp_pat
     assert {item["id"] for item in split_capabilities["snapshot"]["policies"]} == {"POL-ORDER-SPLIT-1"}
 
 
+def test_multi_path_exploration_finishes_only_after_every_solution_revision(tmp_path: Path) -> None:
+    service = CaseService(
+        CaseRepository(tmp_path / "multi-path.db"),
+        planner=_AllMatchedSkillPathsPlanner(),
+        path_agent=DeterministicPathAgentAdapter(),
+    )
+    service.ensure_demo_data()
+    orchestrate(service)
+    service.approve_manifest("CM-2026-014", actor="陈澄", role="订单统筹经理")
+
+    for path_id in ("PATH-01", "PATH-02"):
+        case = asyncio.run(service.execute_path(
+            "CM-2026-014", path_id, actor="陈澄", role="订单统筹经理"
+        ))
+        assert case.phase is OrchestrationPhase.PATH_EXPLORATION
+        assert service.get_inbox("主计划") == []
+
+    case = asyncio.run(service.execute_path(
+        "CM-2026-014", "PATH-03", actor="陈澄", role="订单统筹经理"
+    ))
+    assert case.phase is OrchestrationPhase.PROFESSIONAL_COMMITMENT
+    assert service.get_inbox("主计划")
+
+
 def test_reducing_skill_declared_paths_reduces_manifest_candidates(tmp_path: Path) -> None:
     builtin = tmp_path / "builtin"
     shutil.copytree(DEFAULT_BUILTIN_ROOT, builtin)
@@ -1018,7 +1042,7 @@ def test_path_agent_builds_solution_revision_from_frozen_manifest(tmp_path: Path
     assert all("A" in item["report"] and "B" in item["report"] for item in revision["role_reports"])
     assert revision["required_commitment_ids"] == ["SUPPLY", "TECH", "CUSTOMER"]
     assert revision["generated_by"] == "deterministic-path/v1"
-    assert case.phase is OrchestrationPhase.PATH_EXPLORATION
+    assert case.phase is OrchestrationPhase.PROFESSIONAL_COMMITMENT
     assert case.commitment_nodes[0].status is NodeStatus.PENDING
     assert service.repository.list_events("CM-2026-014")[-1]["event_type"] == "solution_revision.proposed"
 

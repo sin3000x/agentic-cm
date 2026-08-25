@@ -137,6 +137,7 @@ type TimelineEvent = {
     node_id?: string;
     path_id?: string;
     option_count?: number;
+    next_phase?: string;
   };
 };
 
@@ -365,7 +366,7 @@ export default function Home() {
       })
       .then(([data, timeline, inbox]) => {
         setPhase(data.phase);
-        setApproved(data.phase === "PATH_EXPLORATION");
+        setApproved(["PATH_EXPLORATION", "PROFESSIONAL_COMMITMENT", "FINAL_REVIEW"].includes(data.phase));
         setCommitmentNodes(data.commitment_nodes ?? []);
         setPathAttempts(data.path_attempts ?? []);
         setTimelineEvents(timeline);
@@ -373,7 +374,7 @@ export default function Home() {
         setCaseCreatedAt(data.created_at);
         setCanViewManifest(data.permissions?.can_view_manifest === true);
         loadManifest(data.manifest);
-        if (data.phase === "PATH_EXPLORATION") {
+        if (["PATH_EXPLORATION", "PROFESSIONAL_COMMITMENT", "FINAL_REVIEW"].includes(data.phase)) {
           setSelectedPathIds((data.manifest?.paths ?? []).filter((path: ManifestPath) => path.selected).map((path: ManifestPath) => path.id));
         }
         if (data.permissions?.can_view_manifest === true) {
@@ -547,6 +548,9 @@ export default function Home() {
         }
         const data = await response.json();
         setPathAttempts(data.path_attempts ?? []);
+        setCommitmentNodes(data.commitment_nodes ?? []);
+        setPhase(data.phase);
+        setApproved(["PATH_EXPLORATION", "PROFESSIONAL_COMMITMENT", "FINAL_REVIEW"].includes(data.phase));
       }
       await refreshTimeline();
       setMessage(`Path Agent 已自动完成 ${requestedPathIds.length} 条 Path 的可审查替代方案。 `);
@@ -655,13 +659,28 @@ export default function Home() {
     }
   }
 
-  const activeStageIndex = approved ? 2 : phase === "INTAKE" ? 0 : 1;
+  const phaseStageIndex: Record<string, number> = {
+    INTAKE: 0,
+    MANIFEST_REVIEW: 1,
+    PATH_EXPLORATION: 2,
+    PROFESSIONAL_COMMITMENT: 3,
+    FINAL_REVIEW: 4,
+  };
+  const activeStageIndex = phaseStageIndex[phase] ?? 0;
   const currentStage = stages[activeStageIndex];
   const selectedAttemptPathId = manifestPaths.find((path) => path.selected)?.id
     ?? selectedPathIds[0]
     ?? commitmentNodes[0]?.path_id;
   const activeCommitments = commitmentNodes.filter((node) => node.path_id === selectedAttemptPathId);
   const activePathAttempt = pathAttempts.find((attempt) => attempt.path_id === selectedAttemptPathId);
+  const pendingExplorationPathIds = manifestPaths
+    .filter((path) => path.selected)
+    .filter((path) => {
+      const attempt = pathAttempts.find((item) => item.path_id === path.id);
+      return !attempt || attempt.phase === "REVISING" || !isSolutionRevision(attempt.solution_revision);
+    })
+    .map((path) => path.id);
+  const completedExplorationCount = manifestPaths.filter((path) => path.selected).length - pendingExplorationPathIds.length;
   const solutionRevision = isSolutionRevision(activePathAttempt?.solution_revision)
     ? activePathAttempt.solution_revision
     : null;
@@ -723,13 +742,40 @@ export default function Home() {
         <p>审批完成后，平台只会向相关角色的 Inbox 投递其本人需要处理的责任节点。</p>
       </article>
     </>
-  ) : approved ? (
+  ) : phase === "PATH_EXPLORATION" ? (
     <>
       <div className="panelTitle">
-        <div><span className="agentIcon">✓</span><span><small>PATH ATTEMPT · ATTEMPT-01</small><h2>物料替代 · 审批 DAG</h2></span></div>
-        <span className="version">AWAITING INBOX</span>
+        <div><span className="agentIcon">◇</span><span><small>PATH EXPLORATION</small><h2>探索已批准的 Path</h2></span></div>
+        <span className="version">{completedExplorationCount} / {manifestPaths.filter((path) => path.selected).length} READY</span>
       </div>
-      <p className="lead">Path Agent 只使用已批准 Manifest 冻结的 Skill、Policy、Knowledge 与 Case 快照生成替代方案；主计划与研发仍需在各自 Inbox 作出独立确认。</p>
+      <p className="lead">Path Agent 正在为每条已选 Path 形成独立的 SolutionRevision。全部完成后，本阶段自动结束，平台才会开放专业承诺审批。</p>
+      <div className="pathExplorationProgress" aria-label="Path 探索进度">
+        {manifestPaths.filter((path) => path.selected).map((path) => {
+          const attempt = pathAttempts.find((item) => item.path_id === path.id);
+          const complete = isSolutionRevision(attempt?.solution_revision) && attempt?.phase !== "REVISING";
+          return (
+            <article className={complete ? "complete" : "pending"} key={path.id}>
+              <span>{complete ? "✓" : "AI"}</span>
+              <div><strong>{path.title}</strong><small>{complete ? "SolutionRevision 已就绪" : attempt?.phase === "REVISING" ? "根据专业意见重新推演" : "等待 Path Agent 完成"}</small></div>
+            </article>
+          );
+        })}
+      </div>
+      <div className="explorationGate">
+        <strong>阶段出口</strong>
+        <p>所有已选 Path 均产出可审查方案 → 进入“专业承诺”并开放审批 DAG。</p>
+      </div>
+      {failedAiRun === "alternatives" && (
+        <button className="primary explorationRetry" disabled={busy || pendingExplorationPathIds.length === 0} onClick={() => generateAlternatives(pendingExplorationPathIds)}>重试未完成的 Path Agent</button>
+      )}
+    </>
+  ) : phase === "PROFESSIONAL_COMMITMENT" ? (
+    <>
+      <div className="panelTitle">
+        <div><span className="agentIcon">✓</span><span><small>PROFESSIONAL COMMITMENT</small><h2>专业承诺 · 审批 DAG</h2></span></div>
+        <span className="version">PATH 已完成</span>
+      </div>
+      <p className="lead">Path 探索已经完成。主计划、研发与供应经理现在基于 SolutionRevision 分别作出专业承诺；Agent 不能代替任何责任人审批。</p>
       {solutionRevision ? (
         <section className="solutionRevision" aria-label="Path Agent 替代方案">
           <div className="solutionHeader">
@@ -783,14 +829,8 @@ export default function Home() {
               )}
             </>
           )}
-          {activePathAttempt?.phase === "REVISING" && <p className="autoRunNote">已收到人类修改要求；Case Owner 返回后，Path Agent 会自动生成修订版。</p>}
         </section>
-      ) : (
-        <div className="approvalBox pathAgentLaunch">
-          <span><strong>{failedAiRun === "alternatives" ? "Path Agent 自动运行已暂停" : "Path Agent 将自动开始推演"}</strong><small>从 Manifest 冻结快照加载 execution Skill 与强制 Policy；失败不会修改 Case。</small></span>
-          {failedAiRun === "alternatives" && <button className="primary" disabled={busy || !selectedAttemptPathId} onClick={() => selectedAttemptPathId && generateAlternatives(selectedAttemptPathId)}>重试 Path Agent</button>}
-        </div>
-      )}
+      ) : <p className="autoRunNote">专业承诺尚未开放：缺少可审查的 SolutionRevision。</p>}
       <div className="dag" aria-label="Commitment DAG">
         {commitmentNode("SUPPLY", "主计划", "PENDING")}
         {commitmentNode("TECH", "研发", "PENDING")}
@@ -932,10 +972,11 @@ export default function Home() {
                   );
                 }
                 if (event.event_type === "solution_revision.proposed") {
+                  const explorationCompleted = event.details.next_phase === "PROFESSIONAL_COMMITMENT";
                   return (
                     <div className="threadEvent completedEvent" key={event.id}>
                       <span className="eventIcon botEvent">◇</span>
-                      <p><strong>Path Agent 生成 SolutionRevision v{event.details.revision ?? 1}</strong><span>{event.details.path_id} · {event.details.option_count ?? 0} 个可审查选项；未作出业务承诺 · {formatThreadTime(event.created_at)}</span></p>
+                      <p><strong>Path Agent 生成 SolutionRevision v{event.details.revision ?? 1}</strong><span>{event.details.path_id} · {event.details.option_count ?? 0} 个可审查选项；{explorationCompleted ? "Path 探索完成，进入专业承诺" : "继续探索其余 Path"} · {formatThreadTime(event.created_at)}</span></p>
                     </div>
                   );
                 }
@@ -962,7 +1003,7 @@ export default function Home() {
               <article className="threadItem commentItem currentThreadItem">
                 <div className="threadAvatar botAvatar">AC</div>
                 <div className="commentBox activeComment">
-                  <header><strong>Agentic CM</strong><span>{approved ? "Path Agent" : "Orchestrator"} · 当前步骤</span><b className="currentLabel">{currentStage}</b></header>
+                  <header><strong>Agentic CM</strong><span>{phase === "PROFESSIONAL_COMMITMENT" ? "Commitment Workflow" : approved ? "Path Agent" : "Orchestrator"} · 当前步骤</span><b className="currentLabel">{currentStage}</b></header>
                   <div className="commentBody actionBody">
                     {orchestrationCard}
                     {canViewManifest && phase === "MANIFEST_REVIEW" && agentRuns.some((run) => run.agent_type === "orchestrator") && (
@@ -980,7 +1021,7 @@ export default function Home() {
               </article>
 
               <div className="futureFlow" aria-label="后续流程">
-                <div><span>4</span><p><strong>专业承诺汇合</strong><small>供应与技术并行评审；依赖未满足时下游保持阻塞</small></p></div>
+                {activeStageIndex < 3 && <div><span>4</span><p><strong>专业承诺汇合</strong><small>Path 探索完成后开放；供应与技术并行评审</small></p></div>}
                 <div><span>5</span><p><strong>Case Owner 最终决策</strong><small>基于已承诺证据选择、修订或拒绝方案</small></p></div>
                 <div><span>6</span><p><strong>受控行动与结果验证</strong><small>执行结果回写 Case；未解决则开启新一轮，解决后关闭</small></p></div>
               </div>
