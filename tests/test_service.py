@@ -453,6 +453,14 @@ def test_role_inbox_approval_makes_node_ready_and_releases_dependents(tmp_path: 
     service = make_service(tmp_path)
     approve_and_execute_path(service)
 
+    supply_item = service.get_inbox("主计划")[0]
+    assert supply_item["approval_context"]["revision"] == 1
+    assert supply_item["approval_context"]["role_report"]["role"] == "主计划"
+    assert supply_item["approval_context"]["role_report"]["dimension"] == "供应与交付可行性"
+    assert "role_reports" not in supply_item["approval_context"]
+    assert "evidence_gaps" not in supply_item["approval_context"]
+    assert len(supply_item["approval_context"]["options"]) == 2
+
     try:
         service.approve_commitment(
             "CM-2026-014", "PATH-01", "SUPPLY", actor="林乔", role="研发"

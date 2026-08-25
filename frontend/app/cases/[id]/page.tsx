@@ -114,6 +114,22 @@ type SolutionRevision = {
   manifest_ref: { id: string; revision: number };
 };
 
+type ApprovalContext = {
+  revision: number | null;
+  summary: string;
+  options: SolutionOption[];
+  recommendation: { option_ids?: string[]; rationale?: string };
+  role_report: { role: string; dimension: string; report: string } | null;
+};
+
+type ApprovalReview = {
+  caseId: string;
+  caseTitle: string;
+  pathTitle: string;
+  node: CommitmentNode;
+  context: ApprovalContext;
+};
+
 type PathAttempt = {
   id: string;
   path_id: string;
@@ -197,12 +213,23 @@ function isSolutionRevision(value: unknown): value is SolutionRevision {
       && typeof item.report === "string");
 }
 
+function approvalContextFor(revision: SolutionRevision | null, role: string): ApprovalContext {
+  return {
+    revision: revision?.revision ?? null,
+    summary: revision?.summary ?? "尚未读取到可审查的方案摘要。",
+    options: revision?.options ?? [],
+    recommendation: revision?.recommendation ?? {},
+    role_report: revision?.role_reports.find((item) => item.role === role) ?? null,
+  };
+}
+
 type InboxItem = {
   case_id: string;
   case_title: string;
   path_id: string;
   path_title: string;
   node: CommitmentNode;
+  approval_context: ApprovalContext;
 };
 
 type TimelineEvent = {
@@ -477,6 +504,7 @@ export default function Home() {
   const automaticRunsRef = useRef(new Set<string>());
   const [showInbox, setShowInbox] = useState(false);
   const [inboxItems, setInboxItems] = useState<InboxItem[]>([]);
+  const [approvalReview, setApprovalReview] = useState<ApprovalReview | null>(null);
   const currentIdentity = demoIdentities[identityIndex];
   const startAutomaticManifest = useEffectEvent(() => { void generateManifest(); });
   const startAutomaticAlternatives = useEffectEvent((pathIds: string[]) => { void generateAlternatives(pathIds); });
@@ -539,6 +567,7 @@ export default function Home() {
     setShowOrchestratorTrace(false);
     setExpandedPathTraces({});
     setInboxItems([]);
+    setApprovalReview(null);
     setIdentityIndex(nextIdentityIndex);
   }
 
@@ -922,6 +951,7 @@ export default function Home() {
       setIdentityIndex(0);
       setShowInbox(false);
       setInboxItems([]);
+      setApprovalReview(null);
       setFailedAiRun(null);
       automaticRunsRef.current.clear();
       setCaseRefreshKey((current) => current + 1);
@@ -981,6 +1011,7 @@ export default function Home() {
         await refreshTimeline();
       }
       await refreshInbox();
+      setApprovalReview(null);
       const result = decision === "APPROVE" ? "通过" : decision === "REVISE" ? "要求修改" : "否决";
       setMessage(`${currentIdentity.name} 已${result} ${caseId} 的 ${node.id} 节点。`);
     } catch {
@@ -1041,7 +1072,35 @@ export default function Home() {
     );
   }
 
-  function commitmentNode(node: CommitmentNode) {
+  function openApprovalReview(
+    caseId: string,
+    caseTitle: string,
+    pathTitle: string,
+    node: CommitmentNode,
+    context: ApprovalContext,
+  ) {
+    setApprovalReview({ caseId, caseTitle, pathTitle, node, context });
+  }
+
+  function approvalReviewButton(
+    caseId: string,
+    caseTitle: string,
+    pathTitle: string,
+    node: CommitmentNode,
+    context: ApprovalContext,
+  ) {
+    if (node.status !== "PENDING" || node.role !== currentIdentity.role) return null;
+    return (
+      <button
+        className="reviewEvidenceButton"
+        onClick={() => openApprovalReview(caseId, caseTitle, pathTitle, node, context)}
+      >
+        查看审批依据 →
+      </button>
+    );
+  }
+
+  function commitmentNode(node: CommitmentNode, revision: SolutionRevision | null, pathTitle: string) {
     const statusLabel = node.status === "PENDING"
       ? node.role === currentIdentity.role ? "待本人批准" : `待${node.role}批准`
       : node.status === "BLOCKED" ? "等待前置审批"
@@ -1054,6 +1113,13 @@ export default function Home() {
         <span>{statusLabel}</span>
         <h3>{node.role}</h3>
         <p>{commitmentCopy[node.id] ?? "等待责任人确认"}</p>
+        {approvalReviewButton(
+          activeCaseId,
+          caseDetails?.title ?? activeCaseId,
+          pathTitle,
+          node,
+          approvalContextFor(revision, node.role),
+        )}
         {approvalActions(activeCaseId, node)}
       </article>
     );
@@ -1114,7 +1180,7 @@ export default function Home() {
         <div><span className="agentIcon">✓</span><span><small>PROFESSIONAL COMMITMENT</small><h2>专业承诺 · 审批 DAG</h2></span></div>
         <span className="version">{selectedPathViews.length} PATHS</span>
       </div>
-      <p className="lead">每条已选 Path 都有独立的 SolutionRevision 与审批 DAG。各责任人只对本人节点作出专业承诺；Agent 不能代替审批。</p>
+      <p className="lead">Path 卡片只保留所有角色共享的方案摘要。轮到本人审批时，从责任节点打开专属依据与决策面板；Agent 不能代替审批。</p>
       <div className="pathApprovalList">
         {selectedPathViews.map(({ path, revision, nodes, runs }) => {
           const rootNodes = nodes.filter((node) => node.depends_on.length === 0);
@@ -1127,9 +1193,9 @@ export default function Home() {
                 <em>{completedNodes} / {nodes.length} 已通过</em>
               </header>
               {revision ? (
-                <section className="solutionRevision" aria-label={`${path.title} SolutionRevision`}>
+                <section className="solutionRevision sharedSolution" aria-label={`${path.title} 共同方案摘要`}>
                   <div className="solutionHeader">
-                    <span><small>SOLUTION REVISION</small><strong>v{revision.revision} · {revision.path_definition}</strong></span>
+                    <span><small>SHARED SOLUTION BRIEF</small><strong>v{revision.revision} · 共同方案摘要</strong></span>
                     <em>{revision.generated_by}</em>
                   </div>
                   <p>{revision.summary}</p>
@@ -1139,27 +1205,13 @@ export default function Home() {
                         <span>{option.id}</span>
                         <h3>{option.title}</h3>
                         <p>{option.description}</p>
-                        <dl>
-                          <div><dt>收益</dt><dd>{option.benefits.join("；") || "待分析"}</dd></div>
-                          <div><dt>风险</dt><dd>{option.risks.join("；") || "待分析"}</dd></div>
-                          <div><dt>假设</dt><dd>{option.assumptions.join("；") || "无"}</dd></div>
-                        </dl>
                       </article>
                     ))}
                   </div>
                   <div className="solutionRecommendation">
                     <strong>Agent 建议（非业务决定）</strong>
                     <p>{revision.recommendation.rationale}</p>
-                    <small>证据缺口：{revision.evidence_gaps.join("；") || "无"}</small>
-                  </div>
-                  <div className="roleReports" aria-label={`${path.title} 角色判断报告`}>
-                    {revision.role_reports.map((item) => (
-                      <article key={`${item.role}-${item.dimension}`}>
-                        <span>{item.role}</span>
-                        <strong>{item.dimension}</strong>
-                        <p>{item.report}</p>
-                      </article>
-                    ))}
+                    <small>推荐选项：{revision.recommendation.option_ids.join("、") || "待责任角色核验"}</small>
                   </div>
                   {runs.length > 0 && (
                     <>
@@ -1180,9 +1232,9 @@ export default function Home() {
                 </section>
               ) : <p className="autoRunNote">该 Path 尚缺少可审查的 SolutionRevision。</p>}
               <div className={`dag ${rootNodes.length === 1 ? "singleRoot" : ""}`} aria-label={`${path.title} Commitment DAG`}>
-                {rootNodes.map(commitmentNode)}
+                {rootNodes.map((node) => commitmentNode(node, revision, path.title))}
                 {downstreamNodes.length > 0 && <div className="dagJoin"><i /><i /></div>}
-                {downstreamNodes.map(commitmentNode)}
+                {downstreamNodes.map((node) => commitmentNode(node, revision, path.title))}
               </div>
             </section>
           );
@@ -1544,12 +1596,78 @@ export default function Home() {
                   <div><span>PENDING</span><small>{item.path_id} · {item.node.id}</small></div>
                   <h3>{commitmentCopy[item.node.id] ?? item.node.role}</h3>
                   <p>Case {item.case_id} · {item.case_title} · {item.path_title}</p>
+                  {approvalReviewButton(
+                    item.case_id,
+                    item.case_title,
+                    item.path_title,
+                    item.node,
+                    item.approval_context,
+                  )}
                   {approvalActions(item.case_id, item.node)}
                 </article>
               )) : (
                 <div className="emptyInbox"><strong>当前没有待批准事项</strong><p>如果 Manifest 已批准，请切换到主计划或研发身份查看各自任务。</p></div>
               )}
             </div>
+          </aside>
+        </div>
+      )}
+
+      {approvalReview && (
+        <div
+          className="approvalReviewBackdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setApprovalReview(null);
+          }}
+        >
+          <aside
+            className="approvalReviewPanel"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`${approvalReview.node.role} 审批依据`}
+          >
+            <header>
+              <div>
+                <small>ROLE-SCOPED EVIDENCE · {approvalReview.node.id}</small>
+                <h2>{approvalReview.node.role}审批依据</h2>
+                <p>{approvalReview.caseId} · {approvalReview.pathTitle}</p>
+              </div>
+              <button aria-label="关闭审批依据" onClick={() => setApprovalReview(null)}>×</button>
+            </header>
+            <div className="approvalReviewBody">
+              <section className="approvalScope">
+                <small>本次责任边界</small>
+                <strong>{commitmentCopy[approvalReview.node.id] ?? "确认本节点专业判断"}</strong>
+                <p>你只批准本节点对应的专业判断，不代表其他角色，也不执行任何业务动作。</p>
+              </section>
+              <section className="evidenceSection roleEvidence">
+                <small>你的专业判断与证据摘要</small>
+                <h3>{approvalReview.context.role_report?.dimension ?? "对应角色报告尚未生成"}</h3>
+                <p>{approvalReview.context.role_report?.report ?? "当前没有可供本角色审查的报告，请选择“修改”要求补充。"}</p>
+              </section>
+              <section className="evidenceSection">
+                <small>共同方案上下文 · REVISION {approvalReview.context.revision ?? "—"}</small>
+                <p>{approvalReview.context.summary}</p>
+                <div className="evidenceOptions">
+                  {approvalReview.context.options.map((option) => (
+                    <article key={option.id}>
+                      <span>{option.id}</span>
+                      <div><strong>{option.title}</strong><p>{option.description}</p></div>
+                    </article>
+                  ))}
+                </div>
+                <div className="evidenceRecommendation">
+                  <strong>Agent 建议（非业务决定）</strong>
+                  <p>{approvalReview.context.recommendation.rationale || "暂无推荐意见。"}</p>
+                </div>
+              </section>
+              <p className="roleEvidenceBoundary">其他角色的判断与证据在其责任节点审批时展示，不在本报告中展开。</p>
+            </div>
+            <footer>
+              <span><small>当前身份</small><strong>{currentIdentity.name} · {currentIdentity.role}</strong></span>
+              {approvalActions(approvalReview.caseId, approvalReview.node)}
+            </footer>
           </aside>
         </div>
       )}

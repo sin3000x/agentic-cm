@@ -621,12 +621,56 @@ class CaseService:
             }
             for node in case.commitment_nodes:
                 if node.role == role and node.status is NodeStatus.PENDING:
+                    attempt = next(
+                        (
+                            item for item in case.path_attempts
+                            if item.get("path_id") == node.path_id
+                        ),
+                        None,
+                    )
+                    revision = (
+                        attempt.get("solution_revision")
+                        if isinstance(attempt, dict)
+                        and isinstance(attempt.get("solution_revision"), dict)
+                        else None
+                    )
+                    snapshot = (
+                        case.manifest.capability_snapshots.get(node.path_id, {})
+                        if case.manifest else {}
+                    )
+                    commitment = next(
+                        (
+                            item
+                            for item in snapshot.get("compiled_policy", {}).get("commitments", [])
+                            if item.get("id") == node.id
+                        ),
+                        {},
+                    )
+                    report_contract = commitment.get("role_report", {})
+                    role_report = next(
+                        (
+                            item for item in (revision or {}).get("role_reports", [])
+                            if item.get("role") == node.role
+                            and (
+                                not report_contract.get("dimension")
+                                or item.get("dimension") == report_contract.get("dimension")
+                            )
+                        ),
+                        None,
+                    )
                     items.append({
                         "case_id": case.id,
                         "case_title": case.title,
                         "path_id": node.path_id,
                         "path_title": path_titles.get(node.path_id, node.path_id),
                         "node": node,
+                        "approval_context": {
+                            "revision": revision.get("revision") if revision else None,
+                            "summary": revision.get("summary", "") if revision else "",
+                            "options": revision.get("options", []) if revision else [],
+                            "recommendation": revision.get("recommendation", {}) if revision else {},
+                            "role_report": role_report,
+                        },
                     })
         return items
 
