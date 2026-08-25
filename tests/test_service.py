@@ -1802,6 +1802,82 @@ def test_supply_expediting_role_reports_are_assembled_from_frozen_policy(tmp_pat
     assert {item["role"] for item in revision["role_reports"]} == {"采购与供应协同", "物流"}
 
 
+def test_path_agent_retries_one_transient_connection_failure(tmp_path: Path) -> None:
+    """Every Agent adapter shares one retry policy, not just the Orchestrator."""
+    attempts = 0
+    trace_events: list[tuple] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise httpx.ReadTimeout("temporary timeout", request=request)
+        return chat_completion_response({
+            "summary": "两个替代候选均等待责任角色确认。",
+            "options": [{
+                "id": "A",
+                "title": "物料 A · MCU-X7A",
+                "description": "保留为替代候选。",
+                "benefits": ["可并行开展核验"],
+                "risks": ["供应与技术状态未确认"],
+                "assumptions": ["不代表交付承诺"],
+            }, {
+                "id": "B",
+                "title": "物料 B · MCU-X7B",
+                "description": "保留为第二替代候选。",
+                "benefits": ["降低单一候选失败风险"],
+                "risks": ["客户接受度未确认"],
+                "assumptions": ["不代表认证通过"],
+            }],
+            "recommendation": {"option_ids": [], "rationale": "证据不足，不排序。"},
+            "evidence_gaps": ["供应、技术与客户接受度确认"],
+            "role_reports": [
+                {
+                    "role": "研发",
+                    "dimension": "技术可行性",
+                    "report": "研发维度：A 与 B 的剩余技术验证均须由研发确认。",
+                },
+                {
+                    "role": "主计划",
+                    "dimension": "供应与交付可行性",
+                    "report": "主计划维度：A 与 B 的库存与交期均须主计划确认。",
+                },
+                {
+                    "role": "供应经理",
+                    "dimension": "客户与商务接受度",
+                    "report": "供应经理维度：A 与 B 均须取得客户书面确认。",
+                },
+            ],
+        })
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            adapter = OpenAICompatiblePathAgentAdapter(
+                "path-secret", model="vendor-model-42",
+                base_url="https://gateway.example/v1", http_client=client,
+            )
+            service = CaseService(
+                CaseRepository(tmp_path / "test.db"),
+                planner=DeterministicPlannerAdapter(), path_agent=adapter,
+            )
+            service.ensure_demo_data()
+            await service.orchestrate_case(
+                DEMO_CASE_ID, actor=OWNER_ACTOR, role=OWNER_ROLE
+            )
+            service.approve_manifest(
+                DEMO_CASE_ID, ["PATH-01"], actor=OWNER_ACTOR, role=OWNER_ROLE
+            )
+            return await service.execute_path(
+                DEMO_CASE_ID, "PATH-01", actor=OWNER_ACTOR, role=OWNER_ROLE
+            )
+
+    case = asyncio.run(scenario())
+    # The timeout was retried once and the Path still produced a revision.
+    assert attempts == 2
+    revision = case.path_attempts[0]["solution_revision"]
+    assert [option["id"] for option in revision["options"]] == ["A", "B"]
+
+
 def test_failed_path_agent_trace_is_kept_without_solution_mutation(tmp_path: Path) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(503, json={"error": "unavailable"})

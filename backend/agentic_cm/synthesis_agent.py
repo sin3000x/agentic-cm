@@ -6,17 +6,17 @@ from dataclasses import asdict, dataclass
 from typing import Annotated, Any, Literal, Protocol
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
-from .config import agent_adapter_from_environment
-from .domain import Case, NodeStatus, OrchestrationPhase
-from .llm import (
-    CompatibleModelClientError,
-    OpenAICompatibleClient,
-    build_openai_compatible_client,
-    create_chat_completion,
+from .agent_runtime import (
+    AgentTraceSink,
+    ModelEndpoint,
+    TraceNarration,
+    request_structured_output,
 )
-from .orchestrator import AgentTraceSink
+from .config import agent_adapter_from_environment
+from .domain import Case, OrchestrationPhase
+from .llm import OpenAICompatibleClient, build_openai_compatible_client
 
 
 class SynthesisAgentError(ValueError):
@@ -34,6 +34,16 @@ class SynthesisAgentExecutionError(SynthesisAgentError):
 NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 PathStatus = Literal["SUCCEEDED", "FAILED"]
 OwnerAction = Literal["CLOSE", "KEEP_OPEN", "MODIFY"]
+
+
+_SYNTHESIS_NARRATION = TraceNarration(
+    request="向 OpenAI-compatible Synthesis Agent 发送全 Path 汇总请求",
+    repair_request="上次响应无效，发送一次结构化修复请求",
+    retry_request="模型连接或请求超时，自动重试一次",
+    response="收到 Synthesis Agent 模型响应",
+    validation_failed="Synthesis Agent 响应未通过结构或引用校验",
+    request_failed="Synthesis Agent 模型服务请求失败",
+)
 
 
 class _PathAssessmentPayload(BaseModel):
@@ -186,6 +196,12 @@ class OpenAICompatibleSynthesisAgentAdapter:
         self._base_url = base_url.rstrip("/")
         self._api_key_header = api_key_header
         self._max_output_tokens = max_output_tokens
+        self._endpoint = ModelEndpoint(
+            client=self._client,
+            base_url=self._base_url,
+            api_key_header=api_key_header,
+            api_key_present=bool(api_key),
+        )
 
     @property
     def profile(self) -> str:
@@ -216,56 +232,30 @@ class OpenAICompatibleSynthesisAgentAdapter:
             "max_tokens": self._max_output_tokens,
             "stream": False,
         }
-        last_error: Exception | None = None
-        for attempt in range(2):
-            trace(
-                "model.request" if attempt == 0 else "model.repair_request",
-                "STARTED",
-                "向 OpenAI-compatible Synthesis Agent 发送全 Path 汇总请求",
-                {
-                    "attempt": attempt + 1,
-                    "endpoint": f"{self._base_url}/chat/completions",
-                    "request": request,
-                    "authentication": {
-                        "header": self._api_key_header,
-                        "credential_present": bool(self._api_key),
-                        "credential_value_logged": False,
-                    },
-                },
-            )
-            try:
-                response = await create_chat_completion(self._client, request)
-            except CompatibleModelClientError as exc:
-                raise SynthesisAgentExecutionError(
-                    f"Synthesis Agent model request failed (status={exc.status})"
-                ) from exc
-            try:
-                trace("model.response", "COMPLETED", "收到 Synthesis Agent 模型响应", {
-                    "attempt": attempt + 1,
-                    "http_status": response.http_status,
-                    "response_id": response.response_id,
-                    "usage": response.usage,
-                    "content": response.content,
-                })
-                result = _parse_result(
-                    _SynthesisResultPayload.model_validate_json(response.content), self.profile
-                )
-                _validate_result(result, context)
-                return result
-            except (ValidationError, SynthesisAgentOutputError) as exc:
-                last_error = exc
-                trace("model.response_validation", "FAILED", "Synthesis Agent 响应未通过结构或引用校验", {
-                    "attempt": attempt + 1, "error": str(exc)
-                })
-                request["messages"].append({
-                    "role": "system",
-                    "content": (
-                        f"The previous output was invalid: {exc}. Return valid JSON only. "
-                        "Copy supporting_refs exactly from each Path's authorized_supporting_refs. "
-                        "Remember that READY Commitments are already approved by humans."
-                    ),
-                })
-        raise SynthesisAgentOutputError("Synthesis Agent returned invalid JSON after one repair") from last_error
+        def build_result(payload: _SynthesisResultPayload) -> SynthesisResult:
+            result = _parse_result(payload, self.profile)
+            _validate_result(result, context)
+            return result
+
+        return await request_structured_output(
+            self._endpoint,
+            request,
+            agent_label="Synthesis Agent",
+            trace=trace,
+            step_prefix="model",
+            narration=_SYNTHESIS_NARRATION,
+            payload_model=_SynthesisResultPayload,
+            build_result=build_result,
+            repair_instruction=lambda exc: (
+                f"The previous output was invalid: {exc}. Return valid JSON only. "
+                "Copy supporting_refs exactly from each Path's authorized_supporting_refs. "
+                "Remember that READY Commitments are already approved by humans."
+            ),
+            execution_error=SynthesisAgentExecutionError,
+            output_error=SynthesisAgentOutputError,
+            # Paraphrased supporting_refs are schema-valid but must still be repaired.
+            recoverable_output_errors=(SynthesisAgentOutputError,),
+        )
 
 
 class SynthesisAgent:

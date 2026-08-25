@@ -6,17 +6,19 @@ from dataclasses import asdict, dataclass
 from typing import Annotated, Any, Protocol
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
+from .agent_runtime import (
+    AgentTraceSink,
+    ModelEndpoint,
+    TraceNarration,
+    contains_chinese as _contains_chinese,
+    request_structured_output,
+)
 from .capabilities import CapabilityRegistry
 from .config import agent_adapter_from_environment
 from .domain import Case, Manifest, ManifestPath, OrchestrationPhase
-from .llm import (
-    CompatibleModelClientError,
-    OpenAICompatibleClient,
-    build_openai_compatible_client,
-    create_chat_completion,
-)
+from .llm import OpenAICompatibleClient, build_openai_compatible_client
 
 
 class OrchestrationError(ValueError):
@@ -34,8 +36,14 @@ class PlannerExecutionError(OrchestrationError):
 NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
-def _contains_chinese(value: str) -> bool:
-    return any("\u4e00" <= character <= "\u9fff" for character in value)
+_PLANNER_NARRATION = TraceNarration(
+    request="\u5411 OpenAI-compatible Planner \u53d1\u9001\u7ed3\u6784\u5316\u8bf7\u6c42",
+    repair_request="\u4e0a\u6b21\u54cd\u5e94\u65e0\u6548\uff0c\u53d1\u9001\u4e00\u6b21\u7ed3\u6784\u5316\u4fee\u590d\u8bf7\u6c42",
+    retry_request="\u6a21\u578b\u8fde\u63a5\u6216\u8bf7\u6c42\u8d85\u65f6\uff0c\u81ea\u52a8\u91cd\u8bd5\u4e00\u6b21",
+    response="\u6536\u5230\u6a21\u578b\u54cd\u5e94",
+    validation_failed="\u6a21\u578b\u54cd\u5e94\u672a\u901a\u8fc7\u7ed3\u6784\u5316\u6821\u9a8c",
+    request_failed="\u6a21\u578b\u670d\u52a1\u8bf7\u6c42\u5931\u8d25",
+)
 
 
 class _PlannedPathPayload(BaseModel):
@@ -93,16 +101,6 @@ class PlannedPath:
 class ManifestDraftResult:
     paths: tuple[PlannedPath, ...]
     planner_profile: str
-
-
-class AgentTraceSink(Protocol):
-    def __call__(
-        self,
-        step: str,
-        status: str,
-        summary: str,
-        details: dict[str, Any] | None = None,
-    ) -> None: ...
 
 
 class PlannerAdapter(Protocol):
@@ -192,6 +190,12 @@ class OpenAICompatiblePlannerAdapter:
         self._base_url = base_url.rstrip("/")
         self._api_key_header = api_key_header
         self._client = configured_client
+        self._endpoint = ModelEndpoint(
+            client=configured_client,
+            base_url=self._base_url,
+            api_key_header=api_key_header,
+            api_key_present=bool(api_key),
+        )
 
     @property
     def profile(self) -> str:
@@ -230,92 +234,26 @@ class OpenAICompatiblePlannerAdapter:
             "max_tokens": 800,
             "stream": False,
         }
-        last_error: Exception | None = None
-        request_attempt = 0
-        for schema_attempt in range(2):
-            response = None
-            for network_attempt in range(2):
-                request_attempt += 1
-                is_network_retry = network_attempt == 1
-                step = (
-                    "planner.retry_request" if is_network_retry
-                    else "planner.request" if schema_attempt == 0
-                    else "planner.repair_request"
-                )
-                trace(
-                    step,
-                    "STARTED",
-                    "模型连接或请求超时，自动重试一次"
-                    if is_network_retry
-                    else "向 OpenAI-compatible Planner 发送结构化请求"
-                    if schema_attempt == 0
-                    else "上次响应无效，发送一次结构化修复请求",
-                    {
-                        "attempt": request_attempt,
-                        "schema_attempt": schema_attempt + 1,
-                        "network_attempt": network_attempt + 1,
-                        "endpoint": f"{self._base_url}/chat/completions",
-                        "request": request,
-                        "authentication": {
-                            "header": self._api_key_header,
-                            "credential_present": bool(self._api_key),
-                            "credential_value_logged": False,
-                        },
-                    },
-                )
-                try:
-                    response = await create_chat_completion(self._client, request)
-                    break
-                except CompatibleModelClientError as exc:
-                    trace(
-                        "planner.request",
-                        "FAILED",
-                        "模型服务请求失败",
-                        {
-                            "attempt": request_attempt,
-                            "http_status": exc.status,
-                            "error_type": exc.cause_type,
-                            "will_retry": exc.status == "unavailable" and network_attempt == 0,
-                        },
-                    )
-                    if exc.status == "unavailable" and network_attempt == 0:
-                        continue
-                    raise PlannerExecutionError(
-                        f"Model planning request failed (status={exc.status})"
-                    ) from exc
-            if response is None:
-                raise PlannerExecutionError("Model planning request failed without a response")
-            try:
-                trace(
-                    "planner.response",
-                    "COMPLETED",
-                    "收到模型响应",
-                    {
-                        "attempt": request_attempt,
-                        "http_status": response.http_status,
-                        "response_id": response.response_id,
-                        "finish_reason": response.finish_reason,
-                        "usage": response.usage,
-                        "content": response.content,
-                    },
-                )
-                payload = _ManifestDraftPayload.model_validate_json(response.content)
-                paths = tuple(PlannedPath(path.definition, path.rationale) for path in payload.paths)
-                return ManifestDraftResult(paths=paths, planner_profile=self.profile)
-            except ValidationError as exc:
-                last_error = exc
-                trace(
-                    "planner.response_validation",
-                    "FAILED",
-                    "模型响应未通过结构化校验",
-                    {"attempt": request_attempt, "error_type": type(exc).__name__, "error": str(exc)},
-                )
-                if schema_attempt == 0:
-                    request["messages"].append({
-                        "role": "system",
-                        "content": "The previous output was invalid. Return one non-empty JSON object matching the exact schema.",
-                    })
-        raise PlannerOutputError("Model returned an invalid JSON planning result after one repair") from last_error
+        def build_result(payload: _ManifestDraftPayload) -> ManifestDraftResult:
+            paths = tuple(PlannedPath(path.definition, path.rationale) for path in payload.paths)
+            return ManifestDraftResult(paths=paths, planner_profile=self.profile)
+
+        return await request_structured_output(
+            self._endpoint,
+            request,
+            agent_label="Planner",
+            trace=trace,
+            step_prefix="planner",
+            narration=_PLANNER_NARRATION,
+            payload_model=_ManifestDraftPayload,
+            build_result=build_result,
+            repair_instruction=lambda exc: (
+                "The previous output was invalid. Return one non-empty JSON object "
+                "matching the exact schema."
+            ),
+            execution_error=PlannerExecutionError,
+            output_error=PlannerOutputError,
+        )
 
 
 class Orchestrator:
