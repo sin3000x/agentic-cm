@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from .capabilities import CapabilityRegistry, default_registry
-from .demo import demo_cases
+from .demo import DEMO_DATASET_ID, LEGACY_DEMO_TITLES, demo_cases
 from .domain import (
     CaseStatus,
     CommitmentDecision,
@@ -58,10 +58,26 @@ class CaseService:
         )
 
     def ensure_demo_data(self) -> None:
-        if not self.repository.list_cases():
+        cases = self.repository.list_cases()
+        if not cases:
             self.repository.reset(demo_cases())
             return
-        for case in self.repository.list_cases():
+        demo_by_id = {case.id: case for case in demo_cases()}
+        for case in cases:
+            template = demo_by_id.get(case.id)
+            if template and case.title == LEGACY_DEMO_TITLES.get(case.id):
+                case.title = template.title
+                case.description = template.description
+                case.business_payload = {
+                    **template.business_payload,
+                    **case.business_payload,
+                }
+                case.version += 1
+                case.updated_at = datetime.now(timezone.utc).isoformat()
+                self.repository.save(case, "case.demo_metadata_migrated", {
+                    "dataset_id": DEMO_DATASET_ID,
+                    "fields": ["title", "description", "business_payload"],
+                })
             if (
                 case.phase is OrchestrationPhase.PATH_EXPLORATION
                 and case.path_attempts
@@ -161,6 +177,25 @@ class CaseService:
         case = self.get_case(case_id)
         can_view_manifest = self._is_case_owner(case, actor=actor, role=role)
         view = case.to_dict()
+        view["workflow_paths"] = [
+            {
+                "id": path.id,
+                "definition": path.definition,
+                "title": path.title,
+                "selected": True,
+                "rationale": "",
+            }
+            for path in (
+                case.manifest.paths
+                if case.manifest and case.phase in {
+                    OrchestrationPhase.PATH_EXPLORATION,
+                    OrchestrationPhase.PROFESSIONAL_COMMITMENT,
+                    OrchestrationPhase.FINAL_REVIEW,
+                }
+                else ()
+            )
+            if path.selected
+        ]
         if not can_view_manifest:
             view["manifest"] = None
             view["synthesis_report"] = None
@@ -195,7 +230,7 @@ class CaseService:
             "commitment.revision_requested": ("actor", "role", "node_id", "path_id"),
             "commitment.rejected": ("actor", "role", "node_id", "path_id"),
             "synthesis.proposed": ("revision", "successful_path_count", "failed_path_count"),
-            "owner.decision": ("actor", "role", "action", "synthesis_revision"),
+            "owner.decision": ("actor", "role", "action", "synthesis_revision", "guidance"),
         }
         timeline: list[dict] = []
         for event in self.repository.list_events(case_id):
@@ -350,6 +385,7 @@ class CaseService:
                 "id": f"ATTEMPT-{index:02d}",
                 "path_id": path.id,
                 "definition": path.definition,
+                "title": path.title,
                 "phase": "AWAITING_HUMAN",
                 "outcome": None,
                 "solution_revision": None,
@@ -685,6 +721,7 @@ class CaseService:
         action: OwnerDecisionAction,
         actor: str,
         role: str,
+        guidance: str | None = None,
     ):
         case = self.get_case(case_id)
         self._require_case_owner(case, actor=actor, role=role)
@@ -692,6 +729,10 @@ class CaseService:
             raise InvalidTransitionError("Case is not awaiting an Owner decision with a Synthesis report")
         if case.status is CaseStatus.CLOSED:
             raise InvalidTransitionError("A closed Case cannot receive another Owner decision")
+        normalized_guidance = guidance.strip() if guidance else ""
+        if action is OwnerDecisionAction.MODIFY and not normalized_guidance:
+            raise InvalidTransitionError("Modification requires Case Owner guidance for the Orchestrator")
+        previous_human_proposal = dict(case.human_proposal) if case.human_proposal else None
         decision = {
             "action": action.value,
             "actor": actor,
@@ -702,12 +743,21 @@ class CaseService:
             "path_attempts_snapshot": [dict(attempt) for attempt in case.path_attempts],
             "commitments_snapshot": [asdict(node) for node in case.commitment_nodes],
         }
+        if action is OwnerDecisionAction.MODIFY:
+            decision["guidance"] = normalized_guidance
+            decision["previous_human_proposal_snapshot"] = previous_human_proposal
         case.owner_decision = decision
         if action is OwnerDecisionAction.CLOSE:
             case.status = CaseStatus.CLOSED
         elif action is OwnerDecisionAction.KEEP_OPEN:
             case.status = CaseStatus.OPEN
         elif action is OwnerDecisionAction.MODIFY:
+            case.human_proposal = {
+                "revision": int((case.human_proposal or {}).get("revision", 0)) + 1,
+                "author": actor,
+                "role": role,
+                "content": normalized_guidance,
+            }
             case.status = CaseStatus.OPEN
             case.phase = OrchestrationPhase.INTAKE
             case.manifest = None
@@ -733,7 +783,7 @@ class CaseService:
             case.path_attempt = {**case.path_attempt, "phase": phase, "outcome": outcome}
 
     def reset_demo(self, dataset_id: str):
-        if dataset_id != "supply-chain-golden-path-v1":
+        if dataset_id != DEMO_DATASET_ID:
             raise ValueError("Unknown demo dataset")
         self.repository.reset(demo_cases())
 

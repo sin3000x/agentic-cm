@@ -8,16 +8,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? `http://localhost:${pro
 type CaseStatus = "处理中" | "暂缓" | "已关闭";
 type CaseRisk = "高" | "中" | "低";
 type CaseSummary = { id:string; title:string; description:string; status:CaseStatus; risk:CaseRisk; owner:string; ownerRole:string; ownerInitial:string; customer:string; due:string; dueTone:"danger"|"warning"|"normal"|"muted"; phase:number; phaseLabel:string; updated:string; attention?:string };
-type ApiCase = { id:string; title:string; description:string; status:"OPEN"|"PENDING"|"CLOSED"; phase:"INTAKE"|"MANIFEST_REVIEW"|"PATH_EXPLORATION"|"PROFESSIONAL_COMMITMENT"|"FINAL_REVIEW"; owner:string; owner_role:string; business_payload?:{customer?:string}; updated_at:string };
-
-const casePresentation: Record<string, Pick<CaseSummary,"risk"|"due"|"dueTone"|"attention">> = {
-  "CM-2026-014": {risk:"高",due:"3 天后",dueTone:"danger",attention:"2 项专业承诺待完成"},
-  "CM-2026-012": {risk:"高",due:"已逾期 1 天",dueTone:"danger",attention:"等待供应商恢复时间证据"},
-  "CM-2026-015": {risk:"中",due:"5 天后",dueTone:"warning",attention:"Case Owner 需批准方案 B"},
-  "CM-2026-009": {risk:"中",due:"8 天后",dueTone:"normal"},
-  "CM-2026-006": {risk:"低",due:"已完成",dueTone:"muted"},
-};
-const defaultPresentation: Pick<CaseSummary,"risk"|"due"|"dueTone"> = {risk:"中",due:"待确认",dueTone:"normal"};
+type ApiCase = { id:string; title:string; description:string; status:"OPEN"|"PENDING"|"CLOSED"; phase:"INTAKE"|"MANIFEST_REVIEW"|"PATH_EXPLORATION"|"PROFESSIONAL_COMMITMENT"|"FINAL_REVIEW"; owner:string; owner_role:string; business_payload?:{customer?:string;risk_level?:"HIGH"|"MEDIUM"|"LOW";commitment_due_date?:string}; commitment_nodes?:Array<{status:string}>; updated_at:string };
 const filters = ["全部","处理中","暂缓","已关闭"] as const;
 const stages = ["受理","评审","探索","承诺","决策"];
 const demoIdentities = [
@@ -31,6 +22,27 @@ function StatusPill({status}:{status:CaseStatus}){return <span className={`statu
 function RiskMark({risk}:{risk:CaseRisk}){return <span className={`riskMark risk-${risk}`}><i />{risk}风险</span>}
 function StageProgress({value,label}:{value:number;label:string}){return <div className="stageProgress" aria-label={`当前阶段：${label}`}><div>{stages.map((stage,index)=><i key={stage} className={index<value?"filled":""}/>)}</div><span>{label}</span></div>}
 
+function duePresentation(apiCase: ApiCase): Pick<CaseSummary,"due"|"dueTone"> {
+  if(apiCase.status==="CLOSED")return {due:"已完成",dueTone:"muted"};
+  const value=apiCase.business_payload?.commitment_due_date;
+  if(!value)return {due:"待确认",dueTone:"normal"};
+  const dueDate=new Date(`${value}T00:00:00`);
+  const today=new Date();today.setHours(0,0,0,0);
+  return {due:dueDate.toLocaleDateString("zh-CN",{month:"numeric",day:"numeric"}),dueTone:dueDate<today?"danger":"normal"};
+}
+
+function attentionFor(apiCase: ApiCase): string|undefined {
+  if(apiCase.status==="CLOSED")return undefined;
+  if(apiCase.phase==="INTAKE")return "等待 Case Owner 启动处置";
+  if(apiCase.phase==="MANIFEST_REVIEW")return "等待 Case Owner 审批 Manifest";
+  if(apiCase.phase==="PATH_EXPLORATION")return "等待 Path 探索完成";
+  if(apiCase.phase==="PROFESSIONAL_COMMITMENT"){
+    const pending=apiCase.commitment_nodes?.filter(node=>node.status==="PENDING"||node.status==="BLOCKED").length??0;
+    return pending>0?`${pending} 项专业承诺待完成`:"等待专业承诺汇合";
+  }
+  return "等待 Case Owner 最终决策";
+}
+
 function mapCase(apiCase: ApiCase): CaseSummary {
   const status: Record<ApiCase["status"], CaseStatus> = {OPEN:"处理中",PENDING:"暂缓",CLOSED:"已关闭"};
   const phases: Record<ApiCase["phase"], {value:number;label:string}> = {
@@ -41,13 +53,14 @@ function mapCase(apiCase: ApiCase): CaseSummary {
     FINAL_REVIEW:{value:5,label:"最终决策"},
   };
   const currentPhase = apiCase.status === "CLOSED" ? {value:5,label:"最终决策"} : phases[apiCase.phase];
-  const presentation = casePresentation[apiCase.id] ?? defaultPresentation;
+  const risk:Record<"HIGH"|"MEDIUM"|"LOW",CaseRisk>={HIGH:"高",MEDIUM:"中",LOW:"低"};
   return {
     id:apiCase.id,title:apiCase.title,description:apiCase.description,status:status[apiCase.status],
+    risk:risk[apiCase.business_payload?.risk_level??"MEDIUM"],attention:attentionFor(apiCase),...duePresentation(apiCase),
     owner:apiCase.owner,ownerRole:apiCase.owner_role,ownerInitial:apiCase.owner.slice(0,1),
     customer:apiCase.business_payload?.customer ?? "内部协同",
     updated:new Date(apiCase.updated_at).toLocaleString("zh-CN",{month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"}),
-    phase:currentPhase.value,phaseLabel:currentPhase.label,...presentation,
+    phase:currentPhase.value,phaseLabel:currentPhase.label,
   };
 }
 
@@ -60,6 +73,9 @@ export default function Home(){
   const [loadState,setLoadState]=useState<"loading"|"ready"|"error">("loading");
   const visibleCases=useMemo(()=>{const keyword=search.trim().toLowerCase();return caseData.filter(item=>(activeFilter==="全部"||item.status===activeFilter)&&(!keyword||[item.id,item.title,item.customer,item.owner].some(value=>value.toLowerCase().includes(keyword))))},[activeFilter,search,caseData]);
   const openCount=caseData.filter(item=>item.status==="处理中").length;
+  const attentionCases=caseData.filter(item=>item.attention);
+  const overdueCount=attentionCases.filter(item=>item.dueTone==="danger").length;
+  const closedCount=caseData.filter(item=>item.status==="已关闭").length;
 
   useEffect(()=>{
     const controller=new AbortController();
@@ -78,12 +94,12 @@ export default function Home(){
     <main className="mainArea">
       <header className="topbar"><div className="breadcrumb"><span>运营控制台</span><b>/</b>Case 总览</div><div className="topActions"><label className="globalSearch"><span>⌕</span><input value={search} onChange={event=>setSearch(event.target.value)} placeholder="搜索 Case、客户或负责人" aria-label="搜索 Case"/><kbd>⌘ K</kbd></label><button className="iconButton" type="button" aria-label="通知">◔<i/></button><button className="createButton" type="button"><span>＋</span>新建 Case</button></div></header>
       <div className="pageContent">
-        <section className="welcome"><div><p className="eyebrow">FRIDAY · AUG 21</p><h1>早上好，陈澄</h1><p className="welcomeCopy">今天有 <strong>3 个事项</strong>需要你的判断，其中 1 个 Case 已接近承诺期限。</p></div><div className="governanceNote"><span>Human governed</span><p>Agent 提案 · 人员决策 · 全程留痕</p></div></section>
+        <section className="welcome"><div><p className="eyebrow">CASE OPERATIONS · LIVE</p><h1>早上好，陈澄</h1><p className="welcomeCopy">当前有 <strong>{attentionCases.length} 个事项</strong>需要你的判断，其中 {overdueCount} 个已超过承诺期限。</p></div><div className="governanceNote"><span>Human governed</span><p>Agent 提案 · 人员决策 · 全程留痕</p></div></section>
         <section className="metrics" aria-label="Case 指标">
           <article><div className="metricIcon metricTeal">◎</div><div><span>进行中 Case</span><strong>{openCount}</strong><small><b>实时</b> 来自 Case API</small></div></article>
-          <article><div className="metricIcon metricAmber">!</div><div><span>需要关注</span><strong>3</strong><small>1 个已逾期</small></div></article>
-          <article><div className="metricIcon metricBlue">✓</div><div><span>本月已闭环</span><strong>12</strong><small><b>+18%</b> 环比</small></div></article>
-          <article><div className="metricIcon metricViolet">↯</div><div><span>平均决策周期</span><strong>2.4<em>天</em></strong><small><b>−0.6 天</b> 较上月</small></div></article>
+          <article><div className="metricIcon metricAmber">!</div><div><span>需要关注</span><strong>{attentionCases.length}</strong><small>{overdueCount} 个已逾期</small></div></article>
+          <article><div className="metricIcon metricBlue">✓</div><div><span>已闭环 Case</span><strong>{closedCount}</strong><small>来自 Case API</small></div></article>
+          <article><div className="metricIcon metricViolet">◇</div><div><span>全部 Case</span><strong>{caseData.length}</strong><small>当前数据集</small></div></article>
         </section>
         <div className="dashboardGrid">
           <section className="casePanel" id="case-overview">
@@ -118,8 +134,8 @@ export default function Home(){
             <div className="tableFooter"><span>显示 {visibleCases.length} / {caseData.length} 个 Case</span><div><button type="button" disabled>‹</button><button type="button" className="active">1</button><button type="button" disabled>›</button></div></div>
           </section>
           <aside className="rightRail">
-            <section className="attentionCard" id="attention"><div className="railHeader"><div><span className="pulseDot"/><h2>需要你的关注</h2></div><b>3</b></div><div className="attentionList">{caseData.filter(item=>item.attention).map((item,index)=><button key={item.id} type="button" onClick={()=>setSelectedCase(item)}><span className={`attentionIndex attention-${index+1}`}>{index+1}</span><span><strong>{item.attention}</strong><small>{item.id} · {item.title}</small></span><em>{index===0?"今天":index===1?"已逾期":"待决策"}</em></button>)}</div><a href="#case-overview">进入我的待办 <span>→</span></a></section>
-            <section className="activityCard" id="activity"><div className="railHeader"><div><h2>最新协作动态</h2></div><button type="button">全部</button></div><ol className="activityList"><li><span className="avatar avatar-blue">王</span><div><p><b>王淼</b> 提交了供应可行性承诺</p><small>CM-2026-014 · 12 分钟前</small></div></li><li><span className="activityAgent">A</span><div><p><b>Planning Agent</b> 生成 Manifest v2</p><small>CM-2026-012 · 28 分钟前</small></div></li><li><span className="avatar avatar-purple">林</span><div><p><b>林乔</b> 请求补充技术证据</p><small>CM-2026-015 · 1 小时前</small></div></li><li><span className="activityDone">✓</span><div><p><b>华南仓到货差异</b> 已完成验证</p><small>CM-2026-006 · 2 天前</small></div></li></ol></section>
+            <section className="attentionCard" id="attention"><div className="railHeader"><div><span className="pulseDot"/><h2>需要你的关注</h2></div><b>{attentionCases.length}</b></div><div className="attentionList">{attentionCases.map((item,index)=><button key={item.id} type="button" onClick={()=>setSelectedCase(item)}><span className={`attentionIndex attention-${index+1}`}>{index+1}</span><span><strong>{item.attention}</strong><small>{item.id} · {item.title}</small></span><em>{item.dueTone==="danger"?"已逾期":item.due}</em></button>)}</div><a href="#case-overview">进入我的待办 <span>→</span></a></section>
+            <section className="activityCard" id="activity"><div className="railHeader"><div><h2>最新协作动态</h2></div><button type="button">全部</button></div><ol className="activityList"><li><span className="avatar avatar-blue">王</span><div><p><b>王淼</b> 提交了供应可行性承诺</p><small>CM-2026-014 · 12 分钟前</small></div></li><li><span className="activityAgent">A</span><div><p><b>Planning Agent</b> 生成 Manifest v2</p><small>CM-2026-012 · 28 分钟前</small></div></li><li><span className="avatar avatar-purple">林</span><div><p><b>林乔</b> 请求补充技术证据</p><small>CM-2026-015 · 1 小时前</small></div></li><li><span className="activityDone">✓</span><div><p><b>CM-2026-006</b> 已完成验证</p><small>2 天前</small></div></li></ol></section>
           </aside>
         </div>
       </div>

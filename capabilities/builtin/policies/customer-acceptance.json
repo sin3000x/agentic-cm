@@ -2,7 +2,7 @@
   "schema_version": 1,
   "kind": "policy",
   "id": "POL-CUSTOMER-2",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "title": "客户接受度确认",
   "status": "published",
   "selector": {
@@ -16,7 +16,11 @@
         "role": "供应经理",
         "node_type": "REVIEW",
         "reviews": ["customer", "overall_recommendation"],
-        "depends_on": ["SUPPLY", "TECH"]
+        "depends_on": ["SUPPLY", "TECH"],
+        "role_report": {
+          "dimension": "客户与商务接受度",
+          "sentence_prefix": "供应经理维度："
+        }
       }
     ]
   }

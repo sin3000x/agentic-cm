@@ -19,6 +19,7 @@ from agentic_cm.domain import (
     OrchestrationPhase,
     OwnerDecisionAction,
 )
+from agentic_cm.demo import DEMO_DATASET_ID, demo_cases
 from agentic_cm.orchestrator import (
     DeterministicPlannerAdapter,
     ManifestDraftResult,
@@ -53,6 +54,30 @@ def make_service(tmp_path: Path) -> CaseService:
     )
     service.ensure_demo_data()
     return service
+
+
+def test_demo_dataset_is_the_authoritative_case_overview_source(tmp_path: Path) -> None:
+    cases = {case.id: case for case in demo_cases()}
+
+    assert cases["CM-2026-014"].title == "Northstar Mobility MCU-X7 订单预计延期 12 天"
+    assert cases["CM-2026-015"].title == "MCU-X7B 替代料缺少客户认证与技术验证"
+    assert all(case.description != "固定演示 Case" for case in cases.values())
+    assert all(case.business_payload.get("risk_level") for case in cases.values())
+    assert all(case.business_payload.get("commitment_due_date") for case in cases.values())
+
+    service = make_service(tmp_path)
+    legacy = service.get_case("CM-2026-012")
+    legacy.title = "供应商交付异常"
+    legacy.description = "固定演示 Case"
+    legacy.business_payload = {}
+    service.repository.save(legacy, "test.legacy_seed", {})
+    service.ensure_demo_data()
+
+    migrated = service.get_case("CM-2026-012")
+    assert migrated.title == cases["CM-2026-012"].title
+    assert migrated.business_payload["risk_level"] == "HIGH"
+    assert service.repository.list_events("CM-2026-012")[-1]["event_type"] == "case.demo_metadata_migrated"
+    service.reset_demo(DEMO_DATASET_ID)
 
 
 def orchestrate(service: CaseService):
@@ -103,8 +128,8 @@ def test_orchestrator_builds_manifest_from_open_delay_case(tmp_path: Path) -> No
         "MaterialSubstitution", "SupplyExpediting", "OrderSplit"
     ]
     assert set(case.manifest.policy_refs) == {
-        "POL-SUBSTITUTION-3@3.2.0", "POL-CUSTOMER-2@2.3.0",
-        "POL-EXPEDITING-1@1.2.0", "POL-ORDER-SPLIT-1@1.2.0",
+        "POL-SUBSTITUTION-3@3.3.0", "POL-CUSTOMER-2@2.4.0",
+        "POL-EXPEDITING-1@1.3.0", "POL-ORDER-SPLIT-1@1.3.0",
     }
     assert {item["id"] for item in case.manifest.capability_snapshot["compiled_policy"]["commitments"]} == {
         "SUPPLY", "TECH", "CUSTOMER"
@@ -216,6 +241,7 @@ def test_manifest_is_visible_and_actionable_only_by_case_owner(tmp_path: Path) -
     assert owner_view["manifest"] is not None
     assert owner_view["permissions"]["can_approve_manifest"] is True
     assert other_role_view["manifest"] is None
+    assert other_role_view["workflow_paths"] == []
     assert other_role_view["synthesis_report"] is None
     assert other_role_view["permissions"]["can_view_manifest"] is False
     assert other_role_view["permissions"]["can_decide_case"] is False
@@ -323,6 +349,13 @@ def test_manifest_http_endpoints_enforce_owner_boundary(tmp_path: Path, monkeypa
     )
     assert approval.status_code == 200
     assert approval.json()["manifest"] is None
+    assert approval.json()["workflow_paths"] == [{
+        "id": "PATH-01",
+        "definition": "MaterialSubstitution",
+        "title": "物料替代",
+        "selected": True,
+        "rationale": "",
+    }]
     assert client.get("/api/cases/CM-2026-014/timeline").json()[-1]["details"] == {
         "actor": "王淼",
         "role": "主计划",
@@ -464,9 +497,8 @@ def test_demo_manifest_freezes_resolved_capabilities(tmp_path: Path) -> None:
         "mock.customer-acceptance.lookup",
     ]
     role_contracts = {
-        item["role_report"]["role"]: item["role_report"]["dimension"]
-        for item in snapshot["asset_payloads"]["skills"]
-        if item.get("role_report")
+        item["role"]: item["role_report"]["dimension"]
+        for item in snapshot["compiled_policy"]["commitments"]
     }
     assert role_contracts == {
         "研发": "技术可行性",
@@ -554,7 +586,11 @@ def test_incompatible_commitment_policy_conflict_fails_closed(tmp_path: Path) ->
         },
         "requirements": {
             "commitments": [
-                {"id": "REVIEW", "role": "主计划", "node_type": "REVIEW", "reviews": ["supply"], "depends_on": []}
+                {
+                    "id": "REVIEW", "role": "主计划", "node_type": "REVIEW",
+                    "reviews": ["supply"], "depends_on": [],
+                    "role_report": {"dimension": "供应可行性", "sentence_prefix": "主计划维度："},
+                }
             ]
         },
     }
@@ -563,7 +599,11 @@ def test_incompatible_commitment_policy_conflict_fails_closed(tmp_path: Path) ->
         "id": "POL-TWO",
         "requirements": {
             "commitments": [
-                {"id": "REVIEW", "role": "研发", "node_type": "REVIEW", "reviews": ["technical"], "depends_on": []}
+                {
+                    "id": "REVIEW", "role": "研发", "node_type": "REVIEW",
+                    "reviews": ["technical"], "depends_on": [],
+                    "role_report": {"dimension": "技术可行性", "sentence_prefix": "研发维度："},
+                }
             ]
         },
     }
@@ -761,12 +801,31 @@ def test_skill_declares_three_candidates_and_manifest_supports_all_paths(tmp_pat
         "CM-2026-014", actor="陈澄", role="订单统筹经理"
     )
     assert [attempt["definition"] for attempt in approved.path_attempts] == expected_definitions
+    assert [attempt["title"] for attempt in approved.path_attempts] == [
+        "物料替代", "供应提拉", "订单拆分"
+    ]
     assert {node.path_id for node in approved.commitment_nodes} == {"PATH-01", "PATH-02", "PATH-03"}
     assert {node.id for node in approved.commitment_nodes if node.path_id == "PATH-02"} == {
         "EXPEDITE-SUPPLY", "EXPEDITE-DELIVERY"
     }
     assert {node.id for node in approved.commitment_nodes if node.path_id == "PATH-03"} == {
         "SPLIT-PLAN", "SPLIT-CUSTOMER"
+    }
+    expediting_reports = {
+        (item["role"], item["role_report"]["dimension"])
+        for item in case.manifest.capability_snapshots["PATH-02"]["compiled_policy"]["commitments"]
+    }
+    assert expediting_reports == {
+        ("采购与供应协同", "供应商产能与供应日期"),
+        ("物流", "运输与到货日期"),
+    }
+    split_reports = {
+        (item["role"], item["role_report"]["dimension"])
+        for item in case.manifest.capability_snapshots["PATH-03"]["compiled_policy"]["commitments"]
+    }
+    assert split_reports == {
+        ("主计划", "可用数量与交付批次"),
+        ("供应经理", "客户接受度与剩余承诺"),
     }
     split_capabilities = service.get_case_capabilities("CM-2026-014", "PATH-03")
     assert {item["id"] for item in split_capabilities["snapshot"]["policies"]} == {"POL-ORDER-SPLIT-1"}
@@ -786,12 +845,22 @@ def test_multi_path_exploration_finishes_only_after_every_solution_revision(tmp_
         case = asyncio.run(service.execute_path(
             "CM-2026-014", path_id, actor="陈澄", role="订单统筹经理"
         ))
+        attempt = next(item for item in case.path_attempts if item["path_id"] == path_id)
+        expected_roles = {
+            item["role"]
+            for item in case.manifest.capability_snapshots[path_id]["compiled_policy"]["commitments"]
+        }
+        assert {item["role"] for item in attempt["solution_revision"]["role_reports"]} == expected_roles
         assert case.phase is OrchestrationPhase.PATH_EXPLORATION
         assert service.get_inbox("主计划") == []
 
     case = asyncio.run(service.execute_path(
         "CM-2026-014", "PATH-03", actor="陈澄", role="订单统筹经理"
     ))
+    split_attempt = next(item for item in case.path_attempts if item["path_id"] == "PATH-03")
+    assert {item["role"] for item in split_attempt["solution_revision"]["role_reports"]} == {
+        "主计划", "供应经理"
+    }
     assert case.phase is OrchestrationPhase.PROFESSIONAL_COMMITMENT
     assert service.get_inbox("主计划")
 
@@ -965,11 +1034,26 @@ def test_owner_can_close_keep_open_or_modify_after_synthesis(tmp_path: Path) -> 
     assert kept.status is CaseStatus.OPEN
     assert kept.phase is OrchestrationPhase.FINAL_REVIEW
 
+    try:
+        service.decide_case(
+            case.id,
+            action=OwnerDecisionAction.MODIFY,
+            actor="陈澄",
+            role="订单统筹经理",
+        )
+    except InvalidTransitionError as exc:
+        assert "guidance" in str(exc)
+    else:
+        raise AssertionError("MODIFY must require explicit Case Owner guidance")
+    assert service.get_case(case.id).phase is OrchestrationPhase.FINAL_REVIEW
+
+    guidance = "保留物料替代 Path，并重点比较无需客户重新认证的交付拆分方案。"
     modified = service.decide_case(
         case.id,
         action=OwnerDecisionAction.MODIFY,
         actor="陈澄",
         role="订单统筹经理",
+        guidance=guidance,
     )
     assert modified.status is CaseStatus.OPEN
     assert modified.phase is OrchestrationPhase.INTAKE
@@ -977,6 +1061,23 @@ def test_owner_can_close_keep_open_or_modify_after_synthesis(tmp_path: Path) -> 
     assert modified.synthesis_report is None
     assert modified.commitment_nodes == []
     assert modified.owner_decision["action"] == "MODIFY"
+    assert modified.owner_decision["guidance"] == guidance
+    assert modified.owner_decision["previous_human_proposal_snapshot"]["revision"] == 1
+    assert modified.human_proposal == {
+        "revision": 2,
+        "author": "陈澄",
+        "role": "订单统筹经理",
+        "content": guidance,
+    }
+
+    asyncio.run(service.orchestrate_case(
+        case.id, actor="陈澄", role="订单统筹经理"
+    ))
+    rerun = service.get_agent_runs(
+        case.id, actor="陈澄", role="订单统筹经理", agent_type="orchestrator"
+    )[0]
+    planner_input = next(event for event in rerun["events"] if event["step"] == "planner.input")
+    assert planner_input["details"]["context"]["human_proposal"]["content"] == guidance
 
     close_root = tmp_path / "close"
     close_root.mkdir()
@@ -1194,6 +1295,63 @@ def test_openai_compatible_adapter_repairs_pydantic_schema_failure_once() -> Non
     assert result.paths[0].definition == "MaterialSubstitution"
     assert [args[0] for args, _ in trace_events].count("planner.response_validation") == 1
     assert [args[0] for args, _ in trace_events].count("planner.repair_request") == 1
+
+
+def test_openai_compatible_planner_retries_one_transient_connection_failure() -> None:
+    attempts = 0
+    trace_events = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise httpx.ReadTimeout("temporary timeout", request=request)
+        return httpx.Response(200, json={
+            "id": "response-after-retry",
+            "object": "chat.completion",
+            "created": 2,
+            "model": "vendor-model-42",
+            "choices": [{
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {"role": "assistant", "content": json.dumps({
+                    "paths": [{
+                        "definition": "SupplyExpediting",
+                        "rationale": "Owner 要求重点探索供应提拉，当前缺料风险与该路径相关。",
+                    }],
+                }, ensure_ascii=False)},
+            }],
+        })
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+            adapter = OpenAICompatiblePlannerAdapter(
+                "secret-key",
+                model="vendor-model-42",
+                base_url="https://gateway.example/v1",
+                http_client=http_client,
+            )
+            from agentic_cm.orchestrator import PlanningCandidate, PlanningContext
+            return await adapter.propose(
+                PlanningContext(
+                    "CM-1", 2, "延期", "关键物料延期", {}, {},
+                    {"revision": 2, "author": "陈澄", "role": "订单统筹经理", "content": "探索一下提拉看看"},
+                ),
+                (PlanningCandidate(
+                    "SupplyExpediting", "供应提拉", "desc",
+                    ("POL-1",), ("skill-1",), (), ("EXPEDITE-SUPPLY",),
+                    ({"id": "skill-1", "description": "desc", "instructions_markdown": "guide"},),
+                ),),
+                lambda *args, **kwargs: trace_events.append((args, kwargs)),
+            )
+
+    result = asyncio.run(run())
+    assert attempts == 2
+    assert result.paths[0].definition == "SupplyExpediting"
+    assert [args[0] for args, _ in trace_events].count("planner.retry_request") == 1
+    assert [args[0] for args, _ in trace_events].count("planner.repair_request") == 0
+    failed = next(args for args, _ in trace_events if args[0] == "planner.request" and args[1] == "FAILED")
+    assert failed[3]["will_retry"] is True
 
 
 def test_orchestrator_trace_persists_each_governed_step(tmp_path: Path) -> None:
@@ -1485,6 +1643,85 @@ def test_openai_compatible_path_agent_uses_manifest_assembled_context(tmp_path: 
         "研发", "主计划", "供应经理"
     }
     assert "path-secret" not in json.dumps(observed["payload"])
+
+
+def test_supply_expediting_role_reports_are_assembled_from_frozen_policy(tmp_path: Path) -> None:
+    observed = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed["payload"] = json.loads(request.content)
+        return httpx.Response(200, json={
+            "id": "response-expediting-policy-reports",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "vendor-model-42",
+            "choices": [{
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {"role": "assistant", "content": json.dumps({
+                    "summary": "供应提拉方案等待采购与物流责任角色确认。",
+                    "options": [{
+                        "id": "EXPEDITE-OPTION-1",
+                        "title": "供应与运输联合提拉",
+                        "description": "先核验供应商产能，再评估运输提速。",
+                        "benefits": ["形成分阶段核验方案"],
+                        "risks": ["产能与到货日期尚未确认"],
+                        "assumptions": ["责任角色可提供当前证据"],
+                    }],
+                    "recommendation": {
+                        "option_ids": ["EXPEDITE-OPTION-1"],
+                        "rationale": "该选项覆盖供应与运输两个依赖环节。",
+                    },
+                    "evidence_gaps": ["供应商产能和运输时效仍待确认"],
+                    "role_reports": [{
+                        "role": "采购与供应协同",
+                        "dimension": "供应商产能与供应日期",
+                        "report": "采购与供应协同维度：供应商产能与最早供应日期仍须责任角色核验后确认。",
+                    }, {
+                        "role": "物流",
+                        "dimension": "运输与到货日期",
+                        "report": "物流维度：运输方式与预计到货日期仍须物流责任角色核验后确认。",
+                    }],
+                }, ensure_ascii=False)},
+            }],
+        })
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            service = CaseService(
+                CaseRepository(tmp_path / "expediting-policy-reports.db"),
+                planner=DeterministicPlannerAdapter(),
+                path_agent=OpenAICompatiblePathAgentAdapter(
+                    "secret", model="vendor-model-42", base_url="https://gateway.example/v1",
+                    http_client=client,
+                ),
+            )
+            service.ensure_demo_data()
+            await service.orchestrate_case("CM-2026-014", actor="陈澄", role="订单统筹经理")
+            case = service.get_case("CM-2026-014")
+            expediting_path = next(
+                path for path in case.manifest.paths if path.definition == "SupplyExpediting"
+            )
+            service.approve_manifest(
+                case.id, [expediting_path.id], actor="陈澄", role="订单统筹经理"
+            )
+            return await service.execute_path(
+                case.id, expediting_path.id, actor="陈澄", role="订单统筹经理"
+            )
+
+    case = asyncio.run(run())
+    context = json.loads(observed["payload"]["messages"][1]["content"])
+    assert context["required_role_reports"] == [{
+        "role": "采购与供应协同",
+        "dimension": "供应商产能与供应日期",
+        "sentence_prefix": "采购与供应协同维度：",
+    }, {
+        "role": "物流",
+        "dimension": "运输与到货日期",
+        "sentence_prefix": "物流维度：",
+    }]
+    revision = case.path_attempts[0]["solution_revision"]
+    assert {item["role"] for item in revision["role_reports"]} == {"采购与供应协同", "物流"}
 
 
 def test_failed_path_agent_trace_is_kept_without_solution_mutation(tmp_path: Path) -> None:

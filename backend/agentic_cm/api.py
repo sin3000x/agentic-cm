@@ -58,6 +58,7 @@ class CommitmentDecisionRequest(CommitmentApprovalRequest):
 
 class OwnerDecisionRequest(OwnerActionRequest):
     action: OwnerDecisionAction
+    guidance: str | None = None
 
 
 @app.get("/api/health")
@@ -220,6 +221,7 @@ def decide_case(case_id: str, request: OwnerDecisionRequest):
             action=request.action,
             actor=request.actor,
             role=request.role,
+            guidance=request.guidance,
         ).to_dict()
     except CaseNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Case not found") from exc

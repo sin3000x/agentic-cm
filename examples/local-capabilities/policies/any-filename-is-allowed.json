@@ -16,7 +16,11 @@
         "role": "合规专员",
         "node_type": "REVIEW",
         "reviews": ["customer"],
-        "depends_on": ["TECH"]
+        "depends_on": ["TECH"],
+        "role_report": {
+          "dimension": "地区认证合规性",
+          "sentence_prefix": "合规专员维度："
+        }
       }
     ]
   }

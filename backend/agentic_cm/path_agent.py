@@ -292,8 +292,11 @@ class OpenAICompatiblePathAgentAdapter:
                         "title, description, analysis, recommendation, evidence gap, and role report in Chinese. "
                         "Return JSON only. "
                         f"Match this JSON Schema exactly: {json.dumps(response_schema)}. "
+                        "Return role_reports for exactly the Policy-triggered contracts in "
+                        "required_role_reports, with no missing or extra role/dimension pair; "
+                        "if required_role_reports is empty, return an empty role_reports array. "
                         "Keep the JSON concise: at most two short items in each benefits, risks, assumptions, "
-                        "and evidence_gaps array. Do not repeat the full evidence outside the three role reports."
+                        "and evidence_gaps array. Do not repeat the full evidence outside the required role reports."
                     ),
                 },
                 {
@@ -363,10 +366,13 @@ class OpenAICompatiblePathAgentAdapter:
                         "role": "system",
                         "content": (
                             f"The previous output was invalid: {exc}. Return one non-empty JSON object "
-                            "matching the exact schema, every authorized option, and every required role report."
+                            "matching the exact schema, every authorized option, and exactly the Policy-triggered "
+                            "required_role_reports with no extra role/dimension pair."
                         ),
                     })
-        raise PathAgentOutputError("Path Agent returned invalid JSON after one repair") from last_error
+        raise PathAgentOutputError(
+            f"Path Agent returned invalid structured output after one repair: {last_error}"
+        ) from last_error
 
 
 class PathAgent:
@@ -410,6 +416,16 @@ class PathAgent:
         commitments = snapshot.get("compiled_policy", {}).get("commitments", [])
         if not commitments:
             raise PathAgentError(f"Frozen Manifest has no mandatory Policy for {path.definition}")
+        missing_report_contracts = [
+            commitment.get("id", "<unknown>")
+            for commitment in commitments
+            if not isinstance(commitment.get("role_report"), dict)
+        ]
+        if missing_report_contracts:
+            raise PathAgentError(
+                "Frozen Manifest Policy commitments have no role-report contract; "
+                f"regenerate the Manifest with current Policies: {missing_report_contracts}"
+            )
         previous = attempt.get("solution_revision") if isinstance(attempt.get("solution_revision"), dict) else None
         if previous and attempt.get("phase") != "REVISING":
             raise PathAgentError("An existing SolutionRevision can only be regenerated after a human revision request")
@@ -423,11 +439,16 @@ class PathAgent:
             raise PathAgentError("Frozen execution Skills define conflicting Path options")
         authorized_options = option_contracts[0] if option_contracts else ()
         required_role_reports = tuple(
-            skill["role_report"] for skill in execution_skills if skill.get("role_report")
+            {
+                "role": commitment["role"],
+                "dimension": commitment["role_report"]["dimension"],
+                "sentence_prefix": commitment["role_report"]["sentence_prefix"],
+            }
+            for commitment in commitments
         )
         role_keys = [(item["role"], item["dimension"]) for item in required_role_reports]
         if len(set(role_keys)) != len(role_keys):
-            raise PathAgentError("Frozen execution Skills define duplicate role report contracts")
+            raise PathAgentError("Frozen Policies define duplicate role report contracts")
 
         tools_by_id: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
         for skill in execution_skills:
