@@ -1,15 +1,27 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from uuid import uuid4
 
 from .capabilities import CapabilityRegistry, default_registry
 from .demo import demo_cases
-from .domain import CommitmentDecision, CommitmentNode, NodeStatus, OrchestrationPhase
+from .domain import (
+    CaseStatus,
+    CommitmentDecision,
+    CommitmentNode,
+    NodeStatus,
+    OrchestrationPhase,
+    OwnerDecisionAction,
+)
 from .orchestrator import Orchestrator, PlannerAdapter, planner_from_environment
 from .path_agent import PathAgent, PathAgentAdapter, path_agent_from_environment
 from .repository import CaseRepository
+from .synthesis_agent import (
+    SynthesisAgent,
+    SynthesisAgentAdapter,
+    synthesis_agent_from_environment,
+)
 
 
 class CaseNotFoundError(LookupError):
@@ -32,6 +44,7 @@ class CaseService:
         *,
         planner: PlannerAdapter | None = None,
         path_agent: PathAgentAdapter | None = None,
+        synthesis_agent: SynthesisAgentAdapter | None = None,
     ) -> None:
         self.repository = repository
         self.capabilities = capabilities or default_registry()
@@ -40,6 +53,9 @@ class CaseService:
             planner or planner_from_environment(),
         )
         self.path_agent = PathAgent(path_agent or path_agent_from_environment())
+        self.synthesis_agent = SynthesisAgent(
+            synthesis_agent or synthesis_agent_from_environment()
+        )
 
     def ensure_demo_data(self) -> None:
         if not self.repository.list_cases():
@@ -80,6 +96,36 @@ class CaseService:
                 self.repository.save(case, "commitment.pending_migration", {
                     "reason": "introduce explicit role Inbox approval before READY",
                 })
+            if case.phase is OrchestrationPhase.PROFESSIONAL_COMMITMENT:
+                previous_attempt_states = [
+                    (attempt.get("path_id"), attempt.get("phase"), attempt.get("outcome"))
+                    for attempt in case.path_attempts
+                ]
+                for attempt in list(case.path_attempts):
+                    path_id = attempt.get("path_id")
+                    path_nodes = [node for node in case.commitment_nodes if node.path_id == path_id]
+                    if any(node.status is NodeStatus.REJECTED for node in path_nodes):
+                        self._update_path_attempt(case, path_id, phase="DONE", outcome="REJECTED")
+                    elif path_nodes and all(node.status is NodeStatus.READY for node in path_nodes):
+                        self._update_path_attempt(case, path_id, phase="DONE", outcome="SUCCEEDED")
+                if self._all_selected_paths_terminal(case):
+                    case.phase = OrchestrationPhase.FINAL_REVIEW
+                    case.version += 1
+                    case.updated_at = datetime.now(timezone.utc).isoformat()
+                    self.repository.save(case, "case.phase_migrated", {
+                        "from": OrchestrationPhase.PROFESSIONAL_COMMITMENT.value,
+                        "to": OrchestrationPhase.FINAL_REVIEW.value,
+                        "reason": "all selected Path approval DAGs are terminal",
+                    })
+                elif previous_attempt_states != [
+                    (attempt.get("path_id"), attempt.get("phase"), attempt.get("outcome"))
+                    for attempt in case.path_attempts
+                ]:
+                    case.version += 1
+                    case.updated_at = datetime.now(timezone.utc).isoformat()
+                    self.repository.save(case, "path_attempt.terminal_migrated", {
+                        "reason": "derive terminal Path outcomes from existing approval DAG states",
+                    })
 
     def list_cases(self):
         return self.repository.list_cases()
@@ -117,9 +163,17 @@ class CaseService:
         view = case.to_dict()
         if not can_view_manifest:
             view["manifest"] = None
+            view["synthesis_report"] = None
+            if view.get("owner_decision"):
+                view["owner_decision"] = {
+                    key: view["owner_decision"][key]
+                    for key in ("action", "actor", "role", "synthesis_revision", "decided_at")
+                    if key in view["owner_decision"]
+                }
         view["permissions"] = {
             "can_view_manifest": can_view_manifest,
             "can_approve_manifest": can_view_manifest,
+            "can_decide_case": can_view_manifest,
         }
         return view
 
@@ -140,6 +194,8 @@ class CaseService:
             "commitment.approved": ("actor", "role", "node_id", "path_id"),
             "commitment.revision_requested": ("actor", "role", "node_id", "path_id"),
             "commitment.rejected": ("actor", "role", "node_id", "path_id"),
+            "synthesis.proposed": ("revision", "successful_path_count", "failed_path_count"),
+            "owner.decision": ("actor", "role", "action", "synthesis_revision"),
         }
         timeline: list[dict] = []
         for event in self.repository.list_events(case_id):
@@ -536,6 +592,15 @@ class CaseService:
         else:
             raise InvalidTransitionError(f"Unsupported Commitment decision: {decision}")
         case.commitment_nodes = nodes
+        for attempt in list(case.path_attempts):
+            attempt_path_id = attempt.get("path_id")
+            path_nodes = [node for node in nodes if node.path_id == attempt_path_id]
+            if any(node.status is NodeStatus.REJECTED for node in path_nodes):
+                self._update_path_attempt(case, attempt_path_id, phase="DONE", outcome="REJECTED")
+            elif path_nodes and all(node.status is NodeStatus.READY for node in path_nodes):
+                self._update_path_attempt(case, attempt_path_id, phase="DONE", outcome="SUCCEEDED")
+        if self._all_selected_paths_terminal(case):
+            case.phase = OrchestrationPhase.FINAL_REVIEW
         case.version += 1
         case.updated_at = datetime.now(timezone.utc).isoformat()
         self.repository.save(case, event_type, {
@@ -544,6 +609,117 @@ class CaseService:
             "actor": actor,
             "role": role,
         })
+        return case
+
+    @staticmethod
+    def _all_selected_paths_terminal(case) -> bool:
+        selected_ids = {
+            path.id for path in (case.manifest.paths if case.manifest else ()) if path.selected
+        }
+        attempts = {attempt.get("path_id"): attempt for attempt in case.path_attempts}
+        return bool(selected_ids) and all(
+            attempts.get(path_id, {}).get("phase") == "DONE"
+            and attempts.get(path_id, {}).get("outcome") in {"SUCCEEDED", "REJECTED"}
+            for path_id in selected_ids
+        )
+
+    async def synthesize_case(self, case_id: str, *, actor: str, role: str):
+        case = self.get_case(case_id)
+        self._require_case_owner(case, actor=actor, role=role)
+        run_id = f"RUN-{uuid4()}"
+        adapter_profile = getattr(
+            self.synthesis_agent.adapter,
+            "profile",
+            type(self.synthesis_agent.adapter).__name__,
+        )
+        self.repository.create_agent_run(
+            run_id,
+            case.id,
+            agent_type="synthesis",
+            adapter_profile=adapter_profile,
+            initiated_by=actor,
+        )
+
+        def trace(step: str, status: str, summary: str, details: dict | None = None) -> None:
+            self.repository.append_agent_trace(
+                run_id, step=step, status=status, summary=summary, details=details
+            )
+
+        trace("run.started", "STARTED", "Synthesis AgentRun 已启动", {
+            "agent_type": "synthesis", "initiated_by": actor, "role": role
+        })
+        try:
+            report = await self.synthesis_agent.run(case, trace)
+        except Exception as exc:
+            trace("run.failed", "FAILED", "Synthesis AgentRun 失败；CaseSynthesis 未修改", {
+                "error_type": type(exc).__name__, "error": str(exc)
+            })
+            self.repository.finish_agent_run(run_id, status="FAILED", error=exc)
+            raise
+        case.synthesis_report = report
+        case.owner_decision = None
+        case.version += 1
+        case.updated_at = datetime.now(timezone.utc).isoformat()
+        successful = sum(
+            item["status"] == "SUCCEEDED" for item in report["path_assessments"]
+        )
+        failed = len(report["path_assessments"]) - successful
+        self.repository.save(case, "synthesis.proposed", {
+            "revision": report["revision"],
+            "successful_path_count": successful,
+            "failed_path_count": failed,
+            "generated_by": report["generated_by"],
+        })
+        trace("run.completed", "COMPLETED", "CaseSynthesis 已持久化，等待 Case Owner 最终决策", {
+            "revision": report["revision"], "case_version": case.version
+        })
+        self.repository.finish_agent_run(
+            run_id, status="SUCCEEDED", adapter_profile=report["generated_by"]
+        )
+        return case
+
+    def decide_case(
+        self,
+        case_id: str,
+        *,
+        action: OwnerDecisionAction,
+        actor: str,
+        role: str,
+    ):
+        case = self.get_case(case_id)
+        self._require_case_owner(case, actor=actor, role=role)
+        if case.phase is not OrchestrationPhase.FINAL_REVIEW or not case.synthesis_report:
+            raise InvalidTransitionError("Case is not awaiting an Owner decision with a Synthesis report")
+        if case.status is CaseStatus.CLOSED:
+            raise InvalidTransitionError("A closed Case cannot receive another Owner decision")
+        decision = {
+            "action": action.value,
+            "actor": actor,
+            "role": role,
+            "synthesis_revision": case.synthesis_report["revision"],
+            "decided_at": datetime.now(timezone.utc).isoformat(),
+            "synthesis_snapshot": dict(case.synthesis_report),
+            "path_attempts_snapshot": [dict(attempt) for attempt in case.path_attempts],
+            "commitments_snapshot": [asdict(node) for node in case.commitment_nodes],
+        }
+        case.owner_decision = decision
+        if action is OwnerDecisionAction.CLOSE:
+            case.status = CaseStatus.CLOSED
+        elif action is OwnerDecisionAction.KEEP_OPEN:
+            case.status = CaseStatus.OPEN
+        elif action is OwnerDecisionAction.MODIFY:
+            case.status = CaseStatus.OPEN
+            case.phase = OrchestrationPhase.INTAKE
+            case.manifest = None
+            case.path_attempt = None
+            case.path_attempts = []
+            case.commitment_nodes = []
+            case.synthesis_report = None
+        else:
+            raise InvalidTransitionError(f"Unsupported Owner decision: {action}")
+        case.version += 1
+        case.updated_at = decision["decided_at"]
+        self.repository.save(case, "owner.decision", decision)
         return case
 
     @staticmethod

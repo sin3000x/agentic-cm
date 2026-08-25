@@ -8,11 +8,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .config import load_runtime_environment
-from .domain import CommitmentDecision
+from .domain import CommitmentDecision, OwnerDecisionAction
 from .orchestrator import OrchestrationError
 from .path_agent import PathAgentError, PathAgentExecutionError
 from .repository import CaseRepository
 from .service import AuthorizationError, CaseNotFoundError, CaseService, InvalidTransitionError
+from .synthesis_agent import SynthesisAgentError, SynthesisAgentExecutionError
 
 
 load_runtime_environment()
@@ -53,6 +54,10 @@ class CommitmentApprovalRequest(BaseModel):
 
 class CommitmentDecisionRequest(CommitmentApprovalRequest):
     decision: CommitmentDecision
+
+
+class OwnerDecisionRequest(OwnerActionRequest):
+    action: OwnerDecisionAction
 
 
 @app.get("/api/health")
@@ -189,6 +194,39 @@ async def execute_path(case_id: str, path_id: str, request: OwnerActionRequest):
 @app.get("/api/inbox")
 def get_inbox(role: str):
     return service.get_inbox(role)
+
+
+@app.post("/api/cases/{case_id}/synthesize")
+async def synthesize_case(case_id: str, request: OwnerActionRequest):
+    try:
+        return (await service.synthesize_case(
+            case_id, actor=request.actor, role=request.role
+        )).to_dict()
+    except CaseNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Case not found") from exc
+    except SynthesisAgentExecutionError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except SynthesisAgentError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except AuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@app.post("/api/cases/{case_id}/owner-decision")
+def decide_case(case_id: str, request: OwnerDecisionRequest):
+    try:
+        return service.decide_case(
+            case_id,
+            action=request.action,
+            actor=request.actor,
+            role=request.role,
+        ).to_dict()
+    except CaseNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Case not found") from exc
+    except InvalidTransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except AuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @app.post("/api/cases/{case_id}/paths/{path_id}/commitments/{node_id}/approve")

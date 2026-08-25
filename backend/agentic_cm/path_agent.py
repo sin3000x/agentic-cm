@@ -8,7 +8,7 @@ from typing import Annotated, Any, Protocol
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError, model_validator
 
-from .config import load_runtime_environment
+from .config import agent_adapter_from_environment
 from .domain import Case, ManifestPath, OrchestrationPhase
 from .llm import (
     CompatibleModelClientError,
@@ -631,11 +631,7 @@ def _parse_result(payload: _PathAgentResultPayload, adapter_profile: str) -> Pat
 
 
 def path_agent_from_environment() -> PathAgentAdapter:
-    load_runtime_environment()
-    adapter = os.getenv(
-        "AGENTIC_CM_PATH_ADAPTER",
-        os.getenv("AGENTIC_CM_ORCHESTRATOR_ADAPTER", "deterministic"),
-    )
+    adapter = agent_adapter_from_environment()
     if adapter == "deterministic":
         return DeterministicPathAgentAdapter()
     if adapter == "openai-compatible":

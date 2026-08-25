@@ -130,13 +130,16 @@ stateDiagram-v2
     [*] --> INTAKE
     INTAKE --> MANIFEST_REVIEW: Manifest generated
     MANIFEST_REVIEW --> PATH_EXPLORATION: Owner approves paths
-    PATH_EXPLORATION --> FINAL_REVIEW: All approved paths terminal
-    FINAL_REVIEW --> [*]: Owner decides
+    PATH_EXPLORATION --> PROFESSIONAL_COMMITMENT: All selected paths have SolutionRevision
+    PROFESSIONAL_COMMITMENT --> FINAL_REVIEW: All selected Path approval DAGs terminal
+    FINAL_REVIEW --> [*]: Owner closes or keeps open
+    FINAL_REVIEW --> INTAKE: Owner requests modification
 ```
 
 - `INTAKE`
 - `MANIFEST_REVIEW`
 - `PATH_EXPLORATION`
+- `PROFESSIONAL_COMMITMENT`
 - `FINAL_REVIEW`
 
 `PENDING` 不等于等待某次审批；等待审批属于 Path 和 Commitment 层。
@@ -246,13 +249,14 @@ Golden Path 中，上游承诺一开始覆盖候选物料 A 和 B。客户拒绝
 
 ## 7. OwnerDecision
 
-Owner 首版只选择：
+Owner 首版选择：
 
 - `CLOSE`
-- `PENDING`
+- `KEEP_OPEN`
+- `MODIFY`
 
 平台自动将当前 CaseSynthesis、所有 PathResult、SolutionRevision 和有效 Commitments 的快照附加到 OwnerDecision。
 
 CaseSynthesis 本身也必须版本化。重新汇总会创建新版本，OwnerDecision 引用作出决定时看到的具体版本。
 
-关闭不触发外部业务系统修改。Pending 记录当前快照，并允许未来由重新评估条件或人工操作恢复到 OPEN。
+关闭不触发外部业务系统修改。`KEEP_OPEN` 保留当前汇总与 Case 的 Open 状态；`MODIFY` 留存决定事件并清空当前活动 Manifest/Path 状态，回到 `INTAKE` 重新触发 Orchestrator。

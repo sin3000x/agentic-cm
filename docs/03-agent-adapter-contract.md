@@ -157,6 +157,8 @@ Agent 提供的影响范围只是建议；平台根据 Section 哈希、节点�
 
 ## 7. CaseSynthesisResult
 
+当前最小实现位于 `backend/agentic_cm/synthesis_agent.py`。只有所有已选 Path 的审批 DAG 均进入 `DONE/SUCCEEDED` 或 `DONE/REJECTED` 后，Case 才能生成报告；成功与失败 Path 必须各自出现一次。报告与 `agent_type=synthesis` 的逐步 trace 仅 Case Owner 可见，失败运行不改变 CaseSynthesis。
+
 建议结构：
 
 - `case_snapshot_ref`
@@ -206,7 +208,7 @@ adapters:
 
 ## 10. 事件与可观测性
 
-Adapter 通过 `event_sink` 发送归一化运行事件。当前 Orchestrator 切片已经把事件持久化到独立的 `agent_runs / agent_trace_events` 技术审计表；Path 与 Synthesis Adapter 后续复用同一外层契约。归一化事件包括：
+Adapter 通过 `event_sink` 发送归一化运行事件。Orchestrator、Path 与 Synthesis Adapter 都把事件持久化到独立的 `agent_runs / agent_trace_events` 技术审计表，并复用同一外层契约。归一化事件包括：
 
 - `run_started`
 - `status_updated`

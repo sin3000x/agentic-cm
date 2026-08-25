@@ -71,11 +71,12 @@ cp .env.example .env
 不配置模型时使用可复现的 deterministic Planner。需要使用模型时，在 `.env` 中填写：
 
 ```dotenv
-AGENTIC_CM_ORCHESTRATOR_ADAPTER=openai-compatible
+AGENTIC_CM_ADAPTER=openai-compatible
 AGENTIC_CM_LLM_BASE_URL=https://your-provider.example/v1
 AGENTIC_CM_LLM_API_KEY=your-key
 AGENTIC_CM_LLM_MODEL=your-model-id
 AGENTIC_CM_PATH_MAX_OUTPUT_TOKENS=6000
+AGENTIC_CM_SYNTHESIS_MAX_OUTPUT_TOKENS=4000
 ```
 
 然后正常启动，无需额外 `export`：

@@ -295,7 +295,10 @@ class CaseRepository:
             business_payload=data["business_payload"], human_proposal=data.get("human_proposal"),
             classification=data.get("classification", {}), manifest=manifest,
             path_attempt=legacy_attempt, path_attempts=path_attempts,
-            commitment_nodes=nodes, version=data["version"],
+            commitment_nodes=nodes,
+            synthesis_report=data.get("synthesis_report"),
+            owner_decision=data.get("owner_decision"),
+            version=data["version"],
             created_at=data.get("created_at", data["updated_at"]), updated_at=data["updated_at"],
         )
 

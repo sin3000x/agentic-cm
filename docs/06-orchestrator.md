@@ -56,7 +56,7 @@ Path ID 只要求在同一 orchestration Skill 内唯一。多个同时命中的
 默认启用，不需要 API Key。它稳定把 Skill 声明的全部候选写入 Manifest，并明确标注“未判断当前 Case 的业务优先级”，不再使用静态 `default_rationale` 冒充 Case-specific 判断。前端 Demo 默认只勾选“替代”，但允许 Owner 多选。
 
 ```bash
-export AGENTIC_CM_ORCHESTRATOR_ADAPTER=deterministic
+export AGENTIC_CM_ADAPTER=deterministic
 ```
 
 ### OpenAI-compatible 模型服务
@@ -70,8 +70,7 @@ cp .env.example .env
 在 `.env` 中配置：
 
 ```dotenv
-AGENTIC_CM_ORCHESTRATOR_ADAPTER=openai-compatible
-AGENTIC_CM_PATH_ADAPTER=openai-compatible
+AGENTIC_CM_ADAPTER=openai-compatible
 AGENTIC_CM_LLM_BASE_URL=https://your-provider.example/v1
 AGENTIC_CM_LLM_API_KEY=your-key
 AGENTIC_CM_LLM_MODEL=your-model-id

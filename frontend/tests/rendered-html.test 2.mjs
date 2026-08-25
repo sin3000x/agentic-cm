@@ -27,7 +27,7 @@ test("server-renders the Case workspace", async () => {
   assert.match(html, /平台完成 Case 受理/);
   assert.match(html, /专业承诺汇合/);
   assert.match(html, /Case Owner 最终决策/);
-  assert.match(html, /受控行动与结果验证/);
+  assert.doesNotMatch(html, /受控行动与结果验证|结果验证/);
   assert.doesNotMatch(html, /王淼 · 主计划/);
   assert.doesNotMatch(html, /切换至该角色/);
   assert.match(html, /Demo identity simulation/);

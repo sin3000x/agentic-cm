@@ -19,7 +19,7 @@ const casePresentation: Record<string, Pick<CaseSummary,"risk"|"due"|"dueTone"|"
 };
 const defaultPresentation: Pick<CaseSummary,"risk"|"due"|"dueTone"> = {risk:"中",due:"待确认",dueTone:"normal"};
 const filters = ["全部","处理中","暂缓","已关闭"] as const;
-const stages = ["受理","评审","探索","承诺","决策","验证"];
+const stages = ["受理","评审","探索","承诺","决策"];
 const demoIdentities = [
   {name:"陈澄",role:"订单统筹经理",avatar:"陈"},
   {name:"王淼",role:"主计划",avatar:"王"},
@@ -40,7 +40,7 @@ function mapCase(apiCase: ApiCase): CaseSummary {
     PROFESSIONAL_COMMITMENT:{value:4,label:"专业承诺"},
     FINAL_REVIEW:{value:5,label:"最终决策"},
   };
-  const currentPhase = apiCase.status === "CLOSED" ? {value:6,label:"结果验证"} : phases[apiCase.phase];
+  const currentPhase = apiCase.status === "CLOSED" ? {value:5,label:"最终决策"} : phases[apiCase.phase];
   const presentation = casePresentation[apiCase.id] ?? defaultPresentation;
   return {
     id:apiCase.id,title:apiCase.title,description:apiCase.description,status:status[apiCase.status],

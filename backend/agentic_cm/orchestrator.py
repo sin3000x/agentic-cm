@@ -9,7 +9,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError, model_validator
 
 from .capabilities import CapabilityRegistry
-from .config import load_runtime_environment
+from .config import agent_adapter_from_environment
 from .domain import Case, Manifest, ManifestPath, OrchestrationPhase
 from .llm import (
     CompatibleModelClientError,
@@ -493,8 +493,7 @@ class Orchestrator:
 
 
 def planner_from_environment() -> PlannerAdapter:
-    load_runtime_environment()
-    adapter = os.getenv("AGENTIC_CM_ORCHESTRATOR_ADAPTER", "deterministic")
+    adapter = agent_adapter_from_environment()
     if adapter == "deterministic":
         return DeterministicPlannerAdapter()
     if adapter == "openai-compatible":

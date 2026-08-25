@@ -7,7 +7,7 @@ import "./case-detail.css";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? `http://localhost:${process.env.AGENTIC_CM_API_PORT ?? 8000}`;
 
-const stages = ["Case 受理", "Manifest 评审", "Path 探索", "专业承诺", "最终决策", "结果验证"];
+const stages = ["Case 受理", "Manifest 评审", "Path 探索", "专业承诺", "最终决策"];
 
 const demoIdentities = [
   { name: "陈澄", role: "订单统筹经理", avatar: "陈" },
@@ -99,6 +99,31 @@ type PathAttempt = {
   solution_revision: SolutionRevision | null;
 };
 
+type SynthesisReport = {
+  revision: number;
+  summary: string;
+  path_assessments: Array<{
+    path_id: string;
+    status: "SUCCEEDED" | "FAILED";
+    conclusion: string;
+    supporting_refs: string[];
+    risks: string[];
+  }>;
+  cross_path_findings: string[];
+  remaining_risks: string[];
+  recommended_owner_action: "CLOSE" | "KEEP_OPEN" | "MODIFY";
+  decision_brief: string;
+  generated_by: string;
+};
+
+type OwnerDecision = {
+  action: "CLOSE" | "KEEP_OPEN" | "MODIFY";
+  actor: string;
+  role: string;
+  synthesis_revision: number;
+  decided_at: string;
+};
+
 function isSolutionRevision(value: unknown): value is SolutionRevision {
   if (!value || typeof value !== "object") return false;
   const revision = value as Partial<SolutionRevision>;
@@ -128,7 +153,7 @@ type InboxItem = {
 
 type TimelineEvent = {
   id: number;
-  event_type: "manifest.proposed" | "manifest.approved" | "solution_revision.proposed" | "commitment.approved" | "commitment.revision_requested" | "commitment.rejected";
+  event_type: "manifest.proposed" | "manifest.approved" | "solution_revision.proposed" | "commitment.approved" | "commitment.revision_requested" | "commitment.rejected" | "synthesis.proposed" | "owner.decision";
   created_at: string;
   details: {
     revision?: number;
@@ -138,6 +163,10 @@ type TimelineEvent = {
     path_id?: string;
     option_count?: number;
     next_phase?: string;
+    successful_path_count?: number;
+    failed_path_count?: number;
+    action?: "CLOSE" | "KEEP_OPEN" | "MODIFY";
+    synthesis_revision?: number;
   };
 };
 
@@ -164,7 +193,7 @@ type AgentRun = {
   events: AgentTraceEvent[];
 };
 
-type AiRunKind = "manifest" | "alternatives";
+type AiRunKind = "manifest" | "alternatives" | "synthesis";
 
 const aiRunCopy: Record<AiRunKind, { eyebrow: string; title: string; steps: string[] }> = {
   manifest: {
@@ -176,6 +205,11 @@ const aiRunCopy: Record<AiRunKind, { eyebrow: string; title: string; steps: stri
     eyebrow: "PATH AGENT · LIVE",
     title: "Path Agent 正在为您推演解决方案",
     steps: ["装载 Manifest 快照", "运行执行 Skill", "比较收益与风险", "形成角色判断报告"],
+  },
+  synthesis: {
+    eyebrow: "SYNTHESIS AGENT · LIVE",
+    title: "Synthesis Agent 正在汇总全部 Path",
+    steps: ["读取终态 Path", "对齐成功与失败", "归并风险与依据", "形成 Owner 决策简报"],
   },
 };
 
@@ -246,8 +280,8 @@ function CapabilityPanel({ details }: { details: CapabilityDetails }) {
   );
 }
 
-function AgentTracePanel({ runs, agentType }: { runs: AgentRun[]; agentType: "orchestrator" | "path" }) {
-  const label = agentType === "orchestrator" ? "ORCHESTRATOR" : "PATH AGENT";
+function AgentTracePanel({ runs, agentType }: { runs: AgentRun[]; agentType: "orchestrator" | "path" | "synthesis" }) {
+  const label = agentType === "orchestrator" ? "ORCHESTRATOR" : agentType === "path" ? "PATH AGENT" : "SYNTHESIS AGENT";
   const typedRuns = runs.filter((run) => run.agent_type === agentType);
   return (
     <section className="agentTracePanel" aria-label={`${label} Trace`}>
@@ -289,6 +323,7 @@ function AgentTracePanel({ runs, agentType }: { runs: AgentRun[]; agentType: "or
 
 export default function Home() {
   const [phase, setPhase] = useState("INTAKE");
+  const [caseStatus, setCaseStatus] = useState<"OPEN" | "PENDING" | "CLOSED">("OPEN");
   const [approved, setApproved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [aiRunKind, setAiRunKind] = useState<AiRunKind | null>(null);
@@ -305,6 +340,10 @@ export default function Home() {
   const [timelineEvents, setTimelineEvents] = useState<TimelineEvent[]>([]);
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
   const [pathAgentRuns, setPathAgentRuns] = useState<AgentRun[]>([]);
+  const [synthesisAgentRuns, setSynthesisAgentRuns] = useState<AgentRun[]>([]);
+  const [synthesisReport, setSynthesisReport] = useState<SynthesisReport | null>(null);
+  const [ownerDecision, setOwnerDecision] = useState<OwnerDecision | null>(null);
+  const [showSynthesisTrace, setShowSynthesisTrace] = useState(false);
   const [showOrchestratorTrace, setShowOrchestratorTrace] = useState(false);
   const [expandedPathTraces, setExpandedPathTraces] = useState<Record<string, boolean>>({});
   const [caseCreatedAt, setCaseCreatedAt] = useState<string | null>(null);
@@ -318,6 +357,7 @@ export default function Home() {
   const currentIdentity = demoIdentities[identityIndex];
   const startAutomaticManifest = useEffectEvent(() => { void generateManifest(); });
   const startAutomaticAlternatives = useEffectEvent((pathIds: string[]) => { void generateAlternatives(pathIds); });
+  const startAutomaticSynthesis = useEffectEvent(() => { void generateSynthesis(); });
 
   useEffect(() => {
     if (!aiRunKind) return;
@@ -337,6 +377,10 @@ export default function Home() {
     setShowCapabilities(false);
     setAgentRuns([]);
     setPathAgentRuns([]);
+    setSynthesisAgentRuns([]);
+    setSynthesisReport(null);
+    setOwnerDecision(null);
+    setShowSynthesisTrace(false);
     setShowOrchestratorTrace(false);
     setExpandedPathTraces({});
     setInboxItems([]);
@@ -366,9 +410,12 @@ export default function Home() {
       })
       .then(([data, timeline, inbox]) => {
         setPhase(data.phase);
+        setCaseStatus(data.status);
         setApproved(["PATH_EXPLORATION", "PROFESSIONAL_COMMITMENT", "FINAL_REVIEW"].includes(data.phase));
         setCommitmentNodes(data.commitment_nodes ?? []);
         setPathAttempts(data.path_attempts ?? []);
+        setSynthesisReport(data.synthesis_report ?? null);
+        setOwnerDecision(data.owner_decision ?? null);
         setTimelineEvents(timeline);
         setInboxItems(inbox);
         setCaseCreatedAt(data.created_at);
@@ -382,20 +429,22 @@ export default function Home() {
             actor: identity.name,
             role: identity.role,
           });
-          Promise.all(["orchestrator", "path"].map((agentType) => {
+          Promise.all(["orchestrator", "path", "synthesis"].map((agentType) => {
             const query = new URLSearchParams(traceQuery);
             query.set("agent_type", agentType);
             return fetch(`${API_BASE}/api/cases/CM-2026-014/agent-runs?${query}`, { signal: controller.signal })
               .then((response) => response.ok ? response.json() : []);
           }))
-            .then(([orchestratorRuns, loadedPathRuns]) => {
+            .then(([orchestratorRuns, loadedPathRuns, loadedSynthesisRuns]) => {
               setAgentRuns(orchestratorRuns);
               setPathAgentRuns(loadedPathRuns);
+              setSynthesisAgentRuns(loadedSynthesisRuns);
             })
             .catch((error) => {
               if (!(error instanceof DOMException && error.name === "AbortError")) {
                 setAgentRuns([]);
                 setPathAgentRuns([]);
+                setSynthesisAgentRuns([]);
               }
             });
         }
@@ -418,6 +467,13 @@ export default function Home() {
           if (pendingPathIds.length > 0 && !automaticRunsRef.current.has(runKey)) {
             automaticRunsRef.current.add(runKey);
             startAutomaticAlternatives(pendingPathIds);
+          }
+        }
+        if (data.permissions?.can_decide_case === true && data.phase === "FINAL_REVIEW" && !data.synthesis_report) {
+          const runKey = `${identity.name}:synthesis:${data.version ?? "current"}`;
+          if (!automaticRunsRef.current.has(runKey)) {
+            automaticRunsRef.current.add(runKey);
+            startAutomaticSynthesis();
           }
         }
       })
@@ -451,12 +507,14 @@ export default function Home() {
     if (!canViewManifest) return;
     try {
       const baseQuery = { actor: currentIdentity.name, role: currentIdentity.role };
-      const [orchestratorResponse, pathResponse] = await Promise.all([
+      const [orchestratorResponse, pathResponse, synthesisResponse] = await Promise.all([
         fetch(`${API_BASE}/api/cases/CM-2026-014/agent-runs?${new URLSearchParams({ ...baseQuery, agent_type: "orchestrator" })}`),
         fetch(`${API_BASE}/api/cases/CM-2026-014/agent-runs?${new URLSearchParams({ ...baseQuery, agent_type: "path" })}`),
+        fetch(`${API_BASE}/api/cases/CM-2026-014/agent-runs?${new URLSearchParams({ ...baseQuery, agent_type: "synthesis" })}`),
       ]);
       if (orchestratorResponse.ok) setAgentRuns(await orchestratorResponse.json());
       if (pathResponse.ok) setPathAgentRuns(await pathResponse.json());
+      if (synthesisResponse.ok) setSynthesisAgentRuns(await synthesisResponse.json());
     } catch {
       // Trace persistence is independent from the business action and can be reloaded later.
     }
@@ -564,6 +622,76 @@ export default function Home() {
     }
   }
 
+  async function generateSynthesis() {
+    setBusy(true);
+    setAiRunKind("synthesis");
+    setAiRunStep(0);
+    setFailedAiRun(null);
+    setMessage("");
+    try {
+      const response = await fetch(`${API_BASE}/api/cases/CM-2026-014/synthesize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ actor: currentIdentity.name, role: currentIdentity.role }),
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.detail ?? "Synthesis Agent failed");
+      }
+      const data = await response.json();
+      setSynthesisReport(data.synthesis_report ?? null);
+      setOwnerDecision(data.owner_decision ?? null);
+      await refreshTimeline();
+      setMessage("Synthesis Agent 已汇总所有成功与失败 Path，等待 Case Owner 决策。 ");
+    } catch (error) {
+      setFailedAiRun("synthesis");
+      setMessage(`汇总报告生成失败：${error instanceof Error ? error.message : "请确认 Synthesis Agent 配置"}。`);
+    } finally {
+      await refreshAgentRuns();
+      setAiRunKind(null);
+      setBusy(false);
+    }
+  }
+
+  async function decideCase(action: OwnerDecision["action"]) {
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch(`${API_BASE}/api/cases/CM-2026-014/owner-decision`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          actor: currentIdentity.name,
+          role: currentIdentity.role,
+          action,
+        }),
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.detail ?? "Owner decision failed");
+      }
+      const data = await response.json();
+      setCaseStatus(data.status);
+      setPhase(data.phase);
+      setOwnerDecision(data.owner_decision ?? null);
+      setSynthesisReport(data.synthesis_report ?? null);
+      setCommitmentNodes(data.commitment_nodes ?? []);
+      setPathAttempts(data.path_attempts ?? []);
+      loadManifest(data.manifest);
+      await refreshTimeline();
+      if (action === "MODIFY") {
+        automaticRunsRef.current.clear();
+        setCaseRefreshKey((current) => current + 1);
+      }
+      const actionCopy = action === "CLOSE" ? "关闭 Case" : action === "KEEP_OPEN" ? "保持 Case Open" : "打回 Orchestrator 修改";
+      setMessage(`陈澄已决定：${actionCopy}。`);
+    } catch (error) {
+      setMessage(`最终决策失败：${error instanceof Error ? error.message : "请确认当前身份与 Case 状态"}。`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function resetDemo() {
     setBusy(true);
     try {
@@ -584,10 +712,15 @@ export default function Home() {
       setTimelineEvents([]);
       setAgentRuns([]);
       setPathAgentRuns([]);
+      setSynthesisAgentRuns([]);
+      setSynthesisReport(null);
+      setOwnerDecision(null);
+      setShowSynthesisTrace(false);
       setShowOrchestratorTrace(false);
       setExpandedPathTraces({});
       setCaseCreatedAt(new Date().toISOString());
       setCanViewManifest(true);
+      setCaseStatus("OPEN");
       identityIndexRef.current = 0;
       setIdentityIndex(0);
       setShowInbox(false);
@@ -647,6 +780,7 @@ export default function Home() {
       if (caseId === "CM-2026-014") {
         setCommitmentNodes(data.commitment_nodes ?? []);
         setPathAttempts(data.path_attempts ?? []);
+        setPhase(data.phase);
         await refreshTimeline();
       }
       await refreshInbox();
@@ -845,6 +979,67 @@ export default function Home() {
       <button className="linkButton capabilityToggle" onClick={toggleCapabilities}>{showCapabilities ? "收起能力快照 ↑" : "查看本次能力快照 →"}</button>
       {showCapabilities && capabilities && <CapabilityPanel details={capabilities} />}
     </>
+  ) : phase === "FINAL_REVIEW" ? (
+    <>
+      <div className="panelTitle">
+        <div><span className="agentIcon">∑</span><span><small>CASE SYNTHESIS</small><h2>全 Path 汇总 · Owner 决策</h2></span></div>
+        <span className="version">{synthesisReport ? `v${synthesisReport.revision}` : "等待汇总"}</span>
+      </div>
+      {!canViewManifest ? (
+        <p className="lead">所有 Path 的审批 DAG 已完成。汇总报告与最终决策仅对 Case Owner 可见。</p>
+      ) : synthesisReport ? (
+        <section className="synthesisReport" aria-label="Synthesis Agent 汇总报告">
+          <div className="synthesisHeader">
+            <span><small>SYNTHESIS REPORT</small><strong>{synthesisReport.summary}</strong></span>
+            <em>{synthesisReport.generated_by}</em>
+          </div>
+          <div className="pathAssessmentGrid">
+            {synthesisReport.path_assessments.map((assessment) => {
+              const path = manifestPaths.find((item) => item.id === assessment.path_id);
+              return (
+                <article className={assessment.status.toLowerCase()} key={assessment.path_id}>
+                  <span>{assessment.status === "SUCCEEDED" ? "审批成功" : "审批失败"}</span>
+                  <h3>{path?.title ?? assessment.path_id}</h3>
+                  <p>{assessment.conclusion}</p>
+                  <small>依据：{assessment.supporting_refs.join(" · ")}</small>
+                  {assessment.risks.length > 0 && <small>风险：{assessment.risks.join("；")}</small>}
+                </article>
+              );
+            })}
+          </div>
+          <div className="synthesisFindings">
+            <div><strong>跨 Path 结论</strong><p>{synthesisReport.cross_path_findings.join("；") || "无新增结论"}</p></div>
+            <div><strong>剩余风险</strong><p>{synthesisReport.remaining_risks.join("；") || "未记录剩余风险"}</p></div>
+          </div>
+          <div className="ownerDecisionBrief">
+            <span><small>AGENT 建议 · 非最终决定</small><strong>{synthesisReport.recommended_owner_action}</strong></span>
+            <p>{synthesisReport.decision_brief}</p>
+          </div>
+          {ownerDecision && (
+            <p className="decisionRecorded">最近决定：{ownerDecision.action} · {formatThreadTime(ownerDecision.decided_at)}</p>
+          )}
+          <div className="ownerDecisionActions" aria-label="Case Owner 最终决策">
+            <button className="decisionClose" disabled={busy || caseStatus === "CLOSED"} onClick={() => decideCase("CLOSE")}>关闭 Case</button>
+            <button className="decisionOpen" disabled={busy || caseStatus === "CLOSED"} onClick={() => decideCase("KEEP_OPEN")}>保持 Open</button>
+            <button className="decisionModify" disabled={busy || caseStatus === "CLOSED"} onClick={() => decideCase("MODIFY")}>修改 · 打回 Orchestrator</button>
+          </div>
+          {synthesisAgentRuns.length > 0 && (
+            <>
+              <button className="linkButton traceToggle" onClick={() => setShowSynthesisTrace((current) => !current)}>
+                {showSynthesisTrace ? "收起 Synthesis Trace ↑" : `查看 Synthesis Trace (${synthesisAgentRuns.length}) →`}
+              </button>
+              {showSynthesisTrace && <AgentTracePanel runs={synthesisAgentRuns} agentType="synthesis" />}
+            </>
+          )}
+        </section>
+      ) : (
+        <div className="explorationGate">
+          <strong>全部审批 DAG 已完成</strong>
+          <p>Synthesis Agent 将读取所有成功与失败 Path 的 SolutionRevision 和人类审批结果，不会补造新证据。</p>
+          {failedAiRun === "synthesis" && <button className="primary explorationRetry" disabled={busy} onClick={generateSynthesis}>重试 Synthesis Agent</button>}
+        </div>
+      )}
+    </>
   ) : phase === "INTAKE" ? (
     <>
       <div className="panelTitle">
@@ -927,7 +1122,7 @@ export default function Home() {
             <div>
               <div className="eyebrow">SUPPLY CHAIN CASE <span>·</span> 高优先级</div>
               <h1>Northstar MCU-X7 订单预计延期 12 天 <span>#CM-2026-014</span></h1>
-              <p><span className="openBadge">● Open</span> 陈澄于 {formatThreadTime(caseCreatedAt)} 创建 · 当前由 <strong>陈澄</strong> 负责</p>
+              <p><span className={`openBadge ${caseStatus.toLowerCase()}`}>● {caseStatus === "CLOSED" ? "Closed" : caseStatus === "PENDING" ? "Pending" : "Open"}</span> 陈澄于 {formatThreadTime(caseCreatedAt)} 创建 · 当前由 <strong>陈澄</strong> 负责</p>
             </div>
             <button className="primary">继续处理 <span>→</span></button>
           </header>
@@ -997,13 +1192,30 @@ export default function Home() {
                     </div>
                   );
                 }
+                if (event.event_type === "synthesis.proposed") {
+                  return (
+                    <div className="threadEvent completedEvent" key={event.id}>
+                      <span className="eventIcon botEvent">∑</span>
+                      <p><strong>Synthesis Agent 生成汇总报告 v{event.details.revision ?? 1}</strong><span>{event.details.successful_path_count ?? 0} 条成功 · {event.details.failed_path_count ?? 0} 条失败；等待 Case Owner 决策 · {formatThreadTime(event.created_at)}</span></p>
+                    </div>
+                  );
+                }
+                if (event.event_type === "owner.decision") {
+                  const copy = event.details.action === "CLOSE" ? "关闭 Case" : event.details.action === "KEEP_OPEN" ? "保持 Case Open" : "修改并打回 Orchestrator";
+                  return (
+                    <div className="threadEvent completedEvent" key={event.id}>
+                      <span className="eventIcon humanEvent">{event.details.actor?.slice(0, 1) ?? "人"}</span>
+                      <p><strong>{event.details.actor ?? "Case Owner"} 决定：{copy}</strong><span>基于 Synthesis v{event.details.synthesis_revision ?? 1} · {formatThreadTime(event.created_at)}</span></p>
+                    </div>
+                  );
+                }
                 return null;
               })}
 
               <article className="threadItem commentItem currentThreadItem">
                 <div className="threadAvatar botAvatar">AC</div>
                 <div className="commentBox activeComment">
-                  <header><strong>Agentic CM</strong><span>{phase === "PROFESSIONAL_COMMITMENT" ? "Commitment Workflow" : approved ? "Path Agent" : "Orchestrator"} · 当前步骤</span><b className="currentLabel">{currentStage}</b></header>
+                  <header><strong>Agentic CM</strong><span>{phase === "FINAL_REVIEW" ? "Synthesis Agent" : phase === "PROFESSIONAL_COMMITMENT" ? "Commitment Workflow" : approved ? "Path Agent" : "Orchestrator"} · 当前步骤</span><b className="currentLabel">{currentStage}</b></header>
                   <div className="commentBody actionBody">
                     {orchestrationCard}
                     {canViewManifest && phase === "MANIFEST_REVIEW" && agentRuns.some((run) => run.agent_type === "orchestrator") && (
@@ -1020,11 +1232,12 @@ export default function Home() {
                 </div>
               </article>
 
-              <div className="futureFlow" aria-label="后续流程">
-                {activeStageIndex < 3 && <div><span>4</span><p><strong>专业承诺汇合</strong><small>Path 探索完成后开放；供应与技术并行评审</small></p></div>}
-                <div><span>5</span><p><strong>Case Owner 最终决策</strong><small>基于已承诺证据选择、修订或拒绝方案</small></p></div>
-                <div><span>6</span><p><strong>受控行动与结果验证</strong><small>执行结果回写 Case；未解决则开启新一轮，解决后关闭</small></p></div>
-              </div>
+              {activeStageIndex < 4 && (
+                <div className="futureFlow" aria-label="后续流程">
+                  {activeStageIndex < 3 && <div><span>4</span><p><strong>专业承诺汇合</strong><small>Path 探索完成后开放；供应与技术并行评审</small></p></div>}
+                  <div><span>5</span><p><strong>Case Owner 最终决策</strong><small>基于 Synthesis 报告选择关闭、保持 Open 或打回修改</small></p></div>
+                </div>
+              )}
             </section>
 
             <aside className="rightRail">
