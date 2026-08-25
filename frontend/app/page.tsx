@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Image from "next/image";
 import AppSidebar from "./app-sidebar";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? `http://localhost:${process.env.AGENTIC_CM_API_PORT ?? 8000}`;
@@ -12,15 +13,18 @@ type ApiCase = { id:string; title:string; description:string; status:"OPEN"|"PEN
 const filters = ["全部","处理中","暂缓","已关闭"] as const;
 const stages = ["受理","评审","探索","承诺","决策"];
 const demoIdentities = [
-  {name:"陈澄",role:"订单统筹经理",avatar:"陈"},
-  {name:"王淼",role:"主计划",avatar:"王"},
-  {name:"林乔",role:"研发",avatar:"林"},
-  {name:"赵宁",role:"供应经理",avatar:"赵"},
+  {name:"陈澄",role:"订单统筹经理",avatar:"陈",avatarUrl:"/avatars/chen-cheng.png"},
+  {name:"王淼",role:"主计划",avatar:"王",avatarUrl:"/avatars/wang-miao.png"},
+  {name:"林乔",role:"研发",avatar:"林",avatarUrl:"/avatars/lin-qiao.png"},
+  {name:"赵宁",role:"供应经理",avatar:"赵",avatarUrl:"/avatars/zhao-ning.png"},
 ];
+const personAvatars:Record<string,string>={陈澄:"/avatars/chen-cheng.png",王淼:"/avatars/wang-miao.png",林乔:"/avatars/lin-qiao.png",赵宁:"/avatars/zhao-ning.png",周岚:"/avatars/zhou-lan.png",吴桐:"/avatars/wu-tong.png"};
 
 function StatusPill({status}:{status:CaseStatus}){return <span className={`statusPill status-${status}`}>{status}</span>}
 function RiskMark({risk}:{risk:CaseRisk}){return <span className={`riskMark risk-${risk}`}><i />{risk}风险</span>}
 function StageProgress({value,label}:{value:number;label:string}){return <div className="stageProgress" aria-label={`当前阶段：${label}`}><div>{stages.map((stage,index)=><i key={stage} className={index<value?"filled":""}/>)}</div><span>{label}</span></div>}
+function PersonAvatar({name,fallback}:{name:string;fallback:string}){const src=personAvatars[name];return <span className={`avatar avatar-${fallback}`}>{src?<Image src={src} alt="" width={64} height={64}/>:fallback}</span>}
+function OrchestratorAvatar(){return <span className="activityAgent"><Image src="/avatars/bot-orchestrator.png" alt="" width={64} height={64}/></span>}
 
 function duePresentation(apiCase: ApiCase): Pick<CaseSummary,"due"|"dueTone"> {
   if(apiCase.status==="CLOSED")return {due:"已完成",dueTone:"muted"};
@@ -119,7 +123,7 @@ export default function Home(){
                     </td>
                     <td><StatusPill status={item.status}/><RiskMark risk={item.risk}/></td>
                     <td><StageProgress value={item.phase} label={item.phaseLabel}/></td>
-                    <td><div className="ownerCell"><span className={`avatar avatar-${item.ownerInitial}`}>{item.ownerInitial}</span><span><b>{item.owner}</b><small>{item.ownerRole}</small></span></div></td>
+                    <td><div className="ownerCell"><PersonAvatar name={item.owner} fallback={item.ownerInitial}/><span><b>{item.owner}</b><small>{item.ownerRole}</small></span></div></td>
                     <td><span className={`due due-${item.dueTone}`}>{item.due}</span></td>
                     <td><span className="updated">{item.updated}</span></td>
                     <td>{hasWorkspace
@@ -134,8 +138,7 @@ export default function Home(){
             <div className="tableFooter"><span>显示 {visibleCases.length} / {caseData.length} 个 Case</span><div><button type="button" disabled>‹</button><button type="button" className="active">1</button><button type="button" disabled>›</button></div></div>
           </section>
           <aside className="rightRail">
-            <section className="attentionCard" id="attention"><div className="railHeader"><div><span className="pulseDot"/><h2>需要你的关注</h2></div><b>{attentionCases.length}</b></div><div className="attentionList">{attentionCases.map((item,index)=><button key={item.id} type="button" onClick={()=>setSelectedCase(item)}><span className={`attentionIndex attention-${index+1}`}>{index+1}</span><span><strong>{item.attention}</strong><small>{item.id} · {item.title}</small></span><em>{item.dueTone==="danger"?"已逾期":item.due}</em></button>)}</div><a href="#case-overview">进入我的待办 <span>→</span></a></section>
-            <section className="activityCard" id="activity"><div className="railHeader"><div><h2>最新协作动态</h2></div><button type="button">全部</button></div><ol className="activityList"><li><span className="avatar avatar-blue">王</span><div><p><b>王淼</b> 提交了供应可行性承诺</p><small>CM-2026-014 · 12 分钟前</small></div></li><li><span className="activityAgent">A</span><div><p><b>Planning Agent</b> 生成 Manifest v2</p><small>CM-2026-012 · 28 分钟前</small></div></li><li><span className="avatar avatar-purple">林</span><div><p><b>林乔</b> 请求补充技术证据</p><small>CM-2026-015 · 1 小时前</small></div></li><li><span className="activityDone">✓</span><div><p><b>CM-2026-006</b> 已完成验证</p><small>2 天前</small></div></li></ol></section>
+            <section className="activityCard" id="activity"><div className="railHeader"><div><h2>最新协作动态</h2></div><button type="button">全部</button></div><ol className="activityList"><li><PersonAvatar name="王淼" fallback="王"/><div><p><b>王淼</b> 提交了供应可行性承诺</p><small><b>CM-2026-014</b><time>12 分钟前</time></small></div></li><li><OrchestratorAvatar/><div><p><b>Orchestrator</b> 生成 Manifest v2</p><small><b>CM-2026-012</b><time>28 分钟前</time></small></div></li><li><PersonAvatar name="林乔" fallback="林"/><div><p><b>林乔</b> 请求补充技术证据</p><small><b>CM-2026-015</b><time>1 小时前</time></small></div></li><li><span className="activityDone">✓</span><div><p><b>CM-2026-006</b> 已完成验证</p><small><b>Case 日志</b><time>2 天前</time></small></div></li></ol></section>
           </aside>
         </div>
       </div>

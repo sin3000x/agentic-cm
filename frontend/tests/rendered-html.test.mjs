@@ -20,7 +20,8 @@ test("server-renders the Case overview homepage", async () => {
   assert.match(html, /Case 总览/);
   assert.match(html, /早上好，陈澄/);
   assert.match(html, /进行中 Case/);
-  assert.match(html, /需要你的关注/);
+  assert.doesNotMatch(html, /需要你的关注/);
+  assert.match(html, /最新协作动态/);
   assert.match(html, /正在同步 Case 状态/);
   assert.match(html, /状态与阶段以 Case API 为准/);
   assert.match(html, /Human governed/);
@@ -58,6 +59,7 @@ test("homepage derives authoritative status and phase from the Case API", async 
 test("homepage implements search, filters, and quick view without role shortcuts", async () => {
   const source = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
   const sidebarSource = await readFile(new URL("../app/app-sidebar.tsx", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
   assert.match(source, /setActiveFilter/);
   assert.match(source, /setSearch/);
   assert.match(source, /setSelectedCase/);
@@ -65,9 +67,17 @@ test("homepage implements search, filters, and quick view without role shortcuts
   assert.match(source, /role="dialog"/);
   assert.match(source, /<AppSidebar/);
   assert.match(sidebarSource, /identityButton/);
+  assert.match(sidebarSource, /identity\.avatarUrl/);
+  assert.match(sidebarSource, /from "next\/image"/);
+  assert.match(source, /\/avatars\/chen-cheng\.png/);
+  assert.match(source, /<PersonAvatar name="王淼"/);
   assert.match(sidebarSource, /Demo identity simulation/);
   assert.match(sidebarSource, /不连接或修改 ERP/);
   assert.doesNotMatch(source, /切换至该角色/);
+  assert.doesNotMatch(source, /className="attentionCard"/);
+  assert.doesNotMatch(styles, /activityList li:not\(:last-child\):after/);
+  assert.match(styles, /activityList li\{[^}]*border-bottom/);
+  assert.match(sidebarSource, /\/cases\/CM-2026-014#inbox/);
 });
 
 test("order delay Case opens the original Case workspace", async () => {
@@ -96,6 +106,11 @@ test("overview and Case workspace use the same global Sidebar", async () => {
   assert.match(homeSource, /<AppSidebar active="overview"/);
   assert.match(workspaceSource, /<AppSidebar/);
   assert.match(workspaceSource, /active=\{showInbox \? "inbox" : "workspace"\}/);
+  assert.match(workspaceSource, /<PersonIcon name=\{event\.details\.actor\}/);
+  assert.match(workspaceSource, /kind="orchestrator"/);
+  assert.match(workspaceSource, /kind="path"/);
+  assert.match(workspaceSource, /kind="synthesis"/);
+  assert.match(workspaceSource, /\/avatars\/bot-orchestrator\.png/);
   assert.match(sidebarSource, /Case 总览/);
   assert.match(sidebarSource, /Case 工作台/);
   assert.match(sidebarSource, /identityButton/);

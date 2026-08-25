@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useEffectEvent, useRef, useState } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import AppSidebar from "../../app-sidebar";
@@ -11,13 +12,19 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? `http://localhost:${pro
 const stages = ["Case 受理", "Manifest 评审", "Path 探索", "专业承诺", "最终决策"];
 
 const demoIdentities = [
-  { name: "陈澄", role: "订单统筹经理", avatar: "陈" },
-  { name: "王淼", role: "主计划", avatar: "王" },
-  { name: "林乔", role: "研发", avatar: "林" },
-  { name: "赵宁", role: "供应经理", avatar: "赵" },
-  { name: "周岚", role: "采购与供应协同", avatar: "周" },
-  { name: "吴桐", role: "物流", avatar: "吴" },
+  { name: "陈澄", role: "订单统筹经理", avatar: "陈", avatarUrl: "/avatars/chen-cheng.png" },
+  { name: "王淼", role: "主计划", avatar: "王", avatarUrl: "/avatars/wang-miao.png" },
+  { name: "林乔", role: "研发", avatar: "林", avatarUrl: "/avatars/lin-qiao.png" },
+  { name: "赵宁", role: "供应经理", avatar: "赵", avatarUrl: "/avatars/zhao-ning.png" },
+  { name: "周岚", role: "采购与供应协同", avatar: "周", avatarUrl: "/avatars/zhou-lan.png" },
+  { name: "吴桐", role: "物流", avatar: "吴", avatarUrl: "/avatars/wu-tong.png" },
 ];
+const personAvatars: Record<string, string> = Object.fromEntries(demoIdentities.map((identity) => [identity.name, identity.avatarUrl]));
+const botAvatars = {
+  orchestrator: "/avatars/bot-orchestrator.png",
+  path: "/avatars/bot-path.png",
+  synthesis: "/avatars/bot-synthesis.png",
+} as const;
 
 const commitmentCopy: Record<string, string> = {
   SUPPLY: "确认 Manifest 候选物料的供应可行性",
@@ -28,6 +35,15 @@ const commitmentCopy: Record<string, string> = {
   "SPLIT-PLAN": "确认可用数量与分批交付计划",
   "SPLIT-CUSTOMER": "确认客户对分批交付与剩余承诺的接受度",
 };
+
+function PersonIcon({ name, fallback, className }: { name?: string; fallback: string; className: string }) {
+  const src = name ? personAvatars[name] : undefined;
+  return <span className={className}>{src ? <Image src={src} alt="" width={80} height={80} /> : fallback}</span>;
+}
+
+function BotIcon({ kind, className }: { kind: keyof typeof botAvatars; className: string }) {
+  return <span className={className}><Image src={botAvatars[kind]} alt="" width={80} height={80} /></span>;
+}
 
 type CapabilityAsset = {
   id?: string;
@@ -404,6 +420,12 @@ export default function Home() {
   const startAutomaticAlternatives = useEffectEvent((pathIds: string[]) => { void generateAlternatives(pathIds); });
   const startAutomaticSynthesis = useEffectEvent(() => { void generateSynthesis(); });
   const refreshLiveTrace = useEffectEvent(() => { void refreshAgentRuns(); });
+
+  useEffect(() => {
+    if (window.location.hash !== "#inbox") return;
+    const frame = window.requestAnimationFrame(() => setShowInbox(true));
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
 
   useEffect(() => {
     if (!aiRunKind) return;
@@ -1252,7 +1274,7 @@ export default function Home() {
               {message && <div className="toast" role="status">{message}</div>}
 
               <article className="threadItem commentItem">
-                <div className="threadAvatar humanAvatar">陈</div>
+                <PersonIcon name={humanProposal.author} fallback="陈" className="threadAvatar humanAvatar" />
                 <div className="commentBox">
                   <header><strong>{humanProposal.author}</strong><span>Case Owner · {formatThreadTime(caseCreatedAt)}</span><b>Human Proposal v{humanProposal.revision}</b></header>
                   <div className="commentBody">
@@ -1277,7 +1299,7 @@ export default function Home() {
                 if (event.event_type === "manifest.proposed") {
                   return (
                     <div className="threadEvent completedEvent" key={event.id}>
-                      <span className="eventIcon botEvent">✦</span>
+                      <BotIcon kind="orchestrator" className="eventIcon botEvent" />
                       <p><strong>Orchestrator 生成 Manifest v{event.details.revision ?? 1}</strong><span>匹配组织能力并冻结 Policy / Skill / Knowledge 快照 · {formatThreadTime(event.created_at)}</span></p>
                     </div>
                   );
@@ -1285,7 +1307,7 @@ export default function Home() {
                 if (event.event_type === "manifest.approved") {
                   return (
                     <div className="threadEvent completedEvent" key={event.id}>
-                      <span className="eventIcon humanEvent">{event.details.actor?.slice(0, 1) ?? "人"}</span>
+                      <PersonIcon name={event.details.actor} fallback={event.details.actor?.slice(0, 1) ?? "人"} className="eventIcon humanEvent" />
                       <p><strong>{event.details.actor ?? "Case Owner"} 批准 Manifest</strong><span>启动已批准的 PathAttempt，最终业务决定尚未作出 · {formatThreadTime(event.created_at)}</span></p>
                     </div>
                   );
@@ -1294,7 +1316,7 @@ export default function Home() {
                   const explorationCompleted = event.details.next_phase === "PROFESSIONAL_COMMITMENT";
                   return (
                     <div className="threadEvent completedEvent" key={event.id}>
-                      <span className="eventIcon botEvent">◇</span>
+                      <BotIcon kind="path" className="eventIcon botEvent" />
                       <p><strong>Path Agent 生成 SolutionRevision v{event.details.revision ?? 1}</strong><span>{event.details.path_id} · {event.details.option_count ?? 0} 个可审查选项；{explorationCompleted ? "Path 探索完成，进入专业承诺" : "继续探索其余 Path"} · {formatThreadTime(event.created_at)}</span></p>
                     </div>
                   );
@@ -1302,7 +1324,7 @@ export default function Home() {
                 if (event.event_type === "commitment.approved") {
                   return (
                     <div className="threadEvent completedEvent" key={event.id}>
-                      <span className="eventIcon humanEvent">{event.details.actor?.slice(0, 1) ?? "人"}</span>
+                      <PersonIcon name={event.details.actor} fallback={event.details.actor?.slice(0, 1) ?? "人"} className="eventIcon humanEvent" />
                       <p><strong>{event.details.actor}（{event.details.role}）批准 {event.details.node_id}</strong><span>{commitmentCopy[event.details.node_id ?? ""] ?? "专业责任节点"}已确认，节点变为 READY · {formatThreadTime(event.created_at)}</span></p>
                     </div>
                   );
@@ -1311,7 +1333,7 @@ export default function Home() {
                   const isRevision = event.event_type === "commitment.revision_requested";
                   return (
                     <div className="threadEvent" key={event.id}>
-                      <span className="eventIcon humanEvent">{event.details.actor?.slice(0, 1) ?? "人"}</span>
+                      <PersonIcon name={event.details.actor} fallback={event.details.actor?.slice(0, 1) ?? "人"} className="eventIcon humanEvent" />
                       <p><strong>{event.details.actor}（{event.details.role}）{isRevision ? "要求修改" : "否决"} {event.details.node_id}</strong><span>{isRevision ? "PathAttempt 进入 REVISING" : "当前 PathAttempt 已结束"} · {formatThreadTime(event.created_at)}</span></p>
                     </div>
                   );
@@ -1319,7 +1341,7 @@ export default function Home() {
                 if (event.event_type === "synthesis.proposed") {
                   return (
                     <div className="threadEvent completedEvent" key={event.id}>
-                      <span className="eventIcon botEvent">∑</span>
+                      <BotIcon kind="synthesis" className="eventIcon botEvent" />
                       <p><strong>Synthesis Agent 生成汇总报告 v{event.details.revision ?? 1}</strong><span>{event.details.successful_path_count ?? 0} 条成功 · {event.details.failed_path_count ?? 0} 条失败；等待 Case Owner 决策 · {formatThreadTime(event.created_at)}</span></p>
                     </div>
                   );
@@ -1328,7 +1350,7 @@ export default function Home() {
                   const copy = event.details.action === "CLOSE" ? "关闭 Case" : event.details.action === "KEEP_OPEN" ? "保持 Case Open" : "修改并打回 Orchestrator";
                   return (
                     <div className="threadEvent completedEvent" key={event.id}>
-                      <span className="eventIcon humanEvent">{event.details.actor?.slice(0, 1) ?? "人"}</span>
+                      <PersonIcon name={event.details.actor} fallback={event.details.actor?.slice(0, 1) ?? "人"} className="eventIcon humanEvent" />
                       <p><strong>{event.details.actor ?? "Case Owner"} 决定：{copy}</strong><span>{event.details.guidance ? `指导：${event.details.guidance} · ` : ""}基于 Synthesis v{event.details.synthesis_revision ?? 1} · {formatThreadTime(event.created_at)}</span></p>
                     </div>
                   );
@@ -1337,7 +1359,7 @@ export default function Home() {
               })}
 
               <article className="threadItem commentItem currentThreadItem">
-                <div className="threadAvatar botAvatar">AC</div>
+                <BotIcon kind={phase === "FINAL_REVIEW" ? "synthesis" : phase === "PATH_EXPLORATION" ? "path" : "orchestrator"} className="threadAvatar botAvatar" />
                 <div className="commentBox activeComment">
                   <header><strong>Agentic CM</strong><span>{phase === "FINAL_REVIEW" ? "Synthesis Agent" : phase === "PROFESSIONAL_COMMITMENT" ? "Commitment Workflow" : approved ? "Path Agent" : "Orchestrator"} · 当前步骤</span><b className="currentLabel">{currentStage}</b></header>
                   <div className="commentBody actionBody">

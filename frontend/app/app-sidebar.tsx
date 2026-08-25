@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { useState } from "react";
 
-export type SidebarIdentity = { name: string; role: string; avatar: string };
+export type SidebarIdentity = { name: string; role: string; avatar: string; avatarUrl: string };
 
 type AppSidebarProps = {
   active: "overview" | "workspace" | "inbox" | "activity" | "skills" | "policies" | "knowledge";
@@ -47,7 +48,7 @@ export default function AppSidebar({
             <span className="navIcon">✓</span>我的待办<b>{inboxCount}</b>
           </button>
         ) : (
-          <a className={`navLink ${active === "inbox" ? "active" : ""}`} href="#attention"><span className="navIcon">✓</span>我的待办<b>{inboxCount}</b></a>
+          <Link className={`navLink ${active === "inbox" ? "active" : ""}`} href="/cases/CM-2026-014#inbox"><span className="navIcon">✓</span>我的待办<b>{inboxCount}</b></Link>
         )}
         <a className={`navLink ${active === "activity" ? "active" : ""}`} href="#activity"><span className="navIcon">↗</span>协作动态</a>
 
@@ -61,7 +62,7 @@ export default function AppSidebar({
       <div className="sidebarFoot">
         <div className="systemStatus"><i/>系统运行正常 <span>v0.1</span></div>
         <button className="identityButton" type="button" disabled={busy} onClick={() => setShowIdentityMenu((value) => !value)} aria-expanded={showIdentityMenu}>
-          <span className={`avatar avatar-${identity.avatar}`}>{identity.avatar}</span>
+          <span className="avatar"><Image src={identity.avatarUrl} alt="" width={64} height={64} /></span>
           <span><strong>{identity.name}</strong><small>{identity.role}</small></span>
           <b>⌄</b>
         </button>
@@ -70,7 +71,7 @@ export default function AppSidebar({
             <small>Demo identity simulation</small>
             {identities.map((item, index) => (
               <button type="button" key={`${item.name}-${item.role}`} onClick={() => selectIdentity(index)} aria-current={item.name === identity.name ? "true" : undefined}>
-                <span className={`avatar avatar-${item.avatar}`}>{item.avatar}</span>
+                <span className="avatar"><Image src={item.avatarUrl} alt="" width={64} height={64} /></span>
                 <span>{item.name}<small>{item.role}</small></span>
               </button>
             ))}

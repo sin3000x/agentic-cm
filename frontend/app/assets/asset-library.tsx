@@ -6,10 +6,10 @@ import AppSidebar from "../app-sidebar";
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? `http://localhost:${process.env.AGENTIC_CM_API_PORT ?? 8000}`;
 
 const demoIdentities = [
-  { name: "陈澄", role: "订单统筹经理", avatar: "陈" },
-  { name: "王淼", role: "主计划", avatar: "王" },
-  { name: "林乔", role: "研发", avatar: "林" },
-  { name: "赵宁", role: "供应经理", avatar: "赵" },
+  { name: "陈澄", role: "订单统筹经理", avatar: "陈", avatarUrl: "/avatars/chen-cheng.png" },
+  { name: "王淼", role: "主计划", avatar: "王", avatarUrl: "/avatars/wang-miao.png" },
+  { name: "林乔", role: "研发", avatar: "林", avatarUrl: "/avatars/lin-qiao.png" },
+  { name: "赵宁", role: "供应经理", avatar: "赵", avatarUrl: "/avatars/zhao-ning.png" },
 ];
 
 export type AssetGroup = "skills" | "policies" | "knowledge";
