@@ -131,13 +131,23 @@ test("DAG and cross-Case Inbox share role-scoped approval decisions", async () =
   assert.match(source, />通过<\/button>/);
   assert.match(source, />修改<\/button>/);
   assert.match(source, />否决<\/button>/);
+  assert.match(source, /查看审批依据/);
+  assert.match(source, /approvalReviewButton\(/);
   assert.match(source, /approvalActions\(activeCaseId, node\)/);
   assert.match(source, /approvalActions\(item\.case_id, item\.node\)/);
+  assert.match(source, /approvalActions\(approvalReview\.caseId, approvalReview\.node\)/);
+  assert.match(source, /item\.approval_context/);
+  assert.match(source, /ROLE-SCOPED EVIDENCE/);
+  assert.match(source, /你的专业判断与证据摘要/);
+  assert.match(source, /其他角色的判断与证据在其责任节点审批时展示/);
   assert.match(source, /汇总所有 Case/);
   assert.match(styles, /\.approvalActions/);
+  assert.match(styles, /\.approvalReviewPanel/);
+  assert.match(styles, /\.evidenceOptions article\{grid-template-columns:112px/);
+  assert.match(styles, /\.evidenceOptions article>span\{[^}]*overflow-wrap:anywhere/);
 });
 
-test("approved Manifest launches a real Path Agent and exposes its audited SolutionRevision", async () => {
+test("approved Manifest exposes a shared solution brief and role-scoped approval evidence", async () => {
   const source = await readFile(new URL("../app/cases/[id]/page.tsx", import.meta.url), "utf8");
   const styles = await readFile(new URL("../app/cases/[id]/case-detail.css", import.meta.url), "utf8");
 
@@ -169,16 +179,18 @@ test("approved Manifest launches a real Path Agent and exposes its audited Solut
   assert.doesNotMatch(source, />生成替代方案<\/button>/);
   assert.match(source, /selectedPathViews\.map\(\(\{ path, revision, nodes, runs \}\)/);
   assert.match(source, /revision\.options\.map/);
-  assert.match(source, /revision\.role_reports\.map/);
-  assert.match(source, /\$\{path\.title\} 角色判断报告/);
+  assert.doesNotMatch(source, /revision\.role_reports\.map/);
+  assert.match(source, /共同方案摘要/);
+  assert.match(source, /role_reports\.find\(\(item\) => item\.role === role\)/);
+  assert.doesNotMatch(source, /option\.benefits\.join|option\.risks\.join|option\.assumptions\.join/);
   assert.match(source, /isSolutionRevision\(attempt\?\.solution_revision\)/);
   assert.match(source, /commitmentNodes\.filter\(\(node\) => node\.path_id === path\.id\)/);
   assert.match(source, /manifest\?\.paths \?\? \(workflowPaths\.length > 0 \? workflowPaths : attempts\.map/);
   assert.match(source, /title: attempt\.title \?\? attempt\.definition/);
   assert.match(source, /loadManifest\(data\.manifest, data\.path_attempts \?\? \[\], data\.workflow_paths \?\? \[\]\)/);
   assert.match(source, /canViewManifest && \(\s*<>\s*<button className="linkButton capabilityToggle"/);
-  assert.match(source, /rootNodes\.map\(commitmentNode\)/);
-  assert.match(source, /downstreamNodes\.map\(commitmentNode\)/);
+  assert.match(source, /rootNodes\.map\(\(node\) => commitmentNode\(node, revision, path\.title\)\)/);
+  assert.match(source, /downstreamNodes\.map\(\(node\) => commitmentNode\(node, revision, path\.title\)\)/);
   assert.match(source, /Agent 建议（非业务决定）/);
   assert.match(source, /agent_type: "path"/);
   assert.match(source, /event\.step === "run\.started" && event\.details\.path_id === path\.id/);
@@ -208,7 +220,7 @@ test("approved Manifest launches a real Path Agent and exposes its audited Solut
   assert.match(source, /solution_revision\.proposed/);
   assert.match(styles, /\.solutionRevision/);
   assert.match(styles, /\.solutionOptions/);
-  assert.match(styles, /\.roleReports/);
+  assert.match(styles, /\.reviewEvidenceButton/);
   assert.match(styles, /\.aiWorkingCard/);
   assert.match(styles, /\.pathExplorationProgress/);
   assert.match(styles, /\.pathApprovalList/);
