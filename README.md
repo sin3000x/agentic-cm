@@ -79,6 +79,18 @@ AGENTIC_CM_PATH_MAX_OUTPUT_TOKENS=6000
 AGENTIC_CM_SYNTHESIS_MAX_OUTPUT_TOKENS=4000
 ```
 
+多条已选 Path 默认并行推演。若模型服务需要限流或本地调试需要确定顺序，可在同一个 `.env` 中切换为串行：
+
+```dotenv
+AGENTIC_CM_PATH_EXECUTION_MODE=serial
+```
+
+并行模式默认最多同时运行 4 个 Path Agent，可按模型服务限流与本机资源调整：
+
+```dotenv
+AGENTIC_CM_PATH_MAX_CONCURRENCY=4
+```
+
 然后正常启动，无需额外 `export`：
 
 ```bash

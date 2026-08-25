@@ -141,7 +141,9 @@ test("approved Manifest launches a real Path Agent and exposes its audited Solut
   const source = await readFile(new URL("../app/cases/[id]/page.tsx", import.meta.url), "utf8");
   const styles = await readFile(new URL("../app/cases/[id]/case-detail.css", import.meta.url), "utf8");
 
-  assert.match(source, /paths\/\$\{pathId\}\/execute/);
+  assert.match(source, /api\/cases\/\$\{activeCaseId\}\/paths\/execute/);
+  assert.match(source, /path_ids: requestedPathIds/);
+  assert.match(source, /api\/runtime-config/);
   assert.match(source, /startAutomaticManifest\(\)/);
   assert.match(source, /startAutomaticAlternatives\(pendingPathIds\)/);
   assert.match(source, /await generateAlternatives\(approvedPathIds\)/);
@@ -153,7 +155,16 @@ test("approved Manifest launches a real Path Agent and exposes its audited Solut
   assert.match(source, /全部完成后，本阶段自动结束，平台才会开放专业承诺审批/);
   assert.match(source, /PROFESSIONAL_COMMITMENT: 3/);
   assert.match(source, /explorationCompleted \? "Path 探索完成，进入专业承诺"/);
-  assert.match(source, /<AiWorkingCard kind=\{aiRunKind\} step=\{aiRunStep\}/);
+  assert.match(source, /正在\$\{executionMode === "parallel" \? "并行" : "逐条"\}推演/);
+  assert.match(source, /并行执行 · 最多 \$\{Math\.min\(paths\.length, maxConcurrency\)\} 条/);
+  assert.match(source, /path_max_concurrency/);
+  assert.match(source, /maxConcurrency=\{pathMaxConcurrency\}/);
+  assert.match(source, /串行队列 · 同一时间 1 条/);
+  assert.doesNotMatch(source, /for \(const pathId of requestedPathIds\)/);
+  assert.match(source, /整体进度/);
+  assert.match(source, /\$\{runningPathCount\} 条运行中/);
+  assert.match(source, /第 \$\{runningPathIndex \+ 1\} \/ \$\{paths\.length\} 条/);
+  assert.match(source, /pathRunQueue/);
   assert.doesNotMatch(source, /onClick=\{generateManifest\}>生成 Manifest/);
   assert.doesNotMatch(source, />生成替代方案<\/button>/);
   assert.match(source, /selectedPathViews\.map\(\(\{ path, revision, nodes, runs \}\)/);
@@ -186,8 +197,10 @@ test("approved Manifest launches a real Path Agent and exposes its audited Solut
   assert.match(source, /<AgentTracePanel runs=\{runs\} agentType="path"/);
   assert.match(source, /查看 \$\{path\.title\} Trace/);
   assert.match(source, /window\.setInterval\(refreshLiveTrace, 600\)/);
-  assert.match(source, /Agent 执行步骤同步写入/);
-  assert.match(source, /<AgentTracePanel runs=\{liveAgentRuns\} agentType=\{liveAgentType\} autoExpand/);
+  assert.match(source, /实时审计轨迹/);
+  assert.match(source, /<AgentTracePanel runs=\{runs\} agentType=\{agentType\} autoExpand/);
+  assert.doesNotMatch(source, /className="liveTrace"/);
+  assert.match(styles, /\.embeddedLiveTrace/);
   assert.match(source, /Orchestrator Trace/);
   assert.doesNotMatch(source, /查看 Agent Trace/);
   assert.doesNotMatch(source, /setShowAgentTrace\(true\)/);
@@ -199,7 +212,7 @@ test("approved Manifest launches a real Path Agent and exposes its audited Solut
   assert.match(styles, /\.aiWorkingCard/);
   assert.match(styles, /\.pathExplorationProgress/);
   assert.match(styles, /\.pathApprovalList/);
-  assert.match(styles, /\.liveTrace/);
+  assert.match(styles, /\.pathRunQueue/);
   assert.match(styles, /@keyframes aiScan/);
   assert.match(styles, /prefers-reduced-motion/);
 });

@@ -104,11 +104,13 @@ curl -sS 'http://localhost:8000/api/cases/CM-2026-014/capabilities?actor=陈澄&
 curl -sS -X POST http://localhost:8000/api/cases/CM-2026-014/manifest/approve \
   -H 'Content-Type: application/json' \
   -d '{"selected_path_ids":["PATH-01"],"actor":"陈澄","role":"订单统筹经理"}'
-curl -sS -X POST http://localhost:8000/api/cases/CM-2026-014/paths/PATH-01/execute \
+curl -sS -X POST http://localhost:8000/api/cases/CM-2026-014/paths/execute \
   -H 'Content-Type: application/json' \
-  -d '{"actor":"陈澄","role":"订单统筹经理"}'
+  -d '{"path_ids":["PATH-01","PATH-02"],"actor":"陈澄","role":"订单统筹经理"}'
 curl -sS 'http://localhost:8000/api/cases/CM-2026-014/agent-runs?actor=陈澄&role=订单统筹经理&agent_type=path' | python3 -m json.tool
 ```
+
+多 Path 调度由根目录 `.env` 的 `AGENTIC_CM_PATH_EXECUTION_MODE` 控制：默认 `parallel`，各 Path Agent 并发生成独立方案，平台在 Case 级临界区内重新读取并逐条合并结果；设为 `serial` 时按请求顺序逐条执行。`AGENTIC_CM_PATH_MAX_CONCURRENCY` 控制并行上限，默认 `4`，必须是正整数。`GET /api/runtime-config` 暴露当前有效模式与并发上限，供工作台如实展示。非法值会在服务启动时失败，而不是静默回退。
 
 Manifest 的具体内容及其能力快照是 Owner-only 数据。非 Owner 的 Case 视图返回 `manifest: null`，直接读取、生成或审批返回 `403`。当前 `actor` / `role` 仅服务于 Demo 身份模拟；生产环境应从可信认证主体映射身份。
 

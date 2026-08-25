@@ -56,6 +56,24 @@ def make_service(tmp_path: Path) -> CaseService:
     return service
 
 
+class _ConcurrencyProbePathAgent:
+    profile = "concurrency-probe"
+
+    def __init__(self) -> None:
+        self.delegate = DeterministicPathAgentAdapter()
+        self.active = 0
+        self.max_active = 0
+
+    async def generate(self, context, trace):
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        try:
+            await asyncio.sleep(0.03)
+            return await self.delegate.generate(context, trace)
+        finally:
+            self.active -= 1
+
+
 def test_demo_dataset_is_the_authoritative_case_overview_source(tmp_path: Path) -> None:
     cases = {case.id: case for case in demo_cases()}
 
@@ -106,6 +124,43 @@ def test_runtime_environment_loads_repository_dotenv(tmp_path: Path, monkeypatch
         assert os.environ["AGENTIC_CM_TEST_DOTENV"] == "loaded"
     finally:
         os.environ.pop("AGENTIC_CM_TEST_DOTENV", None)
+
+
+def test_path_execution_mode_defaults_to_parallel_and_validates_env(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from agentic_cm import config
+
+    monkeypatch.setattr(config, "REPOSITORY_ROOT", tmp_path)
+    monkeypatch.delenv("AGENTIC_CM_PATH_EXECUTION_MODE", raising=False)
+    assert config.path_execution_mode_from_environment() == "parallel"
+
+    monkeypatch.setenv("AGENTIC_CM_PATH_EXECUTION_MODE", "serial")
+    assert config.path_execution_mode_from_environment() == "serial"
+
+    monkeypatch.setenv("AGENTIC_CM_PATH_EXECUTION_MODE", "unsupported")
+    try:
+        config.path_execution_mode_from_environment()
+    except ValueError as exc:
+        assert "parallel" in str(exc)
+        assert "serial" in str(exc)
+    else:
+        raise AssertionError("unsupported Path execution modes must fail closed")
+
+    monkeypatch.delenv("AGENTIC_CM_PATH_MAX_CONCURRENCY", raising=False)
+    assert config.path_max_concurrency_from_environment() == 4
+
+    monkeypatch.setenv("AGENTIC_CM_PATH_MAX_CONCURRENCY", "2")
+    assert config.path_max_concurrency_from_environment() == 2
+
+    for invalid_value in ("0", "many"):
+        monkeypatch.setenv("AGENTIC_CM_PATH_MAX_CONCURRENCY", invalid_value)
+        try:
+            config.path_max_concurrency_from_environment()
+        except ValueError as exc:
+            assert "positive integer" in str(exc)
+        else:
+            raise AssertionError("invalid Path concurrency limits must fail closed")
 
 
 def test_orchestrator_builds_manifest_from_open_delay_case(tmp_path: Path) -> None:
@@ -330,11 +385,18 @@ def test_manifest_http_endpoints_enforce_owner_boundary(tmp_path: Path, monkeypa
         "/api/cases/CM-2026-014/paths/PATH-01/execute",
         json={"actor": "王淼", "role": "主计划"},
     ).status_code == 403
+    runtime_config = client.get("/api/runtime-config")
+    assert runtime_config.status_code == 200
+    assert runtime_config.json()["path_execution_mode"] in {"parallel", "serial"}
+    assert runtime_config.json()["path_max_concurrency"] >= 1
     path_result = client.post(
-        "/api/cases/CM-2026-014/paths/PATH-01/execute", json=owner
+        "/api/cases/CM-2026-014/paths/execute",
+        json={"path_ids": ["PATH-01"], **owner},
     )
     assert path_result.status_code == 200
-    assert [option["id"] for option in path_result.json()["path_attempts"][0]["solution_revision"]["options"]] == [
+    assert path_result.json()["execution_mode"] in {"parallel", "serial"}
+    assert path_result.json()["max_concurrency"] >= 1
+    assert [option["id"] for option in path_result.json()["case"]["path_attempts"][0]["solution_revision"]["options"]] == [
         "A", "B"
     ]
     path_trace = client.get(
@@ -863,6 +925,60 @@ def test_multi_path_exploration_finishes_only_after_every_solution_revision(tmp_
     }
     assert case.phase is OrchestrationPhase.PROFESSIONAL_COMMITMENT
     assert service.get_inbox("主计划")
+
+
+def test_path_batch_limits_parallelism_and_serializes_case_merges(tmp_path: Path) -> None:
+    probe = _ConcurrencyProbePathAgent()
+    service = CaseService(
+        CaseRepository(tmp_path / "parallel-paths.db"),
+        planner=_AllMatchedSkillPathsPlanner(),
+        path_agent=probe,
+        path_execution_mode="parallel",
+        path_max_concurrency=2,
+    )
+    service.ensure_demo_data()
+    orchestrate(service)
+    approved = service.approve_manifest(
+        "CM-2026-014", actor="陈澄", role="订单统筹经理"
+    )
+    path_ids = [attempt["path_id"] for attempt in approved.path_attempts]
+
+    case = asyncio.run(service.execute_paths(
+        "CM-2026-014", path_ids, actor="陈澄", role="订单统筹经理"
+    ))
+
+    assert probe.max_active == 2
+    assert all(attempt["solution_revision"] for attempt in case.path_attempts)
+    assert case.phase is OrchestrationPhase.PROFESSIONAL_COMMITMENT
+    assert case.version == approved.version + len(path_ids)
+    assert {
+        event["details"]["path_id"]
+        for event in service.get_case_timeline("CM-2026-014")
+        if event["event_type"] == "solution_revision.proposed"
+    } == set(path_ids)
+
+
+def test_path_batch_can_be_configured_to_run_serially(tmp_path: Path) -> None:
+    probe = _ConcurrencyProbePathAgent()
+    service = CaseService(
+        CaseRepository(tmp_path / "serial-paths.db"),
+        planner=_AllMatchedSkillPathsPlanner(),
+        path_agent=probe,
+        path_execution_mode="serial",
+    )
+    service.ensure_demo_data()
+    orchestrate(service)
+    approved = service.approve_manifest(
+        "CM-2026-014", actor="陈澄", role="订单统筹经理"
+    )
+    path_ids = [attempt["path_id"] for attempt in approved.path_attempts]
+
+    case = asyncio.run(service.execute_paths(
+        "CM-2026-014", path_ids, actor="陈澄", role="订单统筹经理"
+    ))
+
+    assert probe.max_active == 1
+    assert all(attempt["solution_revision"] for attempt in case.path_attempts)
 
 
 def test_synthesis_waits_for_every_path_dag_and_includes_success_and_failure(tmp_path: Path) -> None:

@@ -249,6 +249,8 @@ type AgentRun = {
 };
 
 type AiRunKind = "manifest" | "alternatives" | "synthesis";
+type PathRunUiStatus = "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED";
+type PathExecutionMode = "parallel" | "serial";
 
 const aiRunCopy: Record<AiRunKind, { eyebrow: string; title: string; steps: string[] }> = {
   manifest: {
@@ -282,23 +284,79 @@ function formatThreadTime(value: string | null) {
   return value ? threadTimeFormatter.format(new Date(value)) : "时间读取中";
 }
 
-function AiWorkingCard({ kind, step }: { kind: AiRunKind; step: number }) {
+function pathIdForRun(run: AgentRun) {
+  const started = run.events.find((event) => event.step === "run.started");
+  return typeof started?.details.path_id === "string" ? started.details.path_id : null;
+}
+
+function AiWorkingCard({
+  kind,
+  step,
+  runs,
+  paths = [],
+  executionMode = "parallel",
+  maxConcurrency = 4,
+}: {
+  kind: AiRunKind;
+  step: number;
+  runs: AgentRun[];
+  paths?: ManifestPath[];
+  executionMode?: PathExecutionMode;
+  maxConcurrency?: number;
+}) {
   const copy = aiRunCopy[kind];
+  const agentType = kind === "manifest" ? "orchestrator" : kind === "alternatives" ? "path" : "synthesis";
+  const pathRunStates = paths.map((path) => {
+    const run = runs.find((item) => pathIdForRun(item) === path.id);
+    return { path, run, status: (run?.status ?? "QUEUED") as PathRunUiStatus };
+  });
+  const completedPathCount = pathRunStates.filter((item) => item.status === "SUCCEEDED").length;
+  const runningPathCount = pathRunStates.filter((item) => item.status === "RUNNING").length;
+  const runningPathIndex = pathRunStates.findIndex((item) => item.status === "RUNNING");
   return (
     <section className="aiWorkingCard" aria-live="polite" aria-label={copy.title}>
       <div className="aiOrb" aria-hidden="true"><i /><i /><b>AI</b></div>
       <div className="aiWorkingBody">
         <small>{copy.eyebrow}</small>
-        <h3>{copy.title}<span className="thinkingDots"><i /><i /><i /></span></h3>
-        <div className="aiStepTrack">
-          {copy.steps.map((item, index) => (
-            <span className={index < step ? "done" : index === step ? "active" : ""} key={item}>
-              <i>{index < step ? "✓" : index + 1}</i>{item}
-            </span>
-          ))}
-        </div>
-        <div className="aiProgress"><i style={{ width: `${Math.min(92, 18 + step * 24)}%` }} /></div>
+        <h3>{kind === "alternatives" ? `正在${executionMode === "parallel" ? "并行" : "逐条"}推演 ${paths.length} 条 Path` : copy.title}<span className="thinkingDots"><i /><i /><i /></span></h3>
+        {kind === "alternatives" ? (
+          <>
+            <div className="pathRunSummary">
+              <span><small>执行方式</small><strong>{executionMode === "parallel" ? `并行执行 · 最多 ${Math.min(paths.length, maxConcurrency)} 条` : "串行队列 · 同一时间 1 条"}</strong></span>
+              <span><small>整体进度</small><strong>{completedPathCount} / {paths.length} 条已完成</strong></span>
+              <span><small>{executionMode === "parallel" ? "当前并发" : "当前位置"}</small><strong>{executionMode === "parallel" ? `${runningPathCount} 条运行中` : runningPathIndex >= 0 ? `第 ${runningPathIndex + 1} / ${paths.length} 条` : "正在建立运行记录"}</strong></span>
+            </div>
+            <ol className="pathRunQueue" aria-label={`Path Agent ${executionMode === "parallel" ? "并行执行" : "串行执行"}状态`}>
+              {pathRunStates.map(({ path, run, status }, index) => {
+                const latestEvent = run?.events.at(-1);
+                const statusLabel = status === "RUNNING" ? "正在推演" : status === "SUCCEEDED" ? "已完成" : status === "FAILED" ? "失败" : executionMode === "parallel" ? "启动中" : "排队中";
+                return (
+                  <li className={status.toLowerCase()} key={path.id}>
+                    <span className="pathRunIndex">{status === "SUCCEEDED" ? "✓" : String(index + 1).padStart(2, "0")}</span>
+                    <div><strong>{path.title}</strong><small>{latestEvent ? `${latestEvent.summary} · 已记录 ${run?.events.length ?? 0} 步` : status === "QUEUED" ? executionMode === "parallel" ? "正在启动并行运行" : "等待上一条 Path 完成" : "正在启动 Path Agent"}</small></div>
+                    <b>{statusLabel}</b>
+                  </li>
+                );
+              })}
+            </ol>
+          </>
+        ) : (
+          <>
+            <div className="aiStepTrack">
+              {copy.steps.map((item, index) => (
+                <span className={index < step ? "done" : index === step ? "active" : ""} key={item}>
+                  <i>{index < step ? "✓" : index + 1}</i>{item}
+                </span>
+              ))}
+            </div>
+            <div className="aiProgress"><i style={{ width: `${Math.min(92, 18 + step * 24)}%` }} /></div>
+          </>
+        )}
         <p>你可以留在当前页面，结果完成后会自动出现；AI 只生成建议，不会替人批准业务承诺。</p>
+        <details className="embeddedLiveTrace" open>
+          <summary><span><small>LIVE TRACE</small><strong>实时审计轨迹</strong></span><em>每 600ms 刷新</em></summary>
+          <AgentTracePanel runs={runs} agentType={agentType} autoExpand />
+        </details>
       </div>
     </section>
   );
@@ -386,6 +444,10 @@ export default function Home() {
   const [busy, setBusy] = useState(false);
   const [aiRunKind, setAiRunKind] = useState<AiRunKind | null>(null);
   const [aiRunStep, setAiRunStep] = useState(0);
+  const [aiRunStartedAt, setAiRunStartedAt] = useState<string | null>(null);
+  const [aiPathIds, setAiPathIds] = useState<string[]>([]);
+  const [pathExecutionMode, setPathExecutionMode] = useState<PathExecutionMode>("parallel");
+  const [pathMaxConcurrency, setPathMaxConcurrency] = useState(4);
   const [failedAiRun, setFailedAiRun] = useState<AiRunKind | null>(null);
   const [message, setMessage] = useState("");
   const [capabilities, setCapabilities] = useState<CapabilityDetails | null>(null);
@@ -425,6 +487,22 @@ export default function Home() {
     if (window.location.hash !== "#inbox") return;
     const frame = window.requestAnimationFrame(() => setShowInbox(true));
     return () => window.cancelAnimationFrame(frame);
+  }, []);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/runtime-config`)
+      .then((response) => response.ok ? response.json() : Promise.reject())
+      .then((data) => {
+        if (data.path_execution_mode === "parallel" || data.path_execution_mode === "serial") {
+          setPathExecutionMode(data.path_execution_mode);
+        }
+        if (Number.isInteger(data.path_max_concurrency) && data.path_max_concurrency > 0) {
+          setPathMaxConcurrency(data.path_max_concurrency);
+        }
+      })
+      .catch(() => {
+        // The backend default is parallel; Case loading reports connection failures separately.
+      });
   }, []);
 
   useEffect(() => {
@@ -615,6 +693,7 @@ export default function Home() {
 
   async function generateManifest() {
     setBusy(true);
+    setAiRunStartedAt(new Date().toISOString());
     setAiRunKind("manifest");
     setAiRunStep(0);
     setFailedAiRun(null);
@@ -682,29 +761,41 @@ export default function Home() {
     const requestedPathIds = Array.isArray(pathIds) ? pathIds : [pathIds];
     if (requestedPathIds.length === 0) return;
     setBusy(true);
+    setAiRunStartedAt(new Date().toISOString());
     setAiRunKind("alternatives");
     setAiRunStep(0);
+    setAiPathIds(requestedPathIds);
     setFailedAiRun(null);
     setMessage("");
     try {
-      for (const pathId of requestedPathIds) {
-        const response = await fetch(`${API_BASE}/api/cases/${activeCaseId}/paths/${pathId}/execute`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ actor: currentIdentity.name, role: currentIdentity.role }),
-        });
-        if (!response.ok) {
-          const error = await response.json().catch(() => ({}));
-          throw new Error(error.detail ?? "Path Agent failed");
-        }
-        const data = await response.json();
-        setPathAttempts(data.path_attempts ?? []);
-        setCommitmentNodes(data.commitment_nodes ?? []);
-        setPhase(data.phase);
-        setApproved(["PATH_EXPLORATION", "PROFESSIONAL_COMMITMENT", "FINAL_REVIEW"].includes(data.phase));
+      const response = await fetch(`${API_BASE}/api/cases/${activeCaseId}/paths/execute`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          path_ids: requestedPathIds,
+          actor: currentIdentity.name,
+          role: currentIdentity.role,
+        }),
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.detail ?? "Path Agent failed");
       }
+      const data = await response.json();
+      const updatedCase = data.case;
+      if (data.execution_mode === "parallel" || data.execution_mode === "serial") {
+        setPathExecutionMode(data.execution_mode);
+      }
+      if (Number.isInteger(data.max_concurrency) && data.max_concurrency > 0) {
+        setPathMaxConcurrency(data.max_concurrency);
+      }
+      setPathAttempts(updatedCase.path_attempts ?? []);
+      setCommitmentNodes(updatedCase.commitment_nodes ?? []);
+      setPhase(updatedCase.phase);
+      setApproved(["PATH_EXPLORATION", "PROFESSIONAL_COMMITMENT", "FINAL_REVIEW"].includes(updatedCase.phase));
+      await refreshAgentRuns();
       await refreshTimeline();
-      setMessage(`Path Agent 已自动完成 ${requestedPathIds.length} 条 Path 的可审查替代方案。 `);
+      setMessage(`Path Agent 已${data.execution_mode === "parallel" ? "并行" : "逐条"}完成 ${requestedPathIds.length} 条 Path 的可审查替代方案。 `);
     } catch (error) {
       setFailedAiRun("alternatives");
       setMessage(`替代方案生成失败：${error instanceof Error ? error.message : "请确认 Path Agent 配置"}。`);
@@ -717,6 +808,7 @@ export default function Home() {
 
   async function generateSynthesis() {
     setBusy(true);
+    setAiRunStartedAt(new Date().toISOString());
     setAiRunKind("synthesis");
     setAiRunStep(0);
     setFailedAiRun(null);
@@ -925,9 +1017,12 @@ export default function Home() {
     return { path, revision, nodes, runs };
   });
   const liveAgentType = aiRunKind === "manifest" ? "orchestrator" : aiRunKind === "alternatives" ? "path" : "synthesis";
-  const liveAgentRuns = liveAgentType === "orchestrator"
+  const allLiveAgentRuns = liveAgentType === "orchestrator"
     ? agentRuns
     : liveAgentType === "path" ? pathAgentRuns : synthesisAgentRuns;
+  const liveAgentRuns = aiRunStartedAt
+    ? allLiveAgentRuns.filter((run) => run.started_at >= aiRunStartedAt)
+    : [];
   const latestFailedOrchestratorRuns = agentRuns[0]?.status === "FAILED" ? [agentRuns[0]] : [];
   const latestFailedPathRuns = pathAgentRuns[0]?.status === "FAILED" ? [pathAgentRuns[0]] : [];
   const latestFailedSynthesisRuns = synthesisAgentRuns[0]?.status === "FAILED" ? [synthesisAgentRuns[0]] : [];
@@ -965,13 +1060,14 @@ export default function Home() {
   }
 
   const orchestrationCard = aiRunKind ? (
-    <>
-      <AiWorkingCard kind={aiRunKind} step={aiRunStep} />
-      <section className="liveTrace" aria-live="polite" aria-label="Agent 实时 Trace">
-        <header><span><small>LIVE TRACE</small><strong>Agent 执行步骤同步写入</strong></span><em>每 600ms 刷新</em></header>
-        <AgentTracePanel runs={liveAgentRuns} agentType={liveAgentType} autoExpand />
-      </section>
-    </>
+    <AiWorkingCard
+      kind={aiRunKind}
+      step={aiRunStep}
+      runs={liveAgentRuns}
+      paths={aiRunKind === "alternatives" ? manifestPaths.filter((path) => aiPathIds.includes(path.id)) : []}
+      executionMode={pathExecutionMode}
+      maxConcurrency={pathMaxConcurrency}
+    />
   ) : phase === "MANIFEST_REVIEW" && !canViewManifest ? (
     <>
       <div className="panelTitle">
