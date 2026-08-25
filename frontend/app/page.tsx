@@ -1,21 +1,24 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import AppSidebar from "./app-sidebar";
 
-type CaseStatus = "处理中" | "待决策" | "阻塞" | "待受理" | "已关闭";
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? `http://localhost:${process.env.AGENTIC_CM_API_PORT ?? 8000}`;
+
+type CaseStatus = "处理中" | "暂缓" | "已关闭";
 type CaseRisk = "高" | "中" | "低";
 type CaseSummary = { id:string; title:string; description:string; status:CaseStatus; risk:CaseRisk; owner:string; ownerRole:string; ownerInitial:string; customer:string; due:string; dueTone:"danger"|"warning"|"normal"|"muted"; phase:number; phaseLabel:string; updated:string; attention?:string };
+type ApiCase = { id:string; title:string; description:string; status:"OPEN"|"PENDING"|"CLOSED"; phase:"INTAKE"|"MANIFEST_REVIEW"|"PATH_EXPLORATION"|"PROFESSIONAL_COMMITMENT"|"FINAL_REVIEW"; owner:string; owner_role:string; business_payload?:{customer?:string}; updated_at:string };
 
-const caseData: CaseSummary[] = [
-  {id:"CM-2026-014",title:"Northstar MCU-X7 订单预计延期 12 天",description:"关键物料 MCU-X7 预计晚于承诺日期 12 天",status:"处理中",risk:"高",owner:"陈澄",ownerRole:"订单统筹经理",ownerInitial:"陈",customer:"Northstar Mobility",due:"3 天后",dueTone:"danger",phase:3,phaseLabel:"Path 探索",updated:"12 分钟前",attention:"2 项专业承诺待完成"},
-  {id:"CM-2026-012",title:"Vela 一级供应商停机影响两个在途批次",description:"一级供应商产线停机，影响两个在途批次",status:"阻塞",risk:"高",owner:"王淼",ownerRole:"主计划",ownerInitial:"王",customer:"Vela Robotics",due:"已逾期 1 天",dueTone:"danger",phase:4,phaseLabel:"专业承诺",updated:"28 分钟前",attention:"等待供应商恢复时间证据"},
-  {id:"CM-2026-015",title:"Northstar MCU-X7 替代料缺少客户认证",description:"候选替代料缺少客户侧应用认证",status:"待决策",risk:"中",owner:"林乔",ownerRole:"研发",ownerInitial:"林",customer:"Northstar Mobility",due:"5 天后",dueTone:"warning",phase:5,phaseLabel:"最终决策",updated:"1 小时前",attention:"Case Owner 需批准方案 B"},
-  {id:"CM-2026-018",title:"Aster 9 月需求临时上调 22%",description:"9 月需求上调 22%，需评估产能与库存",status:"待受理",risk:"中",owner:"陈澄",ownerRole:"订单统筹经理",ownerInitial:"陈",customer:"Aster Energy",due:"7 天后",dueTone:"normal",phase:1,phaseLabel:"Case 受理",updated:"2 小时前"},
-  {id:"CM-2026-009",title:"售后备件消耗连续三周超出预测区间",description:"售后备件消耗连续三周高于预测区间",status:"处理中",risk:"中",owner:"赵宁",ownerRole:"供应经理",ownerInitial:"赵",customer:"内部售后",due:"8 天后",dueTone:"normal",phase:3,phaseLabel:"Path 探索",updated:"昨天 16:40"},
-  {id:"CM-2026-006",title:"华南仓 WMS 与实收数量相差 320 件",description:"WMS 与实物收货数量存在 320 件差异",status:"已关闭",risk:"低",owner:"周屿",ownerRole:"仓储运营",ownerInitial:"周",customer:"内部履约",due:"已完成",dueTone:"muted",phase:6,phaseLabel:"结果验证",updated:"8 月 19 日"},
-];
-const filters = ["全部","处理中","待决策","阻塞","已关闭"] as const;
+const casePresentation: Record<string, Pick<CaseSummary,"risk"|"due"|"dueTone"|"attention">> = {
+  "CM-2026-014": {risk:"高",due:"3 天后",dueTone:"danger",attention:"2 项专业承诺待完成"},
+  "CM-2026-012": {risk:"高",due:"已逾期 1 天",dueTone:"danger",attention:"等待供应商恢复时间证据"},
+  "CM-2026-015": {risk:"中",due:"5 天后",dueTone:"warning",attention:"Case Owner 需批准方案 B"},
+  "CM-2026-009": {risk:"中",due:"8 天后",dueTone:"normal"},
+  "CM-2026-006": {risk:"低",due:"已完成",dueTone:"muted"},
+};
+const defaultPresentation: Pick<CaseSummary,"risk"|"due"|"dueTone"> = {risk:"中",due:"待确认",dueTone:"normal"};
+const filters = ["全部","处理中","暂缓","已关闭"] as const;
 const stages = ["受理","评审","探索","承诺","决策","验证"];
 const demoIdentities = [
   {name:"陈澄",role:"订单统筹经理",avatar:"陈"},
@@ -28,12 +31,46 @@ function StatusPill({status}:{status:CaseStatus}){return <span className={`statu
 function RiskMark({risk}:{risk:CaseRisk}){return <span className={`riskMark risk-${risk}`}><i />{risk}风险</span>}
 function StageProgress({value,label}:{value:number;label:string}){return <div className="stageProgress" aria-label={`当前阶段：${label}`}><div>{stages.map((stage,index)=><i key={stage} className={index<value?"filled":""}/>)}</div><span>{label}</span></div>}
 
+function mapCase(apiCase: ApiCase): CaseSummary {
+  const status: Record<ApiCase["status"], CaseStatus> = {OPEN:"处理中",PENDING:"暂缓",CLOSED:"已关闭"};
+  const phases: Record<ApiCase["phase"], {value:number;label:string}> = {
+    INTAKE:{value:1,label:"Case 受理"},
+    MANIFEST_REVIEW:{value:2,label:"Manifest 评审"},
+    PATH_EXPLORATION:{value:3,label:"Path 探索"},
+    PROFESSIONAL_COMMITMENT:{value:4,label:"专业承诺"},
+    FINAL_REVIEW:{value:5,label:"最终决策"},
+  };
+  const currentPhase = apiCase.status === "CLOSED" ? {value:6,label:"结果验证"} : phases[apiCase.phase];
+  const presentation = casePresentation[apiCase.id] ?? defaultPresentation;
+  return {
+    id:apiCase.id,title:apiCase.title,description:apiCase.description,status:status[apiCase.status],
+    owner:apiCase.owner,ownerRole:apiCase.owner_role,ownerInitial:apiCase.owner.slice(0,1),
+    customer:apiCase.business_payload?.customer ?? "内部协同",
+    updated:new Date(apiCase.updated_at).toLocaleString("zh-CN",{month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"}),
+    phase:currentPhase.value,phaseLabel:currentPhase.label,...presentation,
+  };
+}
+
 export default function Home(){
   const [activeFilter,setActiveFilter]=useState<(typeof filters)[number]>("全部");
   const [search,setSearch]=useState("");
   const [selectedCase,setSelectedCase]=useState<CaseSummary|null>(null);
   const [identityIndex,setIdentityIndex]=useState(0);
-  const visibleCases=useMemo(()=>{const keyword=search.trim().toLowerCase();return caseData.filter(item=>(activeFilter==="全部"||item.status===activeFilter)&&(!keyword||[item.id,item.title,item.customer,item.owner].some(value=>value.toLowerCase().includes(keyword))))},[activeFilter,search]);
+  const [caseData,setCaseData]=useState<CaseSummary[]>([]);
+  const [loadState,setLoadState]=useState<"loading"|"ready"|"error">("loading");
+  const visibleCases=useMemo(()=>{const keyword=search.trim().toLowerCase();return caseData.filter(item=>(activeFilter==="全部"||item.status===activeFilter)&&(!keyword||[item.id,item.title,item.customer,item.owner].some(value=>value.toLowerCase().includes(keyword))))},[activeFilter,search,caseData]);
+  const openCount=caseData.filter(item=>item.status==="处理中").length;
+
+  useEffect(()=>{
+    const controller=new AbortController();
+    const loadCases=()=>fetch(`${API_BASE}/api/cases`,{signal:controller.signal})
+      .then(response=>{if(!response.ok)throw new Error(`Case API ${response.status}`);return response.json() as Promise<ApiCase[]>})
+      .then(cases=>{setCaseData(cases.map(mapCase));setLoadState("ready")})
+      .catch(error=>{if(error instanceof DOMException&&error.name==="AbortError")return;setLoadState("error")});
+    void loadCases();
+    window.addEventListener("focus",loadCases);
+    return()=>{controller.abort();window.removeEventListener("focus",loadCases)};
+  },[]);
 
   return <div className="appShell">
     <AppSidebar active="overview" identity={demoIdentities[identityIndex]} identities={demoIdentities} onIdentitySelect={setIdentityIndex}/>
@@ -43,7 +80,7 @@ export default function Home(){
       <div className="pageContent">
         <section className="welcome"><div><p className="eyebrow">FRIDAY · AUG 21</p><h1>早上好，陈澄</h1><p className="welcomeCopy">今天有 <strong>3 个事项</strong>需要你的判断，其中 1 个 Case 已接近承诺期限。</p></div><div className="governanceNote"><span>Human governed</span><p>Agent 提案 · 人员决策 · 全程留痕</p></div></section>
         <section className="metrics" aria-label="Case 指标">
-          <article><div className="metricIcon metricTeal">◎</div><div><span>进行中 Case</span><strong>4</strong><small><b>+1</b> 本周新增</small></div></article>
+          <article><div className="metricIcon metricTeal">◎</div><div><span>进行中 Case</span><strong>{openCount}</strong><small><b>实时</b> 来自 Case API</small></div></article>
           <article><div className="metricIcon metricAmber">!</div><div><span>需要关注</span><strong>3</strong><small>1 个已逾期</small></div></article>
           <article><div className="metricIcon metricBlue">✓</div><div><span>本月已闭环</span><strong>12</strong><small><b>+18%</b> 环比</small></div></article>
           <article><div className="metricIcon metricViolet">↯</div><div><span>平均决策周期</span><strong>2.4<em>天</em></strong><small><b>−0.6 天</b> 较上月</small></div></article>
@@ -51,6 +88,7 @@ export default function Home(){
         <div className="dashboardGrid">
           <section className="casePanel" id="case-overview">
             <div className="panelHeader"><div><h2>Case 总览</h2><p>跨组织异常处置的当前状态</p></div><button type="button">查看全部 <span>→</span></button></div>
+            {loadState==="error"&&<div className="caseSyncNotice" role="alert">Case 状态同步失败，当前列表可能不是最新。</div>}
             <div className="caseToolbar"><div className="filterTabs" role="tablist" aria-label="按状态筛选">{filters.map(filter=><button key={filter} type="button" role="tab" aria-selected={activeFilter===filter} className={activeFilter===filter?"active":""} onClick={()=>setActiveFilter(filter)}>{filter}{filter==="全部"&&<span>{caseData.length}</span>}</button>)}</div><label className="tableSearch"><span>⌕</span><input value={search} onChange={event=>setSearch(event.target.value)} placeholder="筛选当前列表" aria-label="筛选当前 Case 列表"/></label></div>
             <div className="caseTableWrap">
               <table className="caseTable">
@@ -75,7 +113,7 @@ export default function Home(){
                   </tr>;
                 })}</tbody>
               </table>
-              {visibleCases.length===0&&<div className="emptyState"><span>⌕</span><strong>没有匹配的 Case</strong><p>尝试调整状态或搜索关键词</p></div>}
+              {visibleCases.length===0&&<div className="emptyState"><span>⌕</span><strong>{loadState==="loading"?"正在同步 Case 状态":"没有匹配的 Case"}</strong><p>{loadState==="loading"?"状态与阶段以 Case API 为准":"尝试调整状态或搜索关键词"}</p></div>}
             </div>
             <div className="tableFooter"><span>显示 {visibleCases.length} / {caseData.length} 个 Case</span><div><button type="button" disabled>‹</button><button type="button" className="active">1</button><button type="button" disabled>›</button></div></div>
           </section>

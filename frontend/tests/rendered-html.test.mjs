@@ -21,12 +21,8 @@ test("server-renders the Case overview homepage", async () => {
   assert.match(html, /早上好，陈澄/);
   assert.match(html, /进行中 Case/);
   assert.match(html, /需要你的关注/);
-  assert.match(html, /Northstar MCU-X7 订单预计延期 12 天/);
-  assert.match(html, /Vela 一级供应商停机影响两个在途批次/);
-  assert.match(html, /Northstar MCU-X7 替代料缺少客户认证/);
-  assert.match(html, /Aster 9 月需求临时上调 22%/);
-  assert.match(html, /售后备件消耗连续三周超出预测区间/);
-  assert.match(html, /华南仓 WMS 与实收数量相差 320 件/);
+  assert.match(html, /正在同步 Case 状态/);
+  assert.match(html, /状态与阶段以 Case API 为准/);
   assert.match(html, /Human governed/);
   assert.doesNotMatch(html, /切换至该角色/);
   assert.doesNotMatch(html, /codex-preview|SkeletonPreview/);
@@ -39,9 +35,17 @@ test("homepage keeps risk, ownership, and lifecycle visible", async () => {
   assert.match(html, /当前阶段/);
   assert.match(html, /负责人/);
   assert.match(html, /承诺期限/);
-  assert.match(html, /Path 探索/);
-  assert.match(html, /最终决策/);
-  assert.match(html, /结果验证/);
+  assert.match(html, /正在同步 Case 状态/);
+});
+
+test("homepage derives authoritative status and phase from the Case API", async () => {
+  const source = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  assert.match(source, /fetch\(`\$\{API_BASE\}\/api\/cases`/);
+  assert.match(source, /OPEN:"处理中",PENDING:"暂缓",CLOSED:"已关闭"/);
+  assert.match(source, /PROFESSIONAL_COMMITMENT:\{value:4,label:"专业承诺"\}/);
+  assert.match(source, /cases\.map\(mapCase\)/);
+  assert.doesNotMatch(source, /const caseData: CaseSummary\[\] = \[/);
+  assert.match(source, /Case 状态同步失败，当前列表可能不是最新/);
 });
 
 test("homepage implements search, filters, and quick view without role shortcuts", async () => {
