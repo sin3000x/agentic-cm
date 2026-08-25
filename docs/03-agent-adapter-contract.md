@@ -82,6 +82,11 @@ sequenceDiagram
 
 ## 4. 调用模型
 
+> 本节描述的是目标契约，**不是当前实现**。当前三个 Agent 使用更窄的接口
+> （Planner 为 `propose(context, candidates, trace)`，Path 与 Synthesis 为
+> `generate(context, trace)`），且 ToolProvider 与 event_sink 尚未作为独立参数
+> 注入。已实现范围见 [§13](#13-当前已实现的-orchestrator-切片)。
+
 概念性最小接口：
 
 ```python
