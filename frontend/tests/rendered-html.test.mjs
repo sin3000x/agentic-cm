@@ -36,6 +36,7 @@ test("homepage keeps risk, ownership, and lifecycle visible", async () => {
   assert.match(html, /负责人/);
   assert.match(html, /承诺期限/);
   assert.match(html, /正在同步 Case 状态/);
+  assert.doesNotMatch(html, /结果验证/);
 });
 
 test("homepage derives authoritative status and phase from the Case API", async () => {
@@ -43,6 +44,8 @@ test("homepage derives authoritative status and phase from the Case API", async 
   assert.match(source, /fetch\(`\$\{API_BASE\}\/api\/cases`/);
   assert.match(source, /OPEN:"处理中",PENDING:"暂缓",CLOSED:"已关闭"/);
   assert.match(source, /PROFESSIONAL_COMMITMENT:\{value:4,label:"专业承诺"\}/);
+  assert.match(source, /CLOSED" \? \{value:5,label:"最终决策"\}/);
+  assert.doesNotMatch(source, /value:6|结果验证/);
   assert.match(source, /cases\.map\(mapCase\)/);
   assert.doesNotMatch(source, /const caseData: CaseSummary\[\] = \[/);
   assert.match(source, /Case 状态同步失败，当前列表可能不是最新/);
@@ -156,6 +159,24 @@ test("approved Manifest launches a real Path Agent and exposes its audited Solut
   assert.match(styles, /\.pathExplorationProgress/);
   assert.match(styles, /@keyframes aiScan/);
   assert.match(styles, /prefers-reduced-motion/);
+});
+
+test("completed approval DAGs launch Synthesis and expose Owner-only final actions", async () => {
+  const source = await readFile(new URL("../app/cases/[id]/page.tsx", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../app/cases/[id]/case-detail.css", import.meta.url), "utf8");
+
+  assert.match(source, /api\/cases\/CM-2026-014\/synthesize/);
+  assert.match(source, /data\.phase === "FINAL_REVIEW" && !data\.synthesis_report/);
+  assert.match(source, /Synthesis Agent 正在汇总全部 Path/);
+  assert.match(source, /synthesisReport\.path_assessments\.map/);
+  assert.match(source, /assessment\.status === "SUCCEEDED" \? "审批成功" : "审批失败"/);
+  assert.match(source, /api\/cases\/CM-2026-014\/owner-decision/);
+  assert.match(source, />关闭 Case<\/button>/);
+  assert.match(source, />保持 Open<\/button>/);
+  assert.match(source, />修改 · 打回 Orchestrator<\/button>/);
+  assert.match(source, /agentType="synthesis"/);
+  assert.match(styles, /\.synthesisReport/);
+  assert.match(styles, /\.ownerDecisionActions/);
 });
 
 test("organization asset pages read all three effective asset kinds from the backend", async () => {

@@ -12,7 +12,13 @@ from agentic_cm.capabilities import (
     CapabilityConflictError,
     CapabilityRegistry,
 )
-from agentic_cm.domain import CommitmentDecision, NodeStatus, OrchestrationPhase
+from agentic_cm.domain import (
+    CaseStatus,
+    CommitmentDecision,
+    NodeStatus,
+    OrchestrationPhase,
+    OwnerDecisionAction,
+)
 from agentic_cm.orchestrator import (
     DeterministicPlannerAdapter,
     ManifestDraftResult,
@@ -32,6 +38,10 @@ from agentic_cm.path_agent import (
     RoleReport,
 )
 from agentic_cm.service import AuthorizationError, CaseService, InvalidTransitionError
+from agentic_cm.synthesis_agent import (
+    DeterministicSynthesisAgentAdapter,
+    OpenAICompatibleSynthesisAgentAdapter,
+)
 
 
 def make_service(tmp_path: Path) -> CaseService:
@@ -39,6 +49,7 @@ def make_service(tmp_path: Path) -> CaseService:
         CaseRepository(tmp_path / "test.db"),
         planner=DeterministicPlannerAdapter(),
         path_agent=DeterministicPathAgentAdapter(),
+        synthesis_agent=DeterministicSynthesisAgentAdapter(),
     )
     service.ensure_demo_data()
     return service
@@ -205,7 +216,9 @@ def test_manifest_is_visible_and_actionable_only_by_case_owner(tmp_path: Path) -
     assert owner_view["manifest"] is not None
     assert owner_view["permissions"]["can_approve_manifest"] is True
     assert other_role_view["manifest"] is None
+    assert other_role_view["synthesis_report"] is None
     assert other_role_view["permissions"]["can_view_manifest"] is False
+    assert other_role_view["permissions"]["can_decide_case"] is False
     assert anonymous_view["manifest"] is None
 
     for operation in (
@@ -316,6 +329,29 @@ def test_manifest_http_endpoints_enforce_owner_boundary(tmp_path: Path, monkeypa
         "node_id": "SUPPLY",
         "path_id": "PATH-01",
     }
+    assert client.post(
+        "/api/cases/CM-2026-014/paths/PATH-01/commitments/TECH/decision",
+        json={"actor": "林乔", "role": "研发", "decision": "APPROVE"},
+    ).status_code == 200
+    final_commitment = client.post(
+        "/api/cases/CM-2026-014/paths/PATH-01/commitments/CUSTOMER/decision",
+        json={"actor": "赵宁", "role": "供应经理", "decision": "APPROVE"},
+    )
+    assert final_commitment.status_code == 200
+    assert final_commitment.json()["phase"] == "FINAL_REVIEW"
+    assert client.post(
+        "/api/cases/CM-2026-014/synthesize",
+        json={"actor": "王淼", "role": "主计划"},
+    ).status_code == 403
+    synthesized = client.post("/api/cases/CM-2026-014/synthesize", json=owner)
+    assert synthesized.status_code == 200
+    assert synthesized.json()["synthesis_report"]["path_assessments"][0]["status"] == "SUCCEEDED"
+    decision = client.post(
+        "/api/cases/CM-2026-014/owner-decision",
+        json={**owner, "action": "KEEP_OPEN"},
+    )
+    assert decision.status_code == 200
+    assert decision.json()["status"] == "OPEN"
 
 
 def test_role_inbox_approval_makes_node_ready_and_releases_dependents(tmp_path: Path) -> None:
@@ -758,6 +794,211 @@ def test_multi_path_exploration_finishes_only_after_every_solution_revision(tmp_
     ))
     assert case.phase is OrchestrationPhase.PROFESSIONAL_COMMITMENT
     assert service.get_inbox("主计划")
+
+
+def test_synthesis_waits_for_every_path_dag_and_includes_success_and_failure(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+    case = orchestrate(service)
+    selected_ids = [path.id for path in case.manifest.paths[:2]]
+    service.approve_manifest(
+        "CM-2026-014", selected_ids, actor="陈澄", role="订单统筹经理"
+    )
+    for path_id in selected_ids:
+        asyncio.run(service.execute_path(
+            "CM-2026-014", path_id, actor="陈澄", role="订单统筹经理"
+        ))
+
+    case = service.get_case("CM-2026-014")
+    first_pending = next(
+        node for node in case.commitment_nodes
+        if node.path_id == selected_ids[1] and node.status is NodeStatus.PENDING
+    )
+    case = service.decide_commitment(
+        case.id,
+        selected_ids[1],
+        first_pending.id,
+        decision=CommitmentDecision.REJECT,
+        actor="审批人",
+        role=first_pending.role,
+    )
+    assert case.phase is OrchestrationPhase.PROFESSIONAL_COMMITMENT
+
+    while case.phase is OrchestrationPhase.PROFESSIONAL_COMMITMENT:
+        pending = next(
+            node for node in case.commitment_nodes
+            if node.path_id == selected_ids[0] and node.status is NodeStatus.PENDING
+        )
+        case = service.decide_commitment(
+            case.id,
+            selected_ids[0],
+            pending.id,
+            decision=CommitmentDecision.APPROVE,
+            actor="审批人",
+            role=pending.role,
+        )
+
+    assert case.phase is OrchestrationPhase.FINAL_REVIEW
+    assert {attempt["outcome"] for attempt in case.path_attempts} == {"SUCCEEDED", "REJECTED"}
+    report_case = asyncio.run(service.synthesize_case(
+        case.id, actor="陈澄", role="订单统筹经理"
+    ))
+    report = report_case.synthesis_report
+    assert {item["status"] for item in report["path_assessments"]} == {"SUCCEEDED", "FAILED"}
+    assert "1 条审批通过，1 条审批失败" in report["summary"]
+    runs = service.get_agent_runs(
+        case.id, actor="陈澄", role="订单统筹经理", agent_type="synthesis"
+    )
+    assert runs[0]["status"] == "SUCCEEDED"
+    assert any(event["step"] == "synthesis.compose" for event in runs[0]["events"])
+
+
+def test_openai_synthesis_repairs_paraphrased_artifact_refs(tmp_path: Path) -> None:
+    observed: dict[str, object] = {"attempts": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed["attempts"] = int(observed["attempts"]) + 1
+        payload = json.loads(request.content)
+        observed["payload"] = payload
+        supporting_refs = (
+            ["PATH-01 方案修订 v1", "承诺均已通过"]
+            if observed["attempts"] == 1
+            else ["PATH-01/solution-revision/1", "PATH-01/commitment/SUPPLY"]
+        )
+        content = {
+            "summary": "已汇总一条审批成功的物料替代路径。",
+            "path_assessments": [{
+                "path_id": "PATH-01",
+                "status": "SUCCEEDED",
+                "conclusion": "物料替代路径的全部责任节点已经由对应人员批准。",
+                "supporting_refs": supporting_refs,
+                "risks": ["仍需由 Case Owner 决定是否关闭 Case"],
+            }],
+            "cross_path_findings": ["本轮仅探索一条 Path，无跨 Path 冲突。"],
+            "remaining_risks": ["Agent 汇总不构成最终业务决定。"],
+            "recommended_owner_action": "KEEP_OPEN",
+            "decision_brief": "请 Case Owner 审查已批准结果并作出最终决定。",
+        }
+        return httpx.Response(200, json={
+            "id": f"synthesis-{observed['attempts']}",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "vendor-model-42",
+            "choices": [{
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {"role": "assistant", "content": json.dumps(content, ensure_ascii=False)},
+            }],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 100, "total_tokens": 200},
+        })
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            service = CaseService(
+                CaseRepository(tmp_path / "synthesis-repair.db"),
+                planner=DeterministicPlannerAdapter(),
+                path_agent=DeterministicPathAgentAdapter(),
+                synthesis_agent=OpenAICompatibleSynthesisAgentAdapter(
+                    "synthesis-secret",
+                    model="vendor-model-42",
+                    base_url="https://gateway.example/v1",
+                    http_client=client,
+                ),
+            )
+            service.ensure_demo_data()
+            await service.orchestrate_case("CM-2026-014", actor="陈澄", role="订单统筹经理")
+            service.approve_manifest(
+                "CM-2026-014", ["PATH-01"], actor="陈澄", role="订单统筹经理"
+            )
+            await service.execute_path(
+                "CM-2026-014", "PATH-01", actor="陈澄", role="订单统筹经理"
+            )
+            case = service.get_case("CM-2026-014")
+            while case.phase is OrchestrationPhase.PROFESSIONAL_COMMITMENT:
+                pending = next(node for node in case.commitment_nodes if node.status is NodeStatus.PENDING)
+                case = service.decide_commitment(
+                    case.id, pending.path_id, pending.id,
+                    decision=CommitmentDecision.APPROVE, actor="审批人", role=pending.role,
+                )
+            return await service.synthesize_case(
+                case.id, actor="陈澄", role="订单统筹经理"
+            )
+
+    case = asyncio.run(scenario())
+    assert observed["attempts"] == 2
+    assert case.synthesis_report["path_assessments"][0]["supporting_refs"] == [
+        "PATH-01/solution-revision/1", "PATH-01/commitment/SUPPLY"
+    ]
+    request_payload = observed["payload"]
+    request_context = json.loads(request_payload["messages"][1]["content"])
+    assert request_context["path_results"][0]["authorized_supporting_refs"] == [
+        "PATH-01/solution-revision/1",
+        "PATH-01/commitment/SUPPLY",
+        "PATH-01/commitment/TECH",
+        "PATH-01/commitment/CUSTOMER",
+    ]
+    assert "READY means that its responsible human has already approved it" in request_payload["messages"][0]["content"]
+    assert "synthesis-secret" not in json.dumps(request_payload)
+
+
+def test_owner_can_close_keep_open_or_modify_after_synthesis(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+    approve_and_execute_path(service)
+    case = service.get_case("CM-2026-014")
+    while case.phase is OrchestrationPhase.PROFESSIONAL_COMMITMENT:
+        pending = next(node for node in case.commitment_nodes if node.status is NodeStatus.PENDING)
+        case = service.decide_commitment(
+            case.id,
+            pending.path_id,
+            pending.id,
+            decision=CommitmentDecision.APPROVE,
+            actor="审批人",
+            role=pending.role,
+        )
+    asyncio.run(service.synthesize_case(case.id, actor="陈澄", role="订单统筹经理"))
+
+    kept = service.decide_case(
+        case.id,
+        action=OwnerDecisionAction.KEEP_OPEN,
+        actor="陈澄",
+        role="订单统筹经理",
+    )
+    assert kept.status is CaseStatus.OPEN
+    assert kept.phase is OrchestrationPhase.FINAL_REVIEW
+
+    modified = service.decide_case(
+        case.id,
+        action=OwnerDecisionAction.MODIFY,
+        actor="陈澄",
+        role="订单统筹经理",
+    )
+    assert modified.status is CaseStatus.OPEN
+    assert modified.phase is OrchestrationPhase.INTAKE
+    assert modified.manifest is None
+    assert modified.synthesis_report is None
+    assert modified.commitment_nodes == []
+    assert modified.owner_decision["action"] == "MODIFY"
+
+    close_root = tmp_path / "close"
+    close_root.mkdir()
+    close_service = make_service(close_root)
+    approve_and_execute_path(close_service)
+    close_case = close_service.get_case("CM-2026-014")
+    while close_case.phase is OrchestrationPhase.PROFESSIONAL_COMMITMENT:
+        pending = next(node for node in close_case.commitment_nodes if node.status is NodeStatus.PENDING)
+        close_case = close_service.decide_commitment(
+            close_case.id, pending.path_id, pending.id,
+            decision=CommitmentDecision.APPROVE, actor="审批人", role=pending.role,
+        )
+    asyncio.run(close_service.synthesize_case(
+        close_case.id, actor="陈澄", role="订单统筹经理"
+    ))
+    closed = close_service.decide_case(
+        close_case.id,
+        action=OwnerDecisionAction.CLOSE,
+        actor="陈澄",
+        role="订单统筹经理",
+    )
+    assert closed.status is CaseStatus.CLOSED
 
 
 def test_reducing_skill_declared_paths_reduces_manifest_candidates(tmp_path: Path) -> None:
