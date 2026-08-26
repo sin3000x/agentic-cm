@@ -1,3 +1,6 @@
+import pytest
+
+from agentic_cm.config import agent_llm_config_from_environment
 from agentic_cm.orchestrator import (
     DeterministicPlannerAdapter,
     OpenAICompatiblePlannerAdapter,
@@ -25,6 +28,76 @@ def test_single_adapter_setting_selects_all_agent_runtimes(monkeypatch) -> None:
     assert isinstance(
         synthesis_agent_from_environment(), OpenAICompatibleSynthesisAgentAdapter
     )
+
+
+def test_agent_specific_models_and_thinking_settings_are_independent(monkeypatch) -> None:
+    monkeypatch.setenv("AGENTIC_CM_ADAPTER", "openai-compatible")
+    monkeypatch.setenv("AGENTIC_CM_LLM_BASE_URL", "https://model.example/v1")
+    monkeypatch.setenv("AGENTIC_CM_LLM_MODEL", "fallback-model")
+    monkeypatch.setenv("AGENTIC_CM_ORCHESTRATOR_LLM_MODEL", "planner-model")
+    monkeypatch.setenv("AGENTIC_CM_PATH_LLM_MODEL", "path-model")
+    monkeypatch.setenv("AGENTIC_CM_SYNTHESIS_LLM_MODEL", "synthesis-model")
+    monkeypatch.setenv("AGENTIC_CM_ORCHESTRATOR_THINKING_ENABLED", "true")
+    monkeypatch.setenv("AGENTIC_CM_ORCHESTRATOR_REASONING_EFFORT", "max")
+    monkeypatch.setenv("AGENTIC_CM_PATH_THINKING_ENABLED", "false")
+    monkeypatch.setenv("AGENTIC_CM_SYNTHESIS_THINKING_ENABLED", "true")
+    monkeypatch.setenv("AGENTIC_CM_SYNTHESIS_REASONING_EFFORT", "low")
+
+    planner = planner_from_environment()
+    path_agent = path_agent_from_environment()
+    synthesis_agent = synthesis_agent_from_environment()
+    planner_config = agent_llm_config_from_environment("orchestrator")
+    path_config = agent_llm_config_from_environment("path")
+    synthesis_config = agent_llm_config_from_environment("synthesis")
+
+    assert planner.profile == "openai-compatible/planner-model"
+    assert path_agent.profile == "openai-compatible-path/path-model"
+    assert synthesis_agent.profile == "openai-compatible-synthesis/synthesis-model"
+    assert (planner_config.thinking_enabled, planner_config.reasoning_effort) == (True, "max")
+    assert path_config.thinking_enabled is False
+    assert (synthesis_config.thinking_enabled, synthesis_config.reasoning_effort) == (True, "low")
+
+
+def test_thinking_defaults_to_disabled_and_model_uses_global_fallback(monkeypatch) -> None:
+    monkeypatch.setenv("AGENTIC_CM_ADAPTER", "openai-compatible")
+    monkeypatch.setenv("AGENTIC_CM_LLM_BASE_URL", "https://model.example/v1")
+    monkeypatch.setenv("AGENTIC_CM_LLM_MODEL", "fallback-model")
+    for agent in ("ORCHESTRATOR", "PATH", "SYNTHESIS"):
+        monkeypatch.delenv(f"AGENTIC_CM_{agent}_LLM_MODEL", raising=False)
+        monkeypatch.delenv(f"AGENTIC_CM_{agent}_THINKING_ENABLED", raising=False)
+    monkeypatch.delenv("AGENTIC_CM_LLM_THINKING_ENABLED", raising=False)
+
+    adapters = (
+        planner_from_environment(),
+        path_agent_from_environment(),
+        synthesis_agent_from_environment(),
+    )
+
+    assert all(
+        agent_llm_config_from_environment(agent_type).thinking_enabled is False
+        for agent_type in ("orchestrator", "path", "synthesis")
+    )
+    assert [adapter.profile for adapter in adapters] == [
+        "openai-compatible/fallback-model",
+        "openai-compatible-path/fallback-model",
+        "openai-compatible-synthesis/fallback-model",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("AGENTIC_CM_PATH_THINKING_ENABLED", "sometimes"),
+        ("AGENTIC_CM_PATH_REASONING_EFFORT", "extreme"),
+    ],
+)
+def test_invalid_agent_thinking_configuration_fails_closed(
+    monkeypatch, name: str, value: str
+) -> None:
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises(ValueError):
+        agent_llm_config_from_environment("path")
 
 
 def test_single_adapter_setting_selects_deterministic_for_all_agent_runtimes(

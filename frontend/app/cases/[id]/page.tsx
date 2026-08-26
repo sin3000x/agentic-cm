@@ -983,7 +983,9 @@ export default function Home() {
     FINAL_REVIEW: 4,
   };
   const activeStageIndex = phaseStageIndex[phase] ?? 0;
-  const currentStage = stages[activeStageIndex];
+  const isCaseClosed = caseStatus === "CLOSED";
+  const currentStage = isCaseClosed ? "Case 已关闭" : stages[activeStageIndex];
+  const synthesisRevision = synthesisReport?.revision ?? ownerDecision?.synthesis_revision;
   const pendingExplorationPathIds = manifestPaths
     .filter((path) => path.selected)
     .filter((path) => {
@@ -1210,10 +1212,12 @@ export default function Home() {
     <>
       <div className="panelTitle">
         <div><span className="agentIcon">∑</span><span><small>CASE SYNTHESIS</small><h2>全 Path 汇总 · Owner 决策</h2></span></div>
-        <span className="version">{synthesisReport ? `v${synthesisReport.revision}` : "等待汇总"}</span>
+        <span className="version">{synthesisRevision ? `v${synthesisRevision}` : "等待汇总"}</span>
       </div>
       {!canViewManifest ? (
-        <p className="lead">所有 Path 的审批 DAG 已完成。汇总报告与最终决策仅对 Case Owner 可见。</p>
+        <p className="lead">{isCaseClosed
+          ? `Case Owner 已基于 Synthesis v${synthesisRevision ?? "—"} 完成最终决策并关闭 Case。汇总报告仅对 Case Owner 可见。`
+          : "所有 Path 的审批 DAG 已完成。汇总报告与最终决策仅对 Case Owner 可见。"}</p>
       ) : synthesisReport ? (
         <section className="synthesisReport" aria-label="Synthesis Agent 汇总报告">
           <div className="synthesisHeader">
@@ -1512,9 +1516,9 @@ export default function Home() {
                 <div className="compactTitle"><h2>完整流程</h2><span>{activeStageIndex + 1} / {stages.length}</span></div>
                 <ol>
                   {stages.map((stage, index) => (
-                    <li className={index < activeStageIndex ? "complete" : index === activeStageIndex ? "current" : ""} key={stage}>
-                      <span>{index < activeStageIndex ? "✓" : index + 1}</span>
-                      <div><strong>{stage}</strong><small>{index === activeStageIndex ? "进行中" : index < activeStageIndex ? "已完成" : "尚未开始"}</small></div>
+                    <li className={index < activeStageIndex || (isCaseClosed && index === activeStageIndex) ? "complete" : index === activeStageIndex ? "current" : ""} key={stage}>
+                      <span>{index < activeStageIndex || (isCaseClosed && index === activeStageIndex) ? "✓" : index + 1}</span>
+                      <div><strong>{stage}</strong><small>{index < activeStageIndex || (isCaseClosed && index === activeStageIndex) ? "已完成" : index === activeStageIndex ? "进行中" : "尚未开始"}</small></div>
                     </li>
                   ))}
                 </ol>

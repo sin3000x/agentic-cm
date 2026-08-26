@@ -12,9 +12,14 @@ from .agent_runtime import (
     AgentTraceSink,
     ModelEndpoint,
     TraceNarration,
+    configure_thinking,
     request_structured_output,
 )
-from .config import agent_adapter_from_environment
+from .config import (
+    ReasoningEffort,
+    agent_adapter_from_environment,
+    agent_llm_config_from_environment,
+)
 from .domain import Case, OrchestrationPhase
 from .llm import OpenAICompatibleClient, build_openai_compatible_client
 
@@ -173,6 +178,8 @@ class OpenAICompatibleSynthesisAgentAdapter:
         api_key_prefix: str = "Bearer",
         timeout_seconds: float = 45.0,
         max_output_tokens: int = 4000,
+        thinking_enabled: bool = False,
+        reasoning_effort: ReasoningEffort = "high",
         client: OpenAICompatibleClient | None = None,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
@@ -196,6 +203,8 @@ class OpenAICompatibleSynthesisAgentAdapter:
         self._base_url = base_url.rstrip("/")
         self._api_key_header = api_key_header
         self._max_output_tokens = max_output_tokens
+        self._thinking_enabled = thinking_enabled
+        self._reasoning_effort = reasoning_effort
         self._endpoint = ModelEndpoint(
             client=self._client,
             base_url=self._base_url,
@@ -232,6 +241,11 @@ class OpenAICompatibleSynthesisAgentAdapter:
             "max_tokens": self._max_output_tokens,
             "stream": False,
         }
+        configure_thinking(
+            request,
+            enabled=self._thinking_enabled,
+            reasoning_effort=self._reasoning_effort,
+        )
         def build_result(payload: _SynthesisResultPayload) -> SynthesisResult:
             result = _parse_result(payload, self.profile)
             _validate_result(result, context)
@@ -398,12 +412,15 @@ def synthesis_agent_from_environment() -> SynthesisAgentAdapter:
     if adapter == "deterministic":
         return DeterministicSynthesisAgentAdapter()
     if adapter == "openai-compatible":
+        llm = agent_llm_config_from_environment("synthesis")
         return OpenAICompatibleSynthesisAgentAdapter(
             os.getenv("AGENTIC_CM_LLM_API_KEY"),
-            model=os.getenv("AGENTIC_CM_LLM_MODEL", ""),
+            model=llm.model,
             base_url=os.getenv("AGENTIC_CM_LLM_BASE_URL", ""),
             api_key_header=os.getenv("AGENTIC_CM_LLM_API_KEY_HEADER", "Authorization"),
             api_key_prefix=os.getenv("AGENTIC_CM_LLM_API_KEY_PREFIX", "Bearer"),
             max_output_tokens=int(os.getenv("AGENTIC_CM_SYNTHESIS_MAX_OUTPUT_TOKENS", "4000")),
+            thinking_enabled=llm.thinking_enabled,
+            reasoning_effort=llm.reasoning_effort,
         )
     raise SynthesisAgentError(f"Unknown Synthesis Agent adapter: {adapter}")

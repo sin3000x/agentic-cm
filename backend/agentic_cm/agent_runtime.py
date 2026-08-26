@@ -18,6 +18,7 @@ from typing import Any, Callable, Protocol, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from .config import ReasoningEffort
 from .llm import CompatibleModelClientError, OpenAICompatibleClient, create_chat_completion
 
 
@@ -72,6 +73,20 @@ class ModelEndpoint:
             "credential_present": self.api_key_present,
             "credential_value_logged": False,
         }
+
+
+def configure_thinking(
+    request: dict[str, Any],
+    *,
+    enabled: bool,
+    reasoning_effort: ReasoningEffort,
+) -> None:
+    """Add explicit thinking controls to a Chat Completions request."""
+    request["extra_body"] = {
+        "thinking": {"type": "enabled" if enabled else "disabled"},
+    }
+    if enabled:
+        request["reasoning_effort"] = reasoning_effort
 
 
 async def request_structured_output(

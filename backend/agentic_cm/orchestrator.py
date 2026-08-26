@@ -12,11 +12,16 @@ from .agent_runtime import (
     AgentTraceSink,
     ModelEndpoint,
     TraceNarration,
+    configure_thinking,
     contains_chinese as _contains_chinese,
     request_structured_output,
 )
 from .capabilities import CapabilityRegistry
-from .config import agent_adapter_from_environment
+from .config import (
+    ReasoningEffort,
+    agent_adapter_from_environment,
+    agent_llm_config_from_environment,
+)
 from .domain import Case, Manifest, ManifestPath, OrchestrationPhase
 from .llm import OpenAICompatibleClient, build_openai_compatible_client
 
@@ -167,6 +172,8 @@ class OpenAICompatiblePlannerAdapter:
         api_key_header: str = "Authorization",
         api_key_prefix: str = "Bearer",
         timeout_seconds: float = 45.0,
+        thinking_enabled: bool = False,
+        reasoning_effort: ReasoningEffort = "high",
         client: OpenAICompatibleClient | None = None,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
@@ -189,6 +196,8 @@ class OpenAICompatiblePlannerAdapter:
         self._model = model
         self._base_url = base_url.rstrip("/")
         self._api_key_header = api_key_header
+        self._thinking_enabled = thinking_enabled
+        self._reasoning_effort = reasoning_effort
         self._client = configured_client
         self._endpoint = ModelEndpoint(
             client=configured_client,
@@ -234,6 +243,11 @@ class OpenAICompatiblePlannerAdapter:
             "max_tokens": 800,
             "stream": False,
         }
+        configure_thinking(
+            request,
+            enabled=self._thinking_enabled,
+            reasoning_effort=self._reasoning_effort,
+        )
         def build_result(payload: _ManifestDraftPayload) -> ManifestDraftResult:
             paths = tuple(PlannedPath(path.definition, path.rationale) for path in payload.paths)
             return ManifestDraftResult(paths=paths, planner_profile=self.profile)
@@ -462,11 +476,14 @@ def planner_from_environment() -> PlannerAdapter:
     if adapter == "deterministic":
         return DeterministicPlannerAdapter()
     if adapter == "openai-compatible":
+        llm = agent_llm_config_from_environment("orchestrator")
         return OpenAICompatiblePlannerAdapter(
             os.getenv("AGENTIC_CM_LLM_API_KEY"),
-            model=os.getenv("AGENTIC_CM_LLM_MODEL", ""),
+            model=llm.model,
             base_url=os.getenv("AGENTIC_CM_LLM_BASE_URL", ""),
             api_key_header=os.getenv("AGENTIC_CM_LLM_API_KEY_HEADER", "Authorization"),
             api_key_prefix=os.getenv("AGENTIC_CM_LLM_API_KEY_PREFIX", "Bearer"),
+            thinking_enabled=llm.thinking_enabled,
+            reasoning_effort=llm.reasoning_effort,
         )
     raise OrchestrationError(f"Unknown orchestrator adapter: {adapter}")

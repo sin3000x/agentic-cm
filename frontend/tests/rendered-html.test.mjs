@@ -90,6 +90,23 @@ test("the Case workspace renders the governance thread for the requested Case", 
   assert.match(html, /<div class="futureFlow" aria-label="后续流程"/);
 });
 
+test("the Case workspace treats CLOSED as a completed workflow for every role", async () => {
+  const source = await readFile(
+    new URL("../app/cases/[id]/page.tsx", import.meta.url),
+    "utf8",
+  );
+  // FINAL_REVIEW is retained as the last business phase after closure, so the
+  // terminal Case status must override the right-rail phase presentation.
+  assert.match(source, /const isCaseClosed = caseStatus === "CLOSED"/);
+  assert.match(source, /isCaseClosed && index === activeStageIndex/);
+  assert.match(source, /isCaseClosed \? "Case 已关闭"/);
+
+  // Other roles cannot see the report body, but the redacted owner decision
+  // still carries its revision and must not regress to "等待汇总".
+  assert.match(source, /synthesisReport\?\.revision \?\? ownerDecision\?\.synthesis_revision/);
+  assert.match(source, /Case Owner 已基于 Synthesis/);
+});
+
 test("each asset route renders its own kind with a search affordance", async () => {
   for (const [path, heading] of [
     ["skills", "Skills"],

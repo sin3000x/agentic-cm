@@ -1128,6 +1128,8 @@ def test_openai_synthesis_repairs_paraphrased_artifact_refs(tmp_path: Path) -> N
         "PATH-01/commitment/CUSTOMER",
     ]
     assert "READY means that its responsible human has already approved it" in request_payload["messages"][0]["content"]
+    assert request_payload["thinking"] == {"type": "disabled"}
+    assert "reasoning_effort" not in request_payload
     assert "synthesis-secret" not in json.dumps(request_payload)
 
 
@@ -1222,6 +1224,13 @@ def test_owner_can_close_keep_open_or_modify_after_synthesis(tmp_path: Path) -> 
         role=OWNER_ROLE,
     )
     assert closed.status is CaseStatus.CLOSED
+    other_role_view = close_service.get_case_view(
+        close_case.id, actor="王淼", role="主计划"
+    )
+    assert other_role_view["status"] == CaseStatus.CLOSED.value
+    assert other_role_view["synthesis_report"] is None
+    assert other_role_view["owner_decision"]["action"] == "CLOSE"
+    assert other_role_view["owner_decision"]["synthesis_revision"] == 1
 
 
 def test_reducing_skill_declared_paths_reduces_manifest_candidates(tmp_path: Path) -> None:
@@ -1328,6 +1337,8 @@ def test_openai_compatible_adapter_accepts_custom_provider_configuration() -> No
                 base_url="https://gateway.example/v1",
                 api_key_header="x-api-key",
                 api_key_prefix="",
+                thinking_enabled=True,
+                reasoning_effort="max",
                 http_client=client,
             )
             from agentic_cm.orchestrator import PlanningCandidate, PlanningContext
@@ -1352,6 +1363,8 @@ def test_openai_compatible_adapter_accepts_custom_provider_configuration() -> No
     assert observed["authorization"] is None
     assert observed["url"] == "https://gateway.example/v1/chat/completions"
     assert observed["payload"]["response_format"] == {"type": "json_object"}
+    assert observed["payload"]["thinking"] == {"type": "enabled"}
+    assert observed["payload"]["reasoning_effort"] == "max"
     assert "secret-key" not in json.dumps(trace_events)
     request_trace = next(args for args, _ in trace_events if args[0] == "planner.request")
     assert request_trace[3]["authentication"] == {
@@ -1718,6 +1731,8 @@ def test_openai_compatible_path_agent_uses_manifest_assembled_context(tmp_path: 
     assert revision["generated_by"] == "openai-compatible-path/vendor-model-42"
     assert observed["api_key"] == "path-secret"
     assert observed["payload"]["max_tokens"] == 6000
+    assert observed["payload"]["thinking"] == {"type": "disabled"}
+    assert "reasoning_effort" not in observed["payload"]
     request_context = json.loads(observed["payload"]["messages"][1]["content"])
     assert request_context["manifest_ref"]["id"] == "MAN-CM-2026-014-1"
     assert request_context["execution_skills"][0]["id"] == "material-substitution-analysis"
