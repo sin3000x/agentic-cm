@@ -7,12 +7,11 @@ import { useState } from "react";
 export type SidebarIdentity = { name: string; role: string; avatar: string; avatarUrl: string };
 
 type AppSidebarProps = {
-  active: "overview" | "workspace" | "inbox" | "activity" | "skills" | "policies" | "knowledge";
+  active: "none" | "overview" | "inbox" | "skills" | "policies" | "knowledge";
   identity: SidebarIdentity;
   identities: SidebarIdentity[];
   inboxCount?: number;
   busy?: boolean;
-  onInboxOpen?: () => void;
   onIdentitySelect?: (index: number) => void;
 };
 
@@ -20,9 +19,8 @@ export default function AppSidebar({
   active,
   identity,
   identities,
-  inboxCount = 3,
+  inboxCount,
   busy = false,
-  onInboxOpen,
   onIdentitySelect,
 }: AppSidebarProps) {
   const [showIdentityMenu, setShowIdentityMenu] = useState(false);
@@ -42,15 +40,7 @@ export default function AppSidebar({
       <nav className="primaryNav" aria-label="主导航">
         <p>工作区</p>
         <Link className={`navLink ${active === "overview" ? "active" : ""}`} href="/"><span className="navIcon">⌂</span>Case 总览</Link>
-        <Link className={`navLink ${active === "workspace" ? "active" : ""}`} href="/cases/CM-2026-014"><span className="navIcon">◇</span>Case 工作台</Link>
-        {onInboxOpen ? (
-          <button className={`navLink ${active === "inbox" ? "active" : ""}`} type="button" onClick={onInboxOpen} style={{width:"100%",border:0,textAlign:"left"}}>
-            <span className="navIcon">✓</span>我的待办<b>{inboxCount}</b>
-          </button>
-        ) : (
-          <Link className={`navLink ${active === "inbox" ? "active" : ""}`} href="/cases/CM-2026-014#inbox"><span className="navIcon">✓</span>我的待办<b>{inboxCount}</b></Link>
-        )}
-        <a className={`navLink ${active === "activity" ? "active" : ""}`} href="#activity"><span className="navIcon">↗</span>协作动态</a>
+        <Link className={`navLink ${active === "inbox" ? "active" : ""}`} href="/inbox"><span className="navIcon">✓</span>我的待办{inboxCount !== undefined && <b>{inboxCount}</b>}</Link>
 
         <p>组织资产</p>
         <Link className={`navLink ${active === "skills" ? "active" : ""}`} href="/assets/skills"><span className="navIcon">✦</span>Skills</Link>

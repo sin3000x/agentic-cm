@@ -245,15 +245,6 @@ function approvalContextFor(revision: SolutionRevision | null, role: string): Ap
   };
 }
 
-type InboxItem = {
-  case_id: string;
-  case_title: string;
-  path_id: string;
-  path_title: string;
-  node: CommitmentNode;
-  approval_context: ApprovalContext;
-};
-
 type TimelineEvent = {
   id: number;
   event_type: "manifest.proposed" | "manifest.approved" | "solution_revision.proposed" | "commitment.approved" | "commitment.revision_requested" | "commitment.rejected" | "synthesis.proposed" | "owner.decision";
@@ -512,20 +503,12 @@ export default function Home() {
   const [caseRefreshKey, setCaseRefreshKey] = useState(0);
   const identityIndexRef = useRef(0);
   const automaticRunsRef = useRef(new Set<string>());
-  const [showInbox, setShowInbox] = useState(false);
-  const [inboxItems, setInboxItems] = useState<InboxItem[]>([]);
   const [approvalReview, setApprovalReview] = useState<ApprovalReview | null>(null);
   const currentIdentity = demoIdentities[identityIndex];
   const startAutomaticManifest = useEffectEvent(() => { void generateManifest(); });
   const startAutomaticAlternatives = useEffectEvent((pathIds: string[]) => { void generateAlternatives(pathIds); });
   const startAutomaticSynthesis = useEffectEvent(() => { void generateSynthesis(); });
   const refreshLiveTrace = useEffectEvent(() => { void refreshAgentRuns(); });
-
-  useEffect(() => {
-    if (window.location.hash !== "#inbox") return;
-    const frame = window.requestAnimationFrame(() => setShowInbox(true));
-    return () => window.cancelAnimationFrame(frame);
-  }, []);
 
   useEffect(() => {
     apiGet<{ path_execution_mode?: string; path_max_concurrency?: number }>("/api/runtime-config")
@@ -578,7 +561,6 @@ export default function Home() {
     setModifyGuidance("");
     setShowOrchestratorTrace(false);
     setExpandedPathTraces({});
-    setInboxItems([]);
     setApprovalReview(null);
     setIdentityIndex(nextIdentityIndex);
   }
@@ -603,9 +585,8 @@ export default function Home() {
     Promise.all([
       apiGet<CaseDetails>(`/api/cases/${activeCaseId}`, identityQuery, controller.signal),
       apiGet<TimelineEvent[]>(`/api/cases/${activeCaseId}/timeline`, undefined, controller.signal),
-      apiGet<InboxItem[]>("/api/inbox", { role: identity.role }, controller.signal),
     ])
-      .then(([data, timeline, inbox]) => {
+      .then(([data, timeline]) => {
         setCaseDetails(data);
         setPhase(data.phase);
         setCaseStatus(data.status);
@@ -616,7 +597,6 @@ export default function Home() {
         setOwnerDecision(data.owner_decision ?? null);
         setHumanProposal(data.human_proposal ?? initialHumanProposal);
         setTimelineEvents(timeline);
-        setInboxItems(inbox);
         setCaseCreatedAt(data.created_at);
         setCanViewManifest(data.permissions?.can_view_manifest === true);
         loadManifest(data.manifest, data.workflow_paths ?? []);
@@ -684,14 +664,6 @@ export default function Home() {
       setTimelineEvents(await apiGet<TimelineEvent[]>(`/api/cases/${activeCaseId}/timeline`));
     } catch {
       // The business action has already succeeded; the next Case refresh will reload the Thread.
-    }
-  }
-
-  async function refreshInbox() {
-    try {
-      setInboxItems(await apiGet<InboxItem[]>("/api/inbox", { role: currentIdentity.role }));
-    } catch {
-      // Inbox can be refreshed independently without changing the Case decision.
     }
   }
 
@@ -954,7 +926,6 @@ export default function Home() {
         setPhase(data.phase);
         await refreshTimeline();
       }
-      await refreshInbox();
       setApprovalReview(null);
       const result = decision === "APPROVE" ? "通过" : decision === "REVISE" ? "要求修改" : "否决";
       setMessage(`${currentIdentity.name} 已${result} ${caseId} 的 ${node.id} 节点。`);
@@ -1344,12 +1315,10 @@ export default function Home() {
   return (
     <main className="shell">
       <AppSidebar
-        active={showInbox ? "inbox" : "workspace"}
+        active="none"
         identity={currentIdentity}
         identities={demoIdentities}
-        inboxCount={inboxItems.length}
         busy={busy}
-        onInboxOpen={() => setShowInbox(true)}
         onIdentitySelect={selectIdentity}
       />
 
@@ -1582,37 +1551,6 @@ export default function Home() {
           </div>
         </div>
       </section>
-
-      {showInbox && (
-        <div className="inboxBackdrop" role="presentation">
-          <aside className="inboxDrawer" aria-label={`${currentIdentity.role} Inbox`}>
-            <header>
-              <div><small>ROLE INBOX</small><h2>{currentIdentity.role}</h2><p>{currentIdentity.name} · Demo identity simulation</p></div>
-              <button aria-label="关闭 Inbox" onClick={() => setShowInbox(false)}>×</button>
-            </header>
-            <div className="inboxHint">汇总所有 Case 中分配给当前角色、且依赖已经满足的待审批节点。请从左下角切换演示身份。</div>
-            <div className="inboxList">
-              {inboxItems.length ? inboxItems.map((item) => (
-                <article key={`${item.case_id}-${item.path_id}-${item.node.id}`}>
-                  <div><span>PENDING</span><small>{item.path_id} · {item.node.id}</small></div>
-                  <h3>{commitmentCopy[item.node.id] ?? item.node.role}</h3>
-                  <p>Case {item.case_id} · {item.case_title} · {item.path_title}</p>
-                  {approvalReviewButton(
-                    item.case_id,
-                    item.case_title,
-                    item.path_title,
-                    item.node,
-                    item.approval_context,
-                  )}
-                  {approvalActions(item.case_id, item.node)}
-                </article>
-              )) : (
-                <div className="emptyInbox"><strong>当前没有待批准事项</strong><p>如果 Manifest 已批准，请切换到主计划或研发身份查看各自任务。</p></div>
-              )}
-            </div>
-          </aside>
-        </div>
-      )}
 
       {approvalReview && (
         <div
