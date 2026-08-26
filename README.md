@@ -123,7 +123,7 @@ curl -sS 'http://localhost:8000/api/cases/CM-2026-014/agent-runs?actor=陈澄&ro
   | python3 -m json.tool
 ```
 
-Path Agent trace 已实现：方案生成后可在对应 SolutionRevision 下按 Path 展开，默认折叠；Synthesis Agent trace 尚未实现。详见 [Orchestrator 实现](docs/06-orchestrator.md)。
+Path Agent trace 已实现：方案生成后可在对应 SolutionRevision 下按 Path 展开，默认折叠。Synthesis Agent trace 同样已实现，可在汇总报告处展开。详见 [Orchestrator 实现](docs/06-orchestrator.md)。
 
 当 Manifest 含多条 Path 时，每条 Path 都有独立的 `capability_snapshots[path_id]`。可以单独检查：
 

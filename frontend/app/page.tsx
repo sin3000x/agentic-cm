@@ -3,8 +3,9 @@
 import { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import AppSidebar from "./app-sidebar";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? `http://localhost:${process.env.AGENTIC_CM_API_PORT ?? 8000}`;
+import { apiGet, isAbort } from "./lib/api";
+import { coreDemoIdentities as demoIdentities, personAvatars } from "./lib/identities";
+import { formatDay, formatDayTime } from "./lib/format";
 
 type CaseStatus = "处理中" | "暂缓" | "已关闭";
 type CaseRisk = "高" | "中" | "低";
@@ -12,13 +13,6 @@ type CaseSummary = { id:string; title:string; description:string; status:CaseSta
 type ApiCase = { id:string; title:string; description:string; status:"OPEN"|"PENDING"|"CLOSED"; phase:"INTAKE"|"MANIFEST_REVIEW"|"PATH_EXPLORATION"|"PROFESSIONAL_COMMITMENT"|"FINAL_REVIEW"; owner:string; owner_role:string; business_payload?:{customer?:string;risk_level?:"HIGH"|"MEDIUM"|"LOW";commitment_due_date?:string}; commitment_nodes?:Array<{status:string}>; updated_at:string };
 const filters = ["全部","处理中","暂缓","已关闭"] as const;
 const stages = ["受理","评审","探索","承诺","决策"];
-const demoIdentities = [
-  {name:"陈澄",role:"订单统筹经理",avatar:"陈",avatarUrl:"/avatars/chen-cheng.png"},
-  {name:"王淼",role:"主计划",avatar:"王",avatarUrl:"/avatars/wang-miao.png"},
-  {name:"林乔",role:"研发",avatar:"林",avatarUrl:"/avatars/lin-qiao.png"},
-  {name:"赵宁",role:"供应经理",avatar:"赵",avatarUrl:"/avatars/zhao-ning.png"},
-];
-const personAvatars:Record<string,string>={陈澄:"/avatars/chen-cheng.png",王淼:"/avatars/wang-miao.png",林乔:"/avatars/lin-qiao.png",赵宁:"/avatars/zhao-ning.png",周岚:"/avatars/zhou-lan.png",吴桐:"/avatars/wu-tong.png"};
 
 function StatusPill({status}:{status:CaseStatus}){return <span className={`statusPill status-${status}`}>{status}</span>}
 function RiskMark({risk}:{risk:CaseRisk}){return <span className={`riskMark risk-${risk}`}><i />{risk}风险</span>}
@@ -32,7 +26,7 @@ function duePresentation(apiCase: ApiCase): Pick<CaseSummary,"due"|"dueTone"> {
   if(!value)return {due:"待确认",dueTone:"normal"};
   const dueDate=new Date(`${value}T00:00:00`);
   const today=new Date();today.setHours(0,0,0,0);
-  return {due:dueDate.toLocaleDateString("zh-CN",{month:"numeric",day:"numeric"}),dueTone:dueDate<today?"danger":"normal"};
+  return {due:formatDay(dueDate.toISOString()),dueTone:dueDate<today?"danger":"normal"};
 }
 
 function attentionFor(apiCase: ApiCase): string|undefined {
@@ -63,7 +57,7 @@ function mapCase(apiCase: ApiCase): CaseSummary {
     risk:risk[apiCase.business_payload?.risk_level??"MEDIUM"],attention:attentionFor(apiCase),...duePresentation(apiCase),
     owner:apiCase.owner,ownerRole:apiCase.owner_role,ownerInitial:apiCase.owner.slice(0,1),
     customer:apiCase.business_payload?.customer ?? "内部协同",
-    updated:new Date(apiCase.updated_at).toLocaleString("zh-CN",{month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"}),
+    updated:formatDayTime(apiCase.updated_at),
     phase:currentPhase.value,phaseLabel:currentPhase.label,
   };
 }
@@ -83,10 +77,9 @@ export default function Home(){
 
   useEffect(()=>{
     const controller=new AbortController();
-    const loadCases=()=>fetch(`${API_BASE}/api/cases`,{signal:controller.signal})
-      .then(response=>{if(!response.ok)throw new Error(`Case API ${response.status}`);return response.json() as Promise<ApiCase[]>})
+    const loadCases=()=>apiGet<ApiCase[]>("/api/cases",undefined,controller.signal)
       .then(cases=>{setCaseData(cases.map(mapCase));setLoadState("ready")})
-      .catch(error=>{if(error instanceof DOMException&&error.name==="AbortError")return;setLoadState("error")});
+      .catch(error=>{if(isAbort(error))return;setLoadState("error")});
     void loadCases();
     window.addEventListener("focus",loadCases);
     return()=>{controller.abort();window.removeEventListener("focus",loadCases)};

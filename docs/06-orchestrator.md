@@ -61,7 +61,7 @@ export AGENTIC_CM_ADAPTER=deterministic
 
 ### OpenAI-compatible 模型服务
 
-通用 Adapter 通过官方 `openai-python` 的异步 Chat Completions 客户端调用配置的 `base_url + /chat/completions`，启用兼容性更广的 JSON Object 模式。Pydantic 模型生成响应 Schema 并严格解析结构；平台再校验 Path/option 白名单、角色报告契约与治理边界。平台核心不知道服务商名称；Base URL、API Key、模型 ID、鉴权 Header 和鉴权前缀均由运行时注入。API Key 只用于 SDK 请求 Header，不进入 Case、Manifest、事件或日志。SDK 内建传输重试保持关闭；Planner Adapter 对 `unavailable` 连接错误或超时进行一次可审计的即时重试，非法结构另进行一次可审计的修复调用。仍失败则本次运行失败且不修改 Case。
+通用 Adapter 通过官方 `openai-python` 的异步 Chat Completions 客户端调用配置的 `base_url + /chat/completions`，启用兼容性更广的 JSON Object 模式。Pydantic 模型生成响应 Schema 并严格解析结构；平台再校验 Path/option 白名单、角色报告契约与治理边界。平台核心不知道服务商名称；Base URL、API Key、模型 ID、鉴权 Header 和鉴权前缀均由运行时注入。API Key 只用于 SDK 请求 Header，不进入 Case、Manifest、事件或日志。SDK 内建传输重试保持关闭；三个 Agent（Orchestrator、Path、Synthesis）共用同一个结构化输出运行时，因此共享同一套重试策略：对 `unavailable` 连接错误或超时进行一次可审计的即时重试，非法结构另进行一次可审计的修复调用。仍失败则本次运行失败且不修改 Case。
 
 ```bash
 cp .env.example .env
@@ -124,7 +124,7 @@ Manifest 的具体内容及其能力快照是 Owner-only 数据。非 Owner 的 
 
 - `orchestrator` Agent trace：已实现并在 Case 工作台可展开查看，成功和失败运行均保留；
 - `path` Agent trace：已实现。Owner 启动已批准 Path 后，平台从该 Path 的冻结 Manifest 快照读取 execution Skill、Policy、Knowledge、编译责任和 Case 快照，组装最小授权 `PathRunContext`；依次审计门禁、Agent 组装、输入、模型请求/响应、结构校验、`SolutionRevision` 组装与持久化。失败运行保留 trace，但不创建业务事件或修改 SolutionRevision；
-- `synthesis` Agent trace：待多 Path 结果汇总与冲突检测切片实现后接入；Synthesis 不得引入未探索 Path 或绕过人类批准。
+- `synthesis` Agent trace：已实现。全部已选 Path 的审批 DAG 进入终态后，Owner 触发的 Synthesis 运行会审计门禁、汇总输入、模型请求/响应、引用校验与 `CaseSynthesis` 组装（`synthesis.compose`）。Synthesis 不得引入未探索 Path 或绕过人类批准；`supporting_refs` 必须逐字取自各 Path 的 `authorized_supporting_refs`，转述会触发一次结构化修复请求。
 
 Case Thread 读取 `GET /api/cases/{case_id}/timeline`。该接口从 append-only `domain_events` 投影 Manifest 生成、Owner 批准和各角色 Commitment 批准事件，并返回数据库记录的 UTC 时间；前端按浏览器本地时区显示到秒。投影只包含 Thread 所需字段，不暴露原始事件中的 Manifest Path、Policy 或能力快照。
 

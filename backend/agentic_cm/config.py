@@ -1,12 +1,26 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal, cast
 
 from dotenv import load_dotenv
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+
+AgentType = Literal["orchestrator", "path", "synthesis"]
+ReasoningEffort = Literal["minimal", "low", "medium", "high", "xhigh", "max"]
+
+
+@dataclass(frozen=True)
+class AgentLLMConfig:
+    """Agent-specific model and thinking controls with global fallbacks."""
+
+    model: str
+    thinking_enabled: bool
+    reasoning_effort: ReasoningEffort
 
 
 def load_runtime_environment() -> None:
@@ -18,6 +32,50 @@ def agent_adapter_from_environment() -> str:
     """Return the adapter family shared by every Agent runtime."""
     load_runtime_environment()
     return os.getenv("AGENTIC_CM_ADAPTER", "deterministic")
+
+
+def agent_llm_config_from_environment(agent_type: AgentType) -> AgentLLMConfig:
+    """Resolve one Agent's model and thinking settings."""
+    load_runtime_environment()
+    prefix = f"AGENTIC_CM_{agent_type.upper()}"
+    model = os.getenv(f"{prefix}_LLM_MODEL", os.getenv("AGENTIC_CM_LLM_MODEL", ""))
+    thinking_enabled = _environment_bool(
+        f"{prefix}_THINKING_ENABLED",
+        fallback_name="AGENTIC_CM_LLM_THINKING_ENABLED",
+        default=False,
+    )
+    raw_effort = os.getenv(
+        f"{prefix}_REASONING_EFFORT",
+        os.getenv("AGENTIC_CM_LLM_REASONING_EFFORT", "high"),
+    ).strip().lower()
+    allowed_efforts = {"minimal", "low", "medium", "high", "xhigh", "max"}
+    if raw_effort not in allowed_efforts:
+        raise ValueError(
+            f"{prefix}_REASONING_EFFORT must be one of: "
+            f"{', '.join(sorted(allowed_efforts))}"
+        )
+    return AgentLLMConfig(
+        model=model,
+        thinking_enabled=thinking_enabled,
+        reasoning_effort=cast(ReasoningEffort, raw_effort),
+    )
+
+
+def _environment_bool(
+    name: str,
+    *,
+    fallback_name: str,
+    default: bool,
+) -> bool:
+    raw_value = os.getenv(name, os.getenv(fallback_name))
+    if raw_value is None:
+        return default
+    normalized = raw_value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean value")
 
 
 def path_execution_mode_from_environment() -> str:

@@ -6,17 +6,23 @@ from dataclasses import asdict, dataclass
 from typing import Annotated, Any, Protocol
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
-from .config import agent_adapter_from_environment
-from .domain import Case, ManifestPath, OrchestrationPhase
-from .llm import (
-    CompatibleModelClientError,
-    OpenAICompatibleClient,
-    build_openai_compatible_client,
-    create_chat_completion,
+from .agent_runtime import (
+    AgentTraceSink,
+    ModelEndpoint,
+    TraceNarration,
+    configure_thinking,
+    contains_chinese as _contains_chinese,
+    request_structured_output,
 )
-from .orchestrator import AgentTraceSink
+from .config import (
+    ReasoningEffort,
+    agent_adapter_from_environment,
+    agent_llm_config_from_environment,
+)
+from .domain import Case, OrchestrationPhase
+from .llm import OpenAICompatibleClient, build_openai_compatible_client
 
 
 class PathAgentError(ValueError):
@@ -34,8 +40,14 @@ class PathAgentExecutionError(PathAgentError):
 NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
-def _contains_chinese(value: str) -> bool:
-    return any("\u4e00" <= character <= "\u9fff" for character in value)
+_PATH_AGENT_NARRATION = TraceNarration(
+    request="\u5411 OpenAI-compatible Path Agent \u53d1\u9001 Manifest \u7ec4\u88c5\u8bf7\u6c42",
+    repair_request="\u4e0a\u6b21\u54cd\u5e94\u65e0\u6548\uff0c\u53d1\u9001\u4e00\u6b21\u7ed3\u6784\u5316\u4fee\u590d\u8bf7\u6c42",
+    retry_request="\u6a21\u578b\u8fde\u63a5\u6216\u8bf7\u6c42\u8d85\u65f6\uff0c\u81ea\u52a8\u91cd\u8bd5\u4e00\u6b21",
+    response="\u6536\u5230 Path Agent \u6a21\u578b\u54cd\u5e94",
+    validation_failed="Path Agent \u54cd\u5e94\u672a\u901a\u8fc7\u7ed3\u6784\u5316\u6821\u9a8c",
+    request_failed="Path Agent \u6a21\u578b\u670d\u52a1\u8bf7\u6c42\u5931\u8d25",
+)
 
 
 class _ProposedOptionPayload(BaseModel):
@@ -240,6 +252,8 @@ class OpenAICompatiblePathAgentAdapter:
         api_key_prefix: str = "Bearer",
         timeout_seconds: float = 45.0,
         max_output_tokens: int = 6000,
+        thinking_enabled: bool = False,
+        reasoning_effort: ReasoningEffort = "high",
         client: OpenAICompatibleClient | None = None,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
@@ -265,7 +279,15 @@ class OpenAICompatiblePathAgentAdapter:
         self._base_url = base_url.rstrip("/")
         self._api_key_header = api_key_header
         self._max_output_tokens = max_output_tokens
+        self._thinking_enabled = thinking_enabled
+        self._reasoning_effort = reasoning_effort
         self._client = configured_client
+        self._endpoint = ModelEndpoint(
+            client=configured_client,
+            base_url=self._base_url,
+            api_key_header=api_key_header,
+            api_key_present=bool(api_key),
+        )
 
     @property
     def profile(self) -> str:
@@ -308,71 +330,36 @@ class OpenAICompatiblePathAgentAdapter:
             "max_tokens": self._max_output_tokens,
             "stream": False,
         }
-        last_error: Exception | None = None
-        for attempt in range(2):
-            trace(
-                "model.request" if attempt == 0 else "model.repair_request",
-                "STARTED",
-                "向 OpenAI-compatible Path Agent 发送 Manifest 组装请求"
-                if attempt == 0 else "上次响应无效，发送一次结构化修复请求",
-                {
-                    "attempt": attempt + 1,
-                    "endpoint": f"{self._base_url}/chat/completions",
-                    "request": request,
-                    "authentication": {
-                        "header": self._api_key_header,
-                        "credential_present": bool(self._api_key),
-                        "credential_value_logged": False,
-                    },
-                },
-            )
-            try:
-                response = await create_chat_completion(self._client, request)
-            except CompatibleModelClientError as exc:
-                trace(
-                    "model.request",
-                    "FAILED",
-                    "Path Agent 模型服务请求失败",
-                    {"attempt": attempt + 1, "http_status": exc.status, "error_type": exc.cause_type},
-                )
-                raise PathAgentExecutionError(f"Path Agent model request failed (status={exc.status})") from exc
-            try:
-                trace(
-                    "model.response",
-                    "COMPLETED",
-                    "收到 Path Agent 模型响应",
-                    {
-                        "attempt": attempt + 1,
-                        "http_status": response.http_status,
-                        "response_id": response.response_id,
-                        "finish_reason": response.finish_reason,
-                        "usage": response.usage,
-                        "content": response.content,
-                    },
-                )
-                result = _parse_result(_PathAgentResultPayload.model_validate_json(response.content), self.profile)
-                _validate_result_against_context(result, context)
-                return result
-            except (ValidationError, PathAgentOutputError) as exc:
-                last_error = exc
-                trace(
-                    "model.response_validation",
-                    "FAILED",
-                    "Path Agent 响应未通过结构化校验",
-                    {"attempt": attempt + 1, "error_type": type(exc).__name__, "error": str(exc)},
-                )
-                if attempt == 0:
-                    request["messages"].append({
-                        "role": "system",
-                        "content": (
-                            f"The previous output was invalid: {exc}. Return one non-empty JSON object "
-                            "matching the exact schema, every authorized option, and exactly the Policy-triggered "
-                            "required_role_reports with no extra role/dimension pair."
-                        ),
-                    })
-        raise PathAgentOutputError(
-            f"Path Agent returned invalid structured output after one repair: {last_error}"
-        ) from last_error
+        configure_thinking(
+            request,
+            enabled=self._thinking_enabled,
+            reasoning_effort=self._reasoning_effort,
+        )
+        def build_result(payload: _PathAgentResultPayload) -> PathAgentResult:
+            result = _parse_result(payload, self.profile)
+            _validate_result_against_context(result, context)
+            return result
+
+        return await request_structured_output(
+            self._endpoint,
+            request,
+            agent_label="Path Agent",
+            trace=trace,
+            step_prefix="model",
+            narration=_PATH_AGENT_NARRATION,
+            payload_model=_PathAgentResultPayload,
+            build_result=build_result,
+            repair_instruction=lambda exc: (
+                f"The previous output was invalid: {exc}. Return one non-empty JSON object "
+                "matching the exact schema, every authorized option, and exactly the "
+                "Policy-triggered required_role_reports with no extra role/dimension pair."
+            ),
+            execution_error=PathAgentExecutionError,
+            output_error=PathAgentOutputError,
+            # The Path Agent also rejects output that is schema-valid but proposes
+            # options or role reports the Manifest never authorized.
+            recoverable_output_errors=(PathAgentOutputError,),
+        )
 
 
 class PathAgent:
@@ -656,12 +643,15 @@ def path_agent_from_environment() -> PathAgentAdapter:
     if adapter == "deterministic":
         return DeterministicPathAgentAdapter()
     if adapter == "openai-compatible":
+        llm = agent_llm_config_from_environment("path")
         return OpenAICompatiblePathAgentAdapter(
             os.getenv("AGENTIC_CM_LLM_API_KEY"),
-            model=os.getenv("AGENTIC_CM_LLM_MODEL", ""),
+            model=llm.model,
             base_url=os.getenv("AGENTIC_CM_LLM_BASE_URL", ""),
             api_key_header=os.getenv("AGENTIC_CM_LLM_API_KEY_HEADER", "Authorization"),
             api_key_prefix=os.getenv("AGENTIC_CM_LLM_API_KEY_PREFIX", "Bearer"),
             max_output_tokens=int(os.getenv("AGENTIC_CM_PATH_MAX_OUTPUT_TOKENS", "6000")),
+            thinking_enabled=llm.thinking_enabled,
+            reasoning_effort=llm.reasoning_effort,
         )
     raise PathAgentError(f"Unknown Path Agent adapter: {adapter}")

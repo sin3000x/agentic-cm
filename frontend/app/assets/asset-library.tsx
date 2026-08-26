@@ -2,15 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import AppSidebar from "../app-sidebar";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? `http://localhost:${process.env.AGENTIC_CM_API_PORT ?? 8000}`;
-
-const demoIdentities = [
-  { name: "陈澄", role: "订单统筹经理", avatar: "陈", avatarUrl: "/avatars/chen-cheng.png" },
-  { name: "王淼", role: "主计划", avatar: "王", avatarUrl: "/avatars/wang-miao.png" },
-  { name: "林乔", role: "研发", avatar: "林", avatarUrl: "/avatars/lin-qiao.png" },
-  { name: "赵宁", role: "供应经理", avatar: "赵", avatarUrl: "/avatars/zhao-ning.png" },
-];
+import { apiGet, isAbort } from "../lib/api";
+import { coreDemoIdentities as demoIdentities } from "../lib/identities";
 
 export type AssetGroup = "skills" | "policies" | "knowledge";
 
@@ -88,10 +81,9 @@ export default function AssetLibrary({ group }: { group: AssetGroup }) {
 
   useEffect(() => {
     const controller = new AbortController();
-    fetch(`${API_BASE}/api/capabilities`, { signal: controller.signal })
-      .then(response => response.ok ? response.json() : Promise.reject())
+    apiGet<LibraryResponse>("/api/capabilities", undefined, controller.signal)
       .then(setData)
-      .catch(reason => { if (reason?.name !== "AbortError") setError(true); });
+      .catch(reason => { if (!isAbort(reason)) setError(true); });
     return () => controller.abort();
   }, []);
 

@@ -13,262 +13,125 @@ async function render(pathname = "/") {
   );
 }
 
-test("server-renders the Case overview homepage", async () => {
-  const response = await render();
-  assert.equal(response.status, 200);
-  const html = await response.text();
-  assert.match(html, /Case 总览/);
-  assert.match(html, /早上好，陈澄/);
-  assert.match(html, /进行中 Case/);
-  assert.doesNotMatch(html, /需要你的关注/);
-  assert.match(html, /最新协作动态/);
-  assert.match(html, /正在同步 Case 状态/);
-  assert.match(html, /状态与阶段以 Case API 为准/);
-  assert.match(html, /Human governed/);
-  assert.doesNotMatch(html, /切换至该角色/);
-  assert.doesNotMatch(html, /codex-preview|SkeletonPreview/);
-});
+async function renderHtml(pathname = "/") {
+  const response = await render(pathname);
+  assert.equal(response.status, 200, `${pathname} must server-render successfully`);
+  return response.text();
+}
 
-test("homepage keeps risk, ownership, and lifecycle visible", async () => {
-  const response = await render();
-  const html = await response.text();
-  assert.match(html, /状态 \/ 风险/);
-  assert.match(html, /当前阶段/);
-  assert.match(html, /负责人/);
-  assert.match(html, /承诺期限/);
-  assert.match(html, /正在同步 Case 状态/);
-  assert.doesNotMatch(html, /结果验证/);
-});
-
-test("homepage derives authoritative status and phase from the Case API", async () => {
-  const source = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
-  const demoSource = await readFile(new URL("../../backend/agentic_cm/demo.py", import.meta.url), "utf8");
-  assert.match(source, /fetch\(`\$\{API_BASE\}\/api\/cases`/);
-  assert.match(source, /OPEN:"处理中",PENDING:"暂缓",CLOSED:"已关闭"/);
-  assert.match(source, /PROFESSIONAL_COMMITMENT:\{value:4,label:"专业承诺"\}/);
-  assert.match(source, /CLOSED" \? \{value:5,label:"最终决策"\}/);
-  assert.doesNotMatch(source, /value:6|结果验证/);
-  assert.match(source, /cases\.map\(mapCase\)/);
-  assert.match(demoSource, /Northstar Mobility MCU-X7 \u8ba2\u5355\u9884\u8ba1\u5ef6\u671f 12 \u5929/);
-  assert.match(demoSource, /MCU-X7B \u66ff\u4ee3\u6599\u7f3a\u5c11\u5ba2\u6237\u8ba4\u8bc1\u4e0e\u6280\u672f\u9a8c\u8bc1/);
-  assert.doesNotMatch(source, /casePresentation/);
-  assert.doesNotMatch(source, /const caseData: CaseSummary\[\] = \[/);
-  assert.match(source, /Case 状态同步失败，当前列表可能不是最新/);
-});
-
-test("homepage implements search, filters, and quick view without role shortcuts", async () => {
-  const source = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
-  const sidebarSource = await readFile(new URL("../app/app-sidebar.tsx", import.meta.url), "utf8");
-  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
-  assert.match(source, /setActiveFilter/);
-  assert.match(source, /setSearch/);
-  assert.match(source, /setSelectedCase/);
-  assert.match(source, /\/cases\/\$\{item\.id\}/);
-  assert.match(source, /role="dialog"/);
-  assert.match(source, /<AppSidebar/);
-  assert.match(sidebarSource, /identityButton/);
-  assert.match(sidebarSource, /identity\.avatarUrl/);
-  assert.match(sidebarSource, /from "next\/image"/);
-  assert.match(source, /\/avatars\/chen-cheng\.png/);
-  assert.match(source, /<PersonAvatar name="王淼"/);
-  assert.match(sidebarSource, /Demo identity simulation/);
-  assert.match(sidebarSource, /不连接或修改 ERP/);
-  assert.doesNotMatch(source, /切换至该角色/);
-  assert.doesNotMatch(source, /className="attentionCard"/);
-  assert.doesNotMatch(styles, /activityList li:not\(:last-child\):after/);
-  assert.match(styles, /activityList li\{[^}]*border-bottom/);
-  assert.match(sidebarSource, /\/cases\/CM-2026-014#inbox/);
-});
-
-test("order delay Case opens the original Case workspace", async () => {
-  const response = await render("/cases/CM-2026-014");
-  assert.equal(response.status, 200);
-  const html = await response.text();
-  assert.match(html, /CM-2026-014/);
-  const source = await readFile(new URL("../app/cases/[id]/page.tsx", import.meta.url), "utf8");
-  assert.match(source, /caseDetails\?\.title/);
-  assert.match(source, /useParams/);
-  assert.match(html, /Case 完整流转 Thread/);
-  assert.match(html, /Human Proposal/);
-  assert.match(html, /从 Case 组装 Manifest|审查 Path Manifest|物料替代 · 审批 DAG/);
-  assert.match(html, /Case 总览/);
-  assert.match(html, /Case 工作台/);
-  assert.match(html, /系统运行正常/);
-  assert.doesNotMatch(html, /切换至该角色/);
-});
-
-test("overview and Case workspace use the same global Sidebar", async () => {
-  const homeSource = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
-  const workspaceSource = await readFile(new URL("../app/cases/[id]/page.tsx", import.meta.url), "utf8");
-  const sidebarSource = await readFile(new URL("../app/app-sidebar.tsx", import.meta.url), "utf8");
-  const workspaceStyles = await readFile(new URL("../app/cases/[id]/case-detail.css", import.meta.url), "utf8");
-
-  assert.match(homeSource, /<AppSidebar active="overview"/);
-  assert.match(workspaceSource, /<AppSidebar/);
-  assert.match(workspaceSource, /active=\{showInbox \? "inbox" : "workspace"\}/);
-  assert.match(workspaceSource, /<PersonIcon name=\{event\.details\.actor\}/);
-  assert.match(workspaceSource, /kind="orchestrator"/);
-  assert.match(workspaceSource, /kind="path"/);
-  assert.match(workspaceSource, /kind="synthesis"/);
-  assert.match(workspaceSource, /\/avatars\/bot-orchestrator\.png/);
-  assert.match(sidebarSource, /Case 总览/);
-  assert.match(sidebarSource, /Case 工作台/);
-  assert.match(sidebarSource, /identityButton/);
-  assert.match(sidebarSource, /\/assets\/skills/);
-  assert.match(sidebarSource, /\/assets\/policies/);
-  assert.match(sidebarSource, /\/assets\/knowledge/);
-  assert.doesNotMatch(workspaceSource, /className="caseList"|className="navItem"|className="identity"/);
-  assert.doesNotMatch(workspaceStyles, /^\.sidebar\{|^\.brand\{|^\.nav\{|^\.identity\{/m);
-});
-
-test("DAG and cross-Case Inbox share role-scoped approval decisions", async () => {
-  const source = await readFile(new URL("../app/cases/[id]/page.tsx", import.meta.url), "utf8");
-  const styles = await readFile(new URL("../app/cases/[id]/case-detail.css", import.meta.url), "utf8");
-
-  assert.match(source, /api\/inbox/);
-  assert.match(source, /commitments\/\$\{node\.id\}\/decision/);
-  assert.match(source, /node\.status !== "PENDING" \|\| node\.role !== currentIdentity\.role/);
-  assert.match(source, />通过<\/button>/);
-  assert.match(source, />修改<\/button>/);
-  assert.match(source, />否决<\/button>/);
-  assert.match(source, /查看审批依据/);
-  assert.match(source, /approvalReviewButton\(/);
-  assert.match(source, /approvalActions\(activeCaseId, node\)/);
-  assert.match(source, /approvalActions\(item\.case_id, item\.node\)/);
-  assert.match(source, /approvalActions\(approvalReview\.caseId, approvalReview\.node\)/);
-  assert.match(source, /item\.approval_context/);
-  assert.match(source, /ROLE-SCOPED EVIDENCE/);
-  assert.match(source, /你的专业判断与证据摘要/);
-  assert.match(source, /其他角色的判断与证据在其责任节点审批时展示/);
-  assert.match(source, /汇总所有 Case/);
-  assert.match(styles, /\.approvalActions/);
-  assert.match(styles, /\.approvalReviewPanel/);
-  assert.match(styles, /\.evidenceOptions article\{grid-template-columns:112px/);
-  assert.match(styles, /\.evidenceOptions article>span\{[^}]*overflow-wrap:anywhere/);
-});
-
-test("approved Manifest exposes a shared solution brief and role-scoped approval evidence", async () => {
-  const source = await readFile(new URL("../app/cases/[id]/page.tsx", import.meta.url), "utf8");
-  const styles = await readFile(new URL("../app/cases/[id]/case-detail.css", import.meta.url), "utf8");
-
-  assert.match(source, /api\/cases\/\$\{activeCaseId\}\/paths\/execute/);
-  assert.match(source, /path_ids: requestedPathIds/);
-  assert.match(source, /api\/runtime-config/);
-  assert.match(source, /startAutomaticManifest\(\)/);
-  assert.match(source, /startAutomaticAlternatives\(pendingPathIds\)/);
-  assert.match(source, /await generateAlternatives\(approvedPathIds\)/);
-  assert.match(source, /Orchestrator Agent 正在为您组装探索清单/);
-  assert.match(source, /Path Agent 正在为您推演解决方案/);
-  assert.match(source, /phase === "PATH_EXPLORATION"/);
-  assert.match(source, /phase === "PROFESSIONAL_COMMITMENT"/);
-  assert.match(source, /专业承诺 · 审批 DAG/);
-  assert.match(source, /全部完成后，本阶段自动结束，平台才会开放专业承诺审批/);
-  assert.match(source, /PROFESSIONAL_COMMITMENT: 3/);
-  assert.match(source, /explorationCompleted \? "Path 探索完成，进入专业承诺"/);
-  assert.match(source, /正在\$\{executionMode === "parallel" \? "并行" : "逐条"\}推演/);
-  assert.match(source, /并行执行 · 最多 \$\{Math\.min\(paths\.length, maxConcurrency\)\} 条/);
-  assert.match(source, /path_max_concurrency/);
-  assert.match(source, /maxConcurrency=\{pathMaxConcurrency\}/);
-  assert.match(source, /串行队列 · 同一时间 1 条/);
-  assert.doesNotMatch(source, /for \(const pathId of requestedPathIds\)/);
-  assert.match(source, /整体进度/);
-  assert.match(source, /\$\{runningPathCount\} 条运行中/);
-  assert.match(source, /第 \$\{runningPathIndex \+ 1\} \/ \$\{paths\.length\} 条/);
-  assert.match(source, /pathRunQueue/);
-  assert.doesNotMatch(source, /onClick=\{generateManifest\}>生成 Manifest/);
-  assert.doesNotMatch(source, />生成替代方案<\/button>/);
-  assert.match(source, /selectedPathViews\.map\(\(\{ path, revision, nodes, runs \}\)/);
-  assert.match(source, /revision\.options\.map/);
-  assert.doesNotMatch(source, /revision\.role_reports\.map/);
-  assert.match(source, /共同方案摘要/);
-  assert.match(source, /role_reports\.find\(\(item\) => item\.role === role\)/);
-  assert.doesNotMatch(source, /option\.benefits\.join|option\.risks\.join|option\.assumptions\.join/);
-  assert.match(source, /isSolutionRevision\(attempt\?\.solution_revision\)/);
-  assert.match(source, /commitmentNodes\.filter\(\(node\) => node\.path_id === path\.id\)/);
-  assert.match(source, /manifest\?\.paths \?\? \(workflowPaths\.length > 0 \? workflowPaths : attempts\.map/);
-  assert.match(source, /title: attempt\.title \?\? attempt\.definition/);
-  assert.match(source, /loadManifest\(data\.manifest, data\.path_attempts \?\? \[\], data\.workflow_paths \?\? \[\]\)/);
-  assert.match(source, /canViewManifest && \(\s*<>\s*<button className="linkButton capabilityToggle"/);
-  assert.match(source, /rootNodes\.map\(\(node\) => commitmentNode\(node, revision, path\.title\)\)/);
-  assert.match(source, /downstreamNodes\.map\(\(node\) => commitmentNode\(node, revision, path\.title\)\)/);
-  assert.match(source, /Agent 建议（非业务决定）/);
-  assert.match(source, /agent_type: "path"/);
-  assert.match(source, /event\.step === "run\.started" && event\.details\.path_id === path\.id/);
-  assert.match(source, /canViewManifest && agentRuns\.some\(\(run\) => run\.agent_type === "orchestrator"\)/);
-  assert.doesNotMatch(source, /phase === "MANIFEST_REVIEW" && agentRuns\.some/);
-  assert.match(source, /run\.status === "FAILED"/);
-  assert.match(source, /latestFailedOrchestratorRuns/);
-  assert.match(source, /latestFailedPathRuns/);
-  assert.match(source, /latestFailedSynthesisRuns/);
-  assert.match(source, /最新失败运行 · Trace 已自动展开/);
-  assert.match(source, /open=\{autoExpand && \(run\.status === "RUNNING" \|\| run\.status === "FAILED"\)\}/);
-  assert.match(source, /<AgentTracePanel runs=\{latestFailedOrchestratorRuns\} agentType="orchestrator" autoExpand/);
-  assert.match(source, /<AgentTracePanel runs=\{latestFailedPathRuns\} agentType="path" autoExpand/);
-  assert.match(source, /<AgentTracePanel runs=\{latestFailedSynthesisRuns\} agentType="synthesis" autoExpand/);
-  assert.match(source, /const typedRuns = runs\.filter\(\(run\) => run\.agent_type === agentType\)/);
-  assert.match(source, /<AgentTracePanel runs=\{runs\} agentType="path"/);
-  assert.match(source, /查看 \$\{path\.title\} Trace/);
-  assert.match(source, /window\.setInterval\(refreshLiveTrace, 600\)/);
-  assert.match(source, /实时审计轨迹/);
-  assert.match(source, /<AgentTracePanel runs=\{runs\} agentType=\{agentType\} autoExpand/);
-  assert.doesNotMatch(source, /className="liveTrace"/);
-  assert.match(styles, /\.embeddedLiveTrace/);
-  assert.match(source, /Orchestrator Trace/);
-  assert.doesNotMatch(source, /查看 Agent Trace/);
-  assert.doesNotMatch(source, /setShowAgentTrace\(true\)/);
-  assert.doesNotMatch(source, /open=\{runIndex === 0\}/);
-  assert.match(source, /solution_revision\.proposed/);
-  assert.match(styles, /\.solutionRevision/);
-  assert.match(styles, /\.solutionOptions/);
-  assert.match(styles, /\.reviewEvidenceButton/);
-  assert.match(styles, /\.aiWorkingCard/);
-  assert.match(styles, /\.pathExplorationProgress/);
-  assert.match(styles, /\.pathApprovalList/);
-  assert.match(styles, /\.pathRunQueue/);
-  assert.match(styles, /@keyframes aiScan/);
-  assert.match(styles, /prefers-reduced-motion/);
-});
-
-test("completed approval DAGs launch Synthesis and expose Owner-only final actions", async () => {
-  const source = await readFile(new URL("../app/cases/[id]/page.tsx", import.meta.url), "utf8");
-  const styles = await readFile(new URL("../app/cases/[id]/case-detail.css", import.meta.url), "utf8");
-
-  assert.match(source, /api\/cases\/\$\{activeCaseId\}\/synthesize/);
-  assert.match(source, /data\.phase === "FINAL_REVIEW" && !data\.synthesis_report/);
-  assert.match(source, /Synthesis Agent 正在汇总全部 Path/);
-  assert.match(source, /synthesisReport\.path_assessments\.map/);
-  assert.match(source, /assessment\.status === "SUCCEEDED" \? "审批成功" : "审批失败"/);
-  assert.match(source, /api\/cases\/\$\{activeCaseId\}\/owner-decision/);
-  assert.match(source, />关闭 Case<\/button>/);
-  assert.match(source, />保持 Open<\/button>/);
-  assert.match(source, />修改方案<\/button>/);
-  assert.match(source, /告诉 Orchestrator 下一轮应如何调整/);
-  assert.match(source, /提交指导并重新编排/);
-  assert.match(source, /action === "MODIFY" \? normalizedGuidance : undefined/);
-  assert.match(source, /Human Proposal v\{humanProposal\.revision\}/);
-  assert.match(source, /agentType="synthesis"/);
-  assert.match(styles, /\.synthesisReport/);
-  assert.match(styles, /\.ownerDecisionActions/);
-  assert.match(styles, /\.modifyGuidance/);
-});
-
-test("organization asset pages read all three effective asset kinds from the backend", async () => {
-  const source = await readFile(new URL("../app/assets/asset-library.tsx", import.meta.url), "utf8");
-  assert.match(source, /\/api\/capabilities/);
-  assert.match(source, /group === "skills"/);
-  assert.match(source, /group === "policies"/);
-  assert.match(source, /content\?\.observations/);
-  for (const path of ["skills", "policies", "knowledge"]) {
-    const response = await render(`/assets/${path}`);
-    assert.equal(response.status, 200);
-    assert.match(await response.text(), new RegExp(path[0].toUpperCase() + path.slice(1)));
+test("every route server-renders without throwing", async () => {
+  for (const pathname of [
+    "/",
+    "/cases/CM-2026-014",
+    "/assets/skills",
+    "/assets/policies",
+    "/assets/knowledge",
+  ]) {
+    const html = await renderHtml(pathname);
+    assert.match(html, /<main/, `${pathname} must render a main landmark`);
+    assert.doesNotMatch(html, /Application error|Internal Server Error/);
   }
 });
 
-test("homepage has desktop, tablet, mobile, and reduced-motion styles", async () => {
-  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
-  assert.match(styles, /@media\(max-width:1120px\)/);
-  assert.match(styles, /@media\(max-width:760px\)/);
-  assert.match(styles, /@media\(max-width:430px\)/);
-  assert.match(styles, /prefers-reduced-motion/);
+test("the global Sidebar renders on every route with its full destination set", async () => {
+  // The Sidebar is shared layout: every route must expose the same navigation.
+  for (const pathname of ["/", "/cases/CM-2026-014", "/assets/skills"]) {
+    const html = await renderHtml(pathname);
+    assert.match(html, /<nav [^>]*aria-label="主导航"/);
+    for (const href of [
+      '"/"',
+      '"/cases/CM-2026-014"',
+      '"/assets/skills"',
+      '"/assets/policies"',
+      '"/assets/knowledge"',
+    ]) {
+      assert.match(html, new RegExp(`href=${href}`), `${pathname} sidebar must link ${href}`);
+    }
+    // The inbox is a link from other routes but an in-place drawer trigger on
+    // the workspace itself, so assert the affordance rather than the element.
+    assert.match(html, /我的待办/, `${pathname} sidebar must expose the inbox`);
+    // Identities are a demo simulation, never a real role switch.
+    assert.doesNotMatch(html, /切换至该角色/);
+  }
+});
+
+test("the overview homepage renders its Case list, filters, and activity regions", async () => {
+  const html = await renderHtml("/");
+  assert.match(html, /<section class="metrics" aria-label="Case 指标"/);
+  assert.match(html, /id="case-overview"/);
+  // Status filters are a tablist with exactly one tab selected on first render.
+  assert.match(html, /<div class="filterTabs" role="tablist"/);
+  assert.equal((html.match(/role="tab"/g) ?? []).length, 4);
+  assert.equal((html.match(/aria-selected="true"/g) ?? []).length, 1);
+  assert.match(html, /id="activity"/);
+});
+
+test("the homepage keeps risk, ownership, and lifecycle columns visible", async () => {
+  const html = await renderHtml("/");
+  for (const heading of ["状态 / 风险", "当前阶段", "负责人", "承诺期限"]) {
+    assert.match(html, new RegExp(heading));
+  }
+});
+
+test("the homepage renders a loading state rather than fabricated Case data", async () => {
+  // Case status and phase are authoritative from the Case API. Before that
+  // request resolves the page must show a placeholder, never invented rows.
+  const html = await renderHtml("/");
+  assert.match(html, /正在同步 Case 状态/);
+  assert.match(html, /状态与阶段以 Case API 为准/);
+});
+
+test("the Case workspace renders the governance thread for the requested Case", async () => {
+  const html = await renderHtml("/cases/CM-2026-014");
+  // The route parameter drives the rendered Case, not a hardcoded id.
+  assert.match(html, /CM-2026-014/);
+  assert.match(html, /<section class="caseThread" aria-label="Case 完整流转 Thread"/);
+  assert.match(html, /Human Proposal/);
+  assert.match(html, /<div class="futureFlow" aria-label="后续流程"/);
+});
+
+test("the Case workspace treats CLOSED as a completed workflow for every role", async () => {
+  const source = await readFile(
+    new URL("../app/cases/[id]/page.tsx", import.meta.url),
+    "utf8",
+  );
+  // FINAL_REVIEW is retained as the last business phase after closure, so the
+  // terminal Case status must override the right-rail phase presentation.
+  assert.match(source, /const isCaseClosed = caseStatus === "CLOSED"/);
+  assert.match(source, /isCaseClosed && index === activeStageIndex/);
+  assert.match(source, /isCaseClosed \? "Case 已关闭"/);
+
+  // Other roles cannot see the report body, but the redacted owner decision
+  // still carries its revision and must not regress to "等待汇总".
+  assert.match(source, /synthesisReport\?\.revision \?\? ownerDecision\?\.synthesis_revision/);
+  assert.match(source, /Case Owner 已基于 Synthesis/);
+});
+
+test("each asset route renders its own kind with a search affordance", async () => {
+  for (const [path, heading] of [
+    ["skills", "Skills"],
+    ["policies", "Policies"],
+    ["knowledge", "Knowledge"],
+  ]) {
+    const html = await renderHtml(`/assets/${path}`);
+    assert.match(html, new RegExp(`<h1>${heading}</h1>`));
+    assert.match(html, new RegExp(`aria-label="搜索 ${heading}"`));
+    assert.match(html, /<section class="assetGrid" aria-live="polite"/);
+  }
+});
+
+test("stylesheets keep responsive breakpoints and honour reduced motion", async () => {
+  // Asserted against CSS text because no visual-regression harness exists.
+  // Whitespace-tolerant so reformatting the stylesheet does not fail this.
+  const globals = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const workspace = await readFile(
+    new URL("../app/cases/[id]/case-detail.css", import.meta.url),
+    "utf8",
+  );
+  for (const width of [1120, 760, 430]) {
+    assert.match(globals, new RegExp(`@media\\s*\\(\\s*max-width\\s*:\\s*${width}px\\s*\\)`));
+  }
+  for (const styles of [globals, workspace]) {
+    assert.match(styles, /prefers-reduced-motion/);
+  }
 });

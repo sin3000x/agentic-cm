@@ -5,26 +5,14 @@ import Image from "next/image";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import AppSidebar from "../../app-sidebar";
+import { apiGet, apiPost, isAbort } from "../../lib/api";
+import { botAvatars, demoIdentities, personAvatars } from "../../lib/identities";
+import { formatQuantity, formatThreadTime } from "../../lib/format";
 import "./case-detail.css";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? `http://localhost:${process.env.AGENTIC_CM_API_PORT ?? 8000}`;
 
 const stages = ["Case 受理", "Manifest 评审", "Path 探索", "专业承诺", "最终决策"];
 
-const demoIdentities = [
-  { name: "陈澄", role: "订单统筹经理", avatar: "陈", avatarUrl: "/avatars/chen-cheng.png" },
-  { name: "王淼", role: "主计划", avatar: "王", avatarUrl: "/avatars/wang-miao.png" },
-  { name: "林乔", role: "研发", avatar: "林", avatarUrl: "/avatars/lin-qiao.png" },
-  { name: "赵宁", role: "供应经理", avatar: "赵", avatarUrl: "/avatars/zhao-ning.png" },
-  { name: "周岚", role: "采购与供应协同", avatar: "周", avatarUrl: "/avatars/zhou-lan.png" },
-  { name: "吴桐", role: "物流", avatar: "吴", avatarUrl: "/avatars/wu-tong.png" },
-];
-const personAvatars: Record<string, string> = Object.fromEntries(demoIdentities.map((identity) => [identity.name, identity.avatarUrl]));
-const botAvatars = {
-  orchestrator: "/avatars/bot-orchestrator.png",
-  path: "/avatars/bot-path.png",
-  synthesis: "/avatars/bot-synthesis.png",
-} as const;
 
 const commitmentCopy: Record<string, string> = {
   SUPPLY: "确认 Manifest 候选物料的供应可行性",
@@ -171,6 +159,33 @@ type HumanProposal = {
   content: string;
 };
 
+type PathExecutionResponse = {
+  execution_mode: PathExecutionMode;
+  max_concurrency: number;
+  case: CaseDetails;
+};
+
+type CaseStatusValue = "OPEN" | "PENDING" | "CLOSED";
+type CasePhase =
+  | "INTAKE"
+  | "MANIFEST_REVIEW"
+  | "PATH_EXPLORATION"
+  | "PROFESSIONAL_COMMITMENT"
+  | "FINAL_REVIEW";
+
+type CaseManifest = {
+  id?: string;
+  version?: number;
+  paths?: ManifestPath[];
+  capability_snapshots?: Record<string, CapabilitySnapshot>;
+};
+
+/**
+ * The Case view returned by GET /api/cases/{id}.
+ *
+ * Owner-only fields (manifest, synthesis_report, workflow_paths) are redacted
+ * to null/[] by the backend for other identities, so they are optional here.
+ */
 type CaseDetails = {
   id: string;
   title: string;
@@ -184,6 +199,23 @@ type CaseDetails = {
     gap_quantity?: number;
     target_date?: string;
     risk_level?: "HIGH" | "MEDIUM" | "LOW";
+  };
+  status: CaseStatusValue;
+  phase: CasePhase;
+  version: number;
+  created_at: string;
+  updated_at?: string;
+  human_proposal?: HumanProposal | null;
+  manifest?: CaseManifest | null;
+  workflow_paths?: ManifestPath[];
+  path_attempts?: PathAttempt[];
+  commitment_nodes?: CommitmentNode[];
+  synthesis_report?: SynthesisReport | null;
+  owner_decision?: OwnerDecision | null;
+  permissions?: {
+    can_view_manifest?: boolean;
+    can_approve_manifest?: boolean;
+    can_decide_case?: boolean;
   };
 };
 
@@ -296,20 +328,6 @@ const aiRunCopy: Record<AiRunKind, { eyebrow: string; title: string; steps: stri
     steps: ["读取终态 Path", "对齐成功与失败", "归并风险与依据", "形成 Owner 决策简报"],
   },
 };
-
-const threadTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-  hour12: false,
-});
-
-function formatThreadTime(value: string | null) {
-  return value ? threadTimeFormatter.format(new Date(value)) : "时间读取中";
-}
 
 function pathIdForRun(run: AgentRun) {
   const started = run.events.find((event) => event.step === "run.started");
@@ -465,8 +483,8 @@ export default function Home() {
   const params = useParams<{ id: string }>();
   const activeCaseId = params?.id ?? "";
   const [caseDetails, setCaseDetails] = useState<CaseDetails | null>(null);
-  const [phase, setPhase] = useState("INTAKE");
-  const [caseStatus, setCaseStatus] = useState<"OPEN" | "PENDING" | "CLOSED">("OPEN");
+  const [phase, setPhase] = useState<CasePhase>("INTAKE");
+  const [caseStatus, setCaseStatus] = useState<CaseStatusValue>("OPEN");
   const [approved, setApproved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [aiRunKind, setAiRunKind] = useState<AiRunKind | null>(null);
@@ -518,14 +536,14 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/runtime-config`)
-      .then((response) => response.ok ? response.json() : Promise.reject())
+    apiGet<{ path_execution_mode?: string; path_max_concurrency?: number }>("/api/runtime-config")
       .then((data) => {
         if (data.path_execution_mode === "parallel" || data.path_execution_mode === "serial") {
           setPathExecutionMode(data.path_execution_mode);
         }
-        if (Number.isInteger(data.path_max_concurrency) && data.path_max_concurrency > 0) {
-          setPathMaxConcurrency(data.path_max_concurrency);
+        const concurrency = data.path_max_concurrency;
+        if (Number.isInteger(concurrency) && concurrency !== undefined && concurrency > 0) {
+          setPathMaxConcurrency(concurrency);
         }
       })
       .catch(() => {
@@ -572,7 +590,7 @@ export default function Home() {
   }
 
   function loadManifest(
-    manifest: { paths?: ManifestPath[]; capability_snapshots?: Record<string, CapabilitySnapshot> } | null,
+    manifest: CaseManifest | null | undefined,
     attempts: PathAttempt[] = [],
     workflowPaths: ManifestPath[] = [],
   ) {
@@ -592,17 +610,13 @@ export default function Home() {
   useEffect(() => {
     if (!activeCaseId) return;
     const identity = demoIdentities[identityIndex];
-    const query = new URLSearchParams({ actor: identity.name, role: identity.role });
+    const identityQuery = { actor: identity.name, role: identity.role };
     const controller = new AbortController();
     Promise.all([
-      fetch(`${API_BASE}/api/cases/${activeCaseId}?${query}`, { signal: controller.signal }),
-      fetch(`${API_BASE}/api/cases/${activeCaseId}/timeline`, { signal: controller.signal }),
-      fetch(`${API_BASE}/api/inbox?${new URLSearchParams({ role: identity.role })}`, { signal: controller.signal }),
+      apiGet<CaseDetails>(`/api/cases/${activeCaseId}`, identityQuery, controller.signal),
+      apiGet<TimelineEvent[]>(`/api/cases/${activeCaseId}/timeline`, undefined, controller.signal),
+      apiGet<InboxItem[]>("/api/inbox", { role: identity.role }, controller.signal),
     ])
-      .then(([caseResponse, timelineResponse, inboxResponse]) => {
-        if (!caseResponse.ok || !timelineResponse.ok || !inboxResponse.ok) return Promise.reject();
-        return Promise.all([caseResponse.json(), timelineResponse.json(), inboxResponse.json()]);
-      })
       .then(([data, timeline, inbox]) => {
         setCaseDetails(data);
         setPhase(data.phase);
@@ -622,16 +636,12 @@ export default function Home() {
           setSelectedPathIds((data.manifest?.paths ?? []).filter((path: ManifestPath) => path.selected).map((path: ManifestPath) => path.id));
         }
         if (data.permissions?.can_view_manifest === true) {
-          const traceQuery = new URLSearchParams({
-            actor: identity.name,
-            role: identity.role,
-          });
-          Promise.all(["orchestrator", "path", "synthesis"].map((agentType) => {
-            const query = new URLSearchParams(traceQuery);
-            query.set("agent_type", agentType);
-            return fetch(`${API_BASE}/api/cases/${activeCaseId}/agent-runs?${query}`, { signal: controller.signal })
-              .then((response) => response.ok ? response.json() : []);
-          }))
+          Promise.all(["orchestrator", "path", "synthesis"].map((agentType) =>
+            apiGet<AgentRun[]>(
+              `/api/cases/${activeCaseId}/agent-runs`,
+              { ...identityQuery, agent_type: agentType },
+              controller.signal,
+            ).catch(() => [] as AgentRun[])))
             .then(([orchestratorRuns, loadedPathRuns, loadedSynthesisRuns]) => {
               setAgentRuns(orchestratorRuns);
               setPathAgentRuns(loadedPathRuns);
@@ -675,7 +685,7 @@ export default function Home() {
         }
       })
       .catch((error) => {
-        if (error instanceof DOMException && error.name === "AbortError") return;
+        if (isAbort(error)) return;
         setMessage("API 尚未连接，无法同步当前 Case 数据。");
       });
     return () => controller.abort();
@@ -683,8 +693,7 @@ export default function Home() {
 
   async function refreshTimeline() {
     try {
-      const response = await fetch(`${API_BASE}/api/cases/${activeCaseId}/timeline`);
-      if (response.ok) setTimelineEvents(await response.json());
+      setTimelineEvents(await apiGet<TimelineEvent[]>(`/api/cases/${activeCaseId}/timeline`));
     } catch {
       // The business action has already succeeded; the next Case refresh will reload the Thread.
     }
@@ -692,9 +701,7 @@ export default function Home() {
 
   async function refreshInbox() {
     try {
-      const query = new URLSearchParams({ role: currentIdentity.role });
-      const response = await fetch(`${API_BASE}/api/inbox?${query}`);
-      if (response.ok) setInboxItems(await response.json());
+      setInboxItems(await apiGet<InboxItem[]>("/api/inbox", { role: currentIdentity.role }));
     } catch {
       // Inbox can be refreshed independently without changing the Case decision.
     }
@@ -704,17 +711,16 @@ export default function Home() {
     if (!canViewManifest) return;
     try {
       const baseQuery = { actor: currentIdentity.name, role: currentIdentity.role };
-      const [orchestratorResponse, pathResponse, synthesisResponse] = await Promise.all([
-        fetch(`${API_BASE}/api/cases/${activeCaseId}/agent-runs?${new URLSearchParams({ ...baseQuery, agent_type: "orchestrator" })}`),
-        fetch(`${API_BASE}/api/cases/${activeCaseId}/agent-runs?${new URLSearchParams({ ...baseQuery, agent_type: "path" })}`),
-        fetch(`${API_BASE}/api/cases/${activeCaseId}/agent-runs?${new URLSearchParams({ ...baseQuery, agent_type: "synthesis" })}`),
+      const loadRuns = (agentType: string) => apiGet<AgentRun[]>(
+        `/api/cases/${activeCaseId}/agent-runs`,
+        { ...baseQuery, agent_type: agentType },
+      );
+      const [orchestratorRuns, loadedPathRuns, loadedSynthesisRuns] = await Promise.all([
+        loadRuns("orchestrator"), loadRuns("path"), loadRuns("synthesis"),
       ]);
-      if (orchestratorResponse.ok) {
-        const loadedOrchestratorRuns = await orchestratorResponse.json();
-        setAgentRuns(loadedOrchestratorRuns);
-      }
-      if (pathResponse.ok) setPathAgentRuns(await pathResponse.json());
-      if (synthesisResponse.ok) setSynthesisAgentRuns(await synthesisResponse.json());
+      setAgentRuns(orchestratorRuns);
+      setPathAgentRuns(loadedPathRuns);
+      setSynthesisAgentRuns(loadedSynthesisRuns);
     } catch {
       // Trace persistence is independent from the business action and can be reloaded later.
     }
@@ -728,16 +734,7 @@ export default function Home() {
     setFailedAiRun(null);
     setMessage("");
     try {
-      const response = await fetch(`${API_BASE}/api/cases/${activeCaseId}/orchestrate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ actor: currentIdentity.name, role: currentIdentity.role }),
-      });
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({}));
-        throw new Error(error.detail ?? "orchestrate failed");
-      }
-      const data = await response.json();
+      const data = await apiPost<CaseDetails>(`/api/cases/${activeCaseId}/orchestrate`, { actor: currentIdentity.name, role: currentIdentity.role });
       setPhase("MANIFEST_REVIEW");
       loadManifest(data.manifest);
       setCapabilities(null);
@@ -757,26 +754,20 @@ export default function Home() {
     setBusy(true);
     setMessage("");
     try {
-      const response = await fetch(`${API_BASE}/api/cases/${activeCaseId}/manifest/approve`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          selected_path_ids: selectedPathIds,
-          actor: currentIdentity.name,
-          role: currentIdentity.role,
-        }),
+      const data = await apiPost<CaseDetails>(`/api/cases/${activeCaseId}/manifest/approve`, {
+        selected_path_ids: selectedPathIds,
+        actor: currentIdentity.name,
+        role: currentIdentity.role,
       });
-      if (!response.ok) throw new Error("approve failed");
-      const data = await response.json();
-      setManifestPaths(data.manifest.paths);
+      setManifestPaths(data.manifest?.paths ?? []);
       setCommitmentNodes(data.commitment_nodes ?? []);
       setPathAttempts(data.path_attempts ?? []);
       setApproved(true);
       setPhase("PATH_EXPLORATION");
       await refreshTimeline();
-      const approvedPathIds = data.manifest.paths
-        .filter((path: ManifestPath) => path.selected)
-        .map((path: ManifestPath) => path.id);
+      const approvedPathIds = (data.manifest?.paths ?? [])
+        .filter((path) => path.selected)
+        .map((path) => path.id);
       setMessage("Manifest 已批准；Path Agent 将自动推演所选 Path。 ");
       await generateAlternatives(approvedPathIds);
     } catch {
@@ -797,20 +788,11 @@ export default function Home() {
     setFailedAiRun(null);
     setMessage("");
     try {
-      const response = await fetch(`${API_BASE}/api/cases/${activeCaseId}/paths/execute`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const data = await apiPost<PathExecutionResponse>(`/api/cases/${activeCaseId}/paths/execute`, {
           path_ids: requestedPathIds,
           actor: currentIdentity.name,
           role: currentIdentity.role,
-        }),
-      });
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({}));
-        throw new Error(error.detail ?? "Path Agent failed");
-      }
-      const data = await response.json();
+        });
       const updatedCase = data.case;
       if (data.execution_mode === "parallel" || data.execution_mode === "serial") {
         setPathExecutionMode(data.execution_mode);
@@ -843,16 +825,7 @@ export default function Home() {
     setFailedAiRun(null);
     setMessage("");
     try {
-      const response = await fetch(`${API_BASE}/api/cases/${activeCaseId}/synthesize`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ actor: currentIdentity.name, role: currentIdentity.role }),
-      });
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({}));
-        throw new Error(error.detail ?? "Synthesis Agent failed");
-      }
-      const data = await response.json();
+      const data = await apiPost<CaseDetails>(`/api/cases/${activeCaseId}/synthesize`, { actor: currentIdentity.name, role: currentIdentity.role });
       setSynthesisReport(data.synthesis_report ?? null);
       setOwnerDecision(data.owner_decision ?? null);
       await refreshTimeline();
@@ -876,21 +849,12 @@ export default function Home() {
     setBusy(true);
     setMessage("");
     try {
-      const response = await fetch(`${API_BASE}/api/cases/${activeCaseId}/owner-decision`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const data = await apiPost<CaseDetails>(`/api/cases/${activeCaseId}/owner-decision`, {
           actor: currentIdentity.name,
           role: currentIdentity.role,
           action,
           guidance: action === "MODIFY" ? normalizedGuidance : undefined,
-        }),
-      });
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({}));
-        throw new Error(error.detail ?? "Owner decision failed");
-      }
-      const data = await response.json();
+        });
       setCaseStatus(data.status);
       setPhase(data.phase);
       setOwnerDecision(data.owner_decision ?? null);
@@ -918,11 +882,7 @@ export default function Home() {
   async function resetDemo() {
     setBusy(true);
     try {
-      const response = await fetch(`${API_BASE}/api/demo/reset`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dataset_id: "supply-chain-golden-path-v1" }),
-      });
-      if (!response.ok) throw new Error("reset failed");
+      await apiPost<void>("/api/demo/reset", { dataset_id: "supply-chain-golden-path-v1" });
       setApproved(false);
       setPhase("INTAKE");
       setCapabilities(null);
@@ -978,10 +938,10 @@ export default function Home() {
     if (capabilities) return;
     try {
       const requestIdentityIndex = identityIndex;
-      const query = new URLSearchParams({ actor: currentIdentity.name, role: currentIdentity.role });
-      const response = await fetch(`${API_BASE}/api/cases/${activeCaseId}/capabilities?${query}`);
-      if (!response.ok) throw new Error("capabilities failed");
-      const data = await response.json();
+      const data = await apiGet<CapabilityDetails>(
+        `/api/cases/${activeCaseId}/capabilities`,
+        { actor: currentIdentity.name, role: currentIdentity.role },
+      );
       if (identityIndexRef.current !== requestIdentityIndex) return;
       setCapabilities(data);
     } catch {
@@ -994,16 +954,10 @@ export default function Home() {
     setBusy(true);
     setMessage("");
     try {
-      const response = await fetch(
-        `${API_BASE}/api/cases/${caseId}/paths/${node.path_id}/commitments/${node.id}/decision`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ actor: currentIdentity.name, role: currentIdentity.role, decision }),
-        },
+      const data = await apiPost<CaseDetails>(
+        `/api/cases/${caseId}/paths/${node.path_id}/commitments/${node.id}/decision`,
+        { actor: currentIdentity.name, role: currentIdentity.role, decision },
       );
-      if (!response.ok) throw new Error("commitment decision failed");
-      const data = await response.json();
       if (caseId === activeCaseId) {
         setCommitmentNodes(data.commitment_nodes ?? []);
         setPathAttempts(data.path_attempts ?? []);
@@ -1029,7 +983,9 @@ export default function Home() {
     FINAL_REVIEW: 4,
   };
   const activeStageIndex = phaseStageIndex[phase] ?? 0;
-  const currentStage = stages[activeStageIndex];
+  const isCaseClosed = caseStatus === "CLOSED";
+  const currentStage = isCaseClosed ? "Case 已关闭" : stages[activeStageIndex];
+  const synthesisRevision = synthesisReport?.revision ?? ownerDecision?.synthesis_revision;
   const pendingExplorationPathIds = manifestPaths
     .filter((path) => path.selected)
     .filter((path) => {
@@ -1256,10 +1212,12 @@ export default function Home() {
     <>
       <div className="panelTitle">
         <div><span className="agentIcon">∑</span><span><small>CASE SYNTHESIS</small><h2>全 Path 汇总 · Owner 决策</h2></span></div>
-        <span className="version">{synthesisReport ? `v${synthesisReport.revision}` : "等待汇总"}</span>
+        <span className="version">{synthesisRevision ? `v${synthesisRevision}` : "等待汇总"}</span>
       </div>
       {!canViewManifest ? (
-        <p className="lead">所有 Path 的审批 DAG 已完成。汇总报告与最终决策仅对 Case Owner 可见。</p>
+        <p className="lead">{isCaseClosed
+          ? `Case Owner 已基于 Synthesis v${synthesisRevision ?? "—"} 完成最终决策并关闭 Case。汇总报告仅对 Case Owner 可见。`
+          : "所有 Path 的审批 DAG 已完成。汇总报告与最终决策仅对 Case Owner 可见。"}</p>
       ) : synthesisReport ? (
         <section className="synthesisReport" aria-label="Synthesis Agent 汇总报告">
           <div className="synthesisHeader">
@@ -1431,7 +1389,7 @@ export default function Home() {
                     <blockquote>{humanProposal.content}</blockquote>
                     <div className="factChips">
                       {caseDetails?.business_payload?.material && <span>{caseDetails.business_payload.material}</span>}
-                      {caseDetails?.business_payload?.gap_quantity !== undefined && <span>缺口 {caseDetails.business_payload.gap_quantity.toLocaleString("zh-CN")} pcs</span>}
+                      {caseDetails?.business_payload?.gap_quantity !== undefined && <span>缺口 {formatQuantity(caseDetails.business_payload.gap_quantity)} pcs</span>}
                       {caseDetails?.business_payload?.target_date && <span>目标 {caseDetails.business_payload.target_date}</span>}
                     </div>
                   </div>
@@ -1558,9 +1516,9 @@ export default function Home() {
                 <div className="compactTitle"><h2>完整流程</h2><span>{activeStageIndex + 1} / {stages.length}</span></div>
                 <ol>
                   {stages.map((stage, index) => (
-                    <li className={index < activeStageIndex ? "complete" : index === activeStageIndex ? "current" : ""} key={stage}>
-                      <span>{index < activeStageIndex ? "✓" : index + 1}</span>
-                      <div><strong>{stage}</strong><small>{index === activeStageIndex ? "进行中" : index < activeStageIndex ? "已完成" : "尚未开始"}</small></div>
+                    <li className={index < activeStageIndex || (isCaseClosed && index === activeStageIndex) ? "complete" : index === activeStageIndex ? "current" : ""} key={stage}>
+                      <span>{index < activeStageIndex || (isCaseClosed && index === activeStageIndex) ? "✓" : index + 1}</span>
+                      <div><strong>{stage}</strong><small>{index < activeStageIndex || (isCaseClosed && index === activeStageIndex) ? "已完成" : index === activeStageIndex ? "进行中" : "尚未开始"}</small></div>
                     </li>
                   ))}
                 </ol>
@@ -1572,7 +1530,7 @@ export default function Home() {
                   <div><dt>订单</dt><dd>{caseDetails?.business_payload?.order_id ?? "—"}</dd></div>
                   <div><dt>客户</dt><dd>{caseDetails?.business_payload?.customer ?? "—"}</dd></div>
                   <div><dt>关键物料</dt><dd>{caseDetails?.business_payload?.material ?? "—"}</dd></div>
-                  <div><dt>缺口数量</dt><dd>{caseDetails?.business_payload?.gap_quantity !== undefined ? `${caseDetails.business_payload.gap_quantity.toLocaleString("zh-CN")} pcs` : "—"}</dd></div>
+                  <div><dt>缺口数量</dt><dd>{caseDetails?.business_payload?.gap_quantity !== undefined ? `${formatQuantity(caseDetails.business_payload.gap_quantity)} pcs` : "—"}</dd></div>
                   <div><dt>目标交付日</dt><dd>{caseDetails?.business_payload?.target_date ?? "—"}</dd></div>
                 </dl>
               </section>
