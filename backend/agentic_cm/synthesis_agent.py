@@ -80,6 +80,13 @@ class SynthesisContext:
 
 
 @dataclass(frozen=True)
+class SynthesisPromptContext:
+    case_snapshot: dict[str, Any]
+    manifest_ref: dict[str, Any]
+    path_results: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True)
 class PathAssessment:
     path_id: str
     status: PathStatus
@@ -218,6 +225,13 @@ class OpenAICompatibleSynthesisAgentAdapter:
 
     async def generate(self, context: SynthesisContext, trace: AgentTraceSink) -> SynthesisResult:
         schema = _SynthesisResultPayload.model_json_schema()
+        prompt_context = _synthesis_prompt_context(context)
+        trace(
+            "model.context_projection",
+            "COMPLETED",
+            "将完整终态 Path 工件投影为 Synthesis 模型上下文",
+            {"context": asdict(prompt_context)},
+        )
         request: dict[str, Any] = {
             "model": self._model,
             "messages": [
@@ -235,7 +249,7 @@ class OpenAICompatibleSynthesisAgentAdapter:
                         f"{json.dumps(schema)}"
                     ),
                 },
-                {"role": "user", "content": json.dumps(asdict(context), ensure_ascii=False)},
+                {"role": "user", "content": json.dumps(asdict(prompt_context), ensure_ascii=False)},
             ],
             "response_format": {"type": "json_object"},
             "max_tokens": self._max_output_tokens,
@@ -270,6 +284,36 @@ class OpenAICompatibleSynthesisAgentAdapter:
             # Paraphrased supporting_refs are schema-valid but must still be repaired.
             recoverable_output_errors=(SynthesisAgentOutputError,),
         )
+
+
+def _synthesis_prompt_context(context: SynthesisContext) -> SynthesisPromptContext:
+    path_results: list[dict[str, Any]] = []
+    for item in context.path_results:
+        revision = item["solution_revision"]
+        path_results.append({
+            "path_id": item["path_id"],
+            "definition": item["definition"],
+            "title": item["title"],
+            "status": item["status"],
+            "solution_revision": {
+                key: revision[key]
+                for key in (
+                    "revision", "summary", "options", "recommendation", "evidence_gaps", "role_reports"
+                )
+                if key in revision
+            },
+            "commitments": [{
+                key: node[key]
+                for key in ("id", "role", "status", "reviews")
+                if key in node
+            } for node in item["commitments"]],
+            "authorized_supporting_refs": item["authorized_supporting_refs"],
+        })
+    return SynthesisPromptContext(
+        case_snapshot=context.case_snapshot,
+        manifest_ref=context.manifest_ref,
+        path_results=tuple(path_results),
+    )
 
 
 class SynthesisAgent:

@@ -109,6 +109,16 @@ run(context, tool_provider, event_sink) -> AgentResult
 
 三个任务可以由同一 Adapter family 实现，但职责和 schema 必须分开。
 
+### 4.1 运行审计上下文与模型上下文分离
+
+当前 OpenAI-compatible Adapter 不再把完整运行审计对象直接序列化给模型。平台先保留可复核的 `PlanningContext + PlanningCandidate[]`、`PathAgentContext` 或 `SynthesisContext`，再在调用边界投影为专用 Prompt DTO：
+
+- `PlannerPromptContext` 只包含 Case、Path 的 `definition/title/description`，以及跨候选去重后的编排 Skill 指令；Policy、Knowledge 和 Commitment ID 仍留在能力解析 trace 与 Manifest 快照中。
+- `PathPromptContext` 只包含当前 Case/Path、精简的执行 Skill 指令、建议性 Knowledge、授权选项、已经执行的只读 Tool 结果、角色报告契约和上一版方案；不向模型重复发送完整 Policy、compiled policy、CommitmentDAG、Skill 文件清单、Tool 全量 records 或重复 option ID 列表。
+- `SynthesisPromptContext` 只包含汇总所需的 SolutionRevision 字段、精简 Commitment 状态和授权引用；生成来源、Manifest 回链及平台内部依赖字段仍保存在权威 Artifact 中。
+
+Prompt 投影只减少模型输入，不改变 Manifest 冻结内容、AgentRun 审计、平台语义校验或失败无副作用保证。自定义 Adapter 仍消费稳定的完整运行上下文，因此可以自行实现等价或更严格的模型投影。
+
 ## 5. PathRunContext
 
 平台必须传入冻结、最小授权的上下文，而不是允许 Adapter 任意查询数据库。建议包含：

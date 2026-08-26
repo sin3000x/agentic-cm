@@ -1127,6 +1127,17 @@ def test_openai_synthesis_repairs_paraphrased_artifact_refs(tmp_path: Path) -> N
         "PATH-01/commitment/TECH",
         "PATH-01/commitment/CUSTOMER",
     ]
+    prompt_revision = request_context["path_results"][0]["solution_revision"]
+    assert set(prompt_revision) == {
+        "revision", "summary", "options", "recommendation", "evidence_gaps", "role_reports"
+    }
+    assert "generated_by" not in prompt_revision
+    assert "manifest_ref" not in prompt_revision
+    assert "required_commitment_ids" not in prompt_revision
+    assert all(
+        set(commitment) == {"id", "role", "status", "reviews"}
+        for commitment in request_context["path_results"][0]["commitments"]
+    )
     assert "READY means that its responsible human has already approved it" in request_payload["messages"][0]["content"]
     assert request_payload["thinking"] == {"type": "disabled"}
     assert "reasoning_effort" not in request_payload
@@ -1365,6 +1376,15 @@ def test_openai_compatible_adapter_accepts_custom_provider_configuration() -> No
     assert observed["payload"]["response_format"] == {"type": "json_object"}
     assert observed["payload"]["thinking"] == {"type": "enabled"}
     assert observed["payload"]["reasoning_effort"] == "max"
+    planner_context = json.loads(observed["payload"]["messages"][1]["content"])
+    assert set(planner_context) == {"case", "candidates", "skill_guidance"}
+    assert len(planner_context["skill_guidance"]) == 1
+    assert all(
+        set(candidate) == {"definition", "title", "description"}
+        for candidate in planner_context["candidates"]
+    )
+    assert "policy_ids" not in json.dumps(planner_context)
+    assert "mandatory_commitment_ids" not in json.dumps(planner_context)
     assert "secret-key" not in json.dumps(trace_events)
     request_trace = next(args for args, _ in trace_events if args[0] == "planner.request")
     assert request_trace[3]["authentication"] == {
@@ -1736,12 +1756,27 @@ def test_openai_compatible_path_agent_uses_manifest_assembled_context(tmp_path: 
     request_context = json.loads(observed["payload"]["messages"][1]["content"])
     assert request_context["manifest_ref"]["id"] == "MAN-CM-2026-014-1"
     assert request_context["execution_skills"][0]["id"] == "material-substitution-analysis"
-    assert request_context["compiled_policy"]["commitments"][0]["id"] == "SUPPLY"
-    assert request_context["authorized_option_ids"] == ["A", "B"]
+    assert set(request_context["execution_skills"][0]) == {
+        "id", "version", "description", "instructions_markdown"
+    }
+    assert [item["id"] for item in request_context["authorized_options"]] == ["A", "B"]
     assert len(request_context["tool_results"]) == 6
     assert {item["role"] for item in request_context["required_role_reports"]} == {
         "研发", "主计划", "供应经理"
     }
+    assert "policies" not in request_context
+    assert "compiled_policy" not in request_context
+    assert "commitment_dag_snapshot" not in request_context
+    assert "authorized_option_ids" not in request_context
+    assert "tools" not in request_context["execution_skills"][0]
+    assert "path_options" not in request_context["execution_skills"][0]
+    frozen_skills = case.manifest.capability_snapshots["PATH-01"]["asset_payloads"]["skills"]
+    frozen_execution_skill = next(
+        item for item in frozen_skills if item["id"] == "material-substitution-analysis"
+    )
+    assert frozen_execution_skill["tools"]
+    assert frozen_execution_skill["path_options"]
+    assert case.manifest.capability_snapshots["PATH-01"]["compiled_policy"]["commitments"][0]["id"] == "SUPPLY"
     assert "path-secret" not in json.dumps(observed["payload"])
 
 
