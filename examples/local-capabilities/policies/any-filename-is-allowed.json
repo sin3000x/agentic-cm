@@ -1,10 +1,8 @@
 {
   "schema_version": 1,
-  "kind": "policy",
   "id": "POL-MY-COMPANY-REGION-001",
   "version": "1.2.0",
   "title": "目标地区认证检查要求",
-  "status": "published",
   "selector": {
     "case_type": ["ORDER_DELIVERY_RISK"],
     "path_definition": ["MaterialSubstitution"]
@@ -14,13 +12,8 @@
       {
         "id": "REGION-COMPLIANCE",
         "role": "合规专员",
-        "node_type": "REVIEW",
-        "reviews": ["customer"],
-        "depends_on": ["TECH"],
-        "role_report": {
-          "dimension": "地区认证合规性",
-          "sentence_prefix": "合规专员维度："
-        }
+        "review_dimension": "地区认证合规性",
+        "depends_on": ["TECH"]
       }
     ]
   }

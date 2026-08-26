@@ -25,8 +25,8 @@ PYTHONPATH=backend .venv/bin/python -m agentic_cm.capabilities resolve
 
 注意：
 
-- Policy/Knowledge 的 JSON 文件名可以任意取，系统以文件内容中的 `kind + id` 识别资产；
-- 每个 Policy Commitment 必须提供 `role_report.dimension` 与 `role_report.sentence_prefix`；平台会把它与责任角色、依赖一起冻结进 Manifest，并据此约束 Path Agent 报告；
+- Policy/Knowledge 的 JSON 文件名可以任意取，所在目录确定类型，系统以文件内容中的 `id` 识别资产；
+- 每个 Policy Commitment 必须提供 `id`、`role`、`review_dimension` 与可选的 `depends_on`；平台会将其冻结进 Manifest，并按责任角色统一约束报告句首；
 - Skill 不需要与仓库中的任何 Skill 同名，但按照标准约定，其文件夹名必须等于 `SKILL.md` frontmatter 的 `name`；
 - 新 Skill 必须在本地 `skill-bindings.json` 中绑定适用的 Case/Path 上下文，否则会被加载但不会自动加入 Manifest；
 - 只有故意使用与内置资产相同的身份时，才表示替换内置资产。

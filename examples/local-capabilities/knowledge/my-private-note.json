@@ -1,10 +1,8 @@
 {
   "schema_version": 1,
-  "kind": "knowledge",
   "id": "KNOW-MY-COMPANY-REGION-001",
   "version": "1.2.0",
   "title": "目标地区认证资料位置",
-  "status": "published",
   "knowledge_type": "reference_note",
   "selector": {
     "case_type": ["ORDER_DELIVERY_RISK"],

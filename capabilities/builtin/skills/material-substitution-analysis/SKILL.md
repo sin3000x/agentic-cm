@@ -12,6 +12,6 @@ description: 分析已批准物料替代 Path 中的候选料，形成覆盖供�
 5. 为 A、B 各生成一个可独立评审的选项，比较技术可行性、供应与交付可行性、客户与商务接受度、收益、风险及假设，不得把未知信息写成事实。
 6. 缺少当前证据的结论必须标记为等待对应责任角色确认。
 7. 历史 Knowledge 只能作为建议背景，不得作为当前 Case 事实。
-8. 按平台 `PathAgentResult/v1` JSON 契约返回 `summary`、`options`、`recommendation`、`evidence_gaps`，以及 Manifest 冻结 Policy 所触发的全部 `role_reports`。选项 id 必须严格为 `A`、`B`；全部面向人的标题、描述、判断和报告必须使用中文。每条角色报告须为完整中文句子，使用 Policy 规定的前缀，同时提到 A、B，并保留人类审批边界。
+8. 按平台 `PathAgentResult/v1` JSON 契约返回 `summary`、`options`、`recommendation`、`evidence_gaps`，以及 Manifest 冻结 Policy 所触发的全部 `role_reports`。选项 id 必须严格为 `A`、`B`；全部面向人的标题、描述、判断和报告必须使用中文。每条角色报告须为完整中文句子，以对应的 `{role}维度：` 开头，同时提到 A、B，并保留人类审批边界。
 
 不得代表主计划、研发、供应经理或 Case Owner 作出决定，不得删除已编译 Policy 的要求，也不得连接或修改 ERP、库存、订单、CRM 或客户系统。

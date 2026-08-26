@@ -1,10 +1,8 @@
 {
   "schema_version": 1,
-  "kind": "policy",
   "id": "POL-EXPEDITING-1",
   "version": "1.3.0",
   "title": "供应提拉可行性确认",
-  "status": "published",
   "selector": {
     "case_type": ["ORDER_DELIVERY_RISK"],
     "path_definition": ["SupplyExpediting"]
@@ -14,24 +12,14 @@
       {
         "id": "EXPEDITE-SUPPLY",
         "role": "采购与供应协同",
-        "node_type": "APPROVAL",
-        "reviews": ["supplier_capacity", "expedite_date"],
-        "depends_on": [],
-        "role_report": {
-          "dimension": "供应商产能与供应日期",
-          "sentence_prefix": "采购与供应协同维度："
-        }
+        "review_dimension": "供应商产能与供应日期",
+        "depends_on": []
       },
       {
         "id": "EXPEDITE-DELIVERY",
         "role": "物流",
-        "node_type": "REVIEW",
-        "reviews": ["transport_option", "arrival_date"],
-        "depends_on": ["EXPEDITE-SUPPLY"],
-        "role_report": {
-          "dimension": "运输与到货日期",
-          "sentence_prefix": "物流维度："
-        }
+        "review_dimension": "运输与到货日期",
+        "depends_on": ["EXPEDITE-SUPPLY"]
       }
     ]
   }

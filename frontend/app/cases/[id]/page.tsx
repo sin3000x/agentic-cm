@@ -37,7 +37,7 @@ type CapabilityAsset = {
   id?: string;
   title?: string;
   version?: string;
-  purpose?: string;
+  description?: string;
   instructions?: string[];
   requirements?: { commitments?: Array<{ role: string }> };
   content?: { summary?: string };
@@ -62,17 +62,14 @@ type ManifestPath = {
 };
 
 type CapabilitySnapshot = {
-  policies: Array<{ id: string }>;
-  skills: Array<{ id: string }>;
-  knowledge: Array<{ id: string }>;
   compiled_policy: { commitments: Array<{ id: string; depends_on?: string[] }> };
 };
 
 type CommitmentNode = {
   id: string;
   role: string;
-  node_type: string;
-  status: "BLOCKED" | "PENDING" | "READY" | "COMMITTED" | "STALE" | "REJECTED";
+  review_dimension: string;
+  status: "BLOCKED" | "PENDING" | "READY" | "STALE" | "REJECTED";
   depends_on: string[];
   path_id: string;
 };
@@ -90,16 +87,12 @@ type SolutionOption = {
 
 type SolutionRevision = {
   revision: number;
-  path_id: string;
-  path_definition: string;
   summary: string;
   options: SolutionOption[];
   recommendation: { option_ids: string[]; rationale: string };
   evidence_gaps: string[];
   role_reports: Array<{ role: string; dimension: string; report: string }>;
-  required_commitment_ids: string[];
   generated_by: string;
-  manifest_ref: { id: string; revision: number };
 };
 
 type ApprovalContext = {
@@ -119,11 +112,8 @@ type ApprovalReview = {
 };
 
 type PathAttempt = {
-  id: string;
   path_id: string;
-  definition: string;
-  title?: string;
-  phase: string;
+  state: "PLANNED" | "AWAITING_COMMITMENT" | "REVISING" | "SUCCEEDED" | "REJECTED";
   solution_revision: SolutionRevision | null;
 };
 
@@ -165,7 +155,7 @@ type PathExecutionResponse = {
   case: CaseDetails;
 };
 
-type CaseStatusValue = "OPEN" | "PENDING" | "CLOSED";
+type CaseStatusValue = "OPEN" | "CLOSED";
 type CasePhase =
   | "INTAKE"
   | "MANIFEST_REVIEW"
@@ -428,7 +418,7 @@ function CapabilityPanel({ details }: { details: CapabilityDetails }) {
                 <span><b>{asset.title ?? asset.resolved_ref.id}</b><small>{asset.resolved_ref.id} · v{asset.resolved_ref.version}</small></span>
                 <span className={`assetSource ${asset.resolved_ref.source}`}>{asset.resolved_ref.source}</span>
                 <code>{asset.resolved_ref.digest.slice(7, 19)}</code>
-                <p>{asset.purpose ?? asset.content?.summary ?? asset.instructions?.[0] ?? `${asset.requirements?.commitments?.length ?? 0} 个强制责任节点`}</p>
+                <p>{asset.description ?? asset.content?.summary ?? asset.instructions?.[0] ?? `${asset.requirements?.commitments?.length ?? 0} 个强制责任节点`}</p>
               </article>
             ))}
           </div>
@@ -595,16 +585,9 @@ export default function Home() {
 
   function loadManifest(
     manifest: CaseManifest | null | undefined,
-    attempts: PathAttempt[] = [],
     workflowPaths: ManifestPath[] = [],
   ) {
-    const paths = manifest?.paths ?? (workflowPaths.length > 0 ? workflowPaths : attempts.map((attempt) => ({
-      id: attempt.path_id,
-      definition: attempt.definition,
-      title: attempt.title ?? attempt.definition,
-      rationale: "",
-      selected: true,
-    })));
+    const paths = manifest?.paths ?? workflowPaths;
     setManifestPaths(paths);
     setManifestVersion(manifest?.revision ?? null);
     setCapabilitySnapshots(manifest?.capability_snapshots ?? {});
@@ -636,7 +619,7 @@ export default function Home() {
         setInboxItems(inbox);
         setCaseCreatedAt(data.created_at);
         setCanViewManifest(data.permissions?.can_view_manifest === true);
-        loadManifest(data.manifest, data.path_attempts ?? [], data.workflow_paths ?? []);
+        loadManifest(data.manifest, data.workflow_paths ?? []);
         if (["PATH_EXPLORATION", "PROFESSIONAL_COMMITMENT", "FINAL_REVIEW"].includes(data.phase)) {
           setSelectedPathIds((data.manifest?.paths ?? []).filter((path: ManifestPath) => path.selected).map((path: ManifestPath) => path.id));
         }
@@ -672,7 +655,7 @@ export default function Home() {
             .filter((path: ManifestPath) => path.selected)
             .filter((path: ManifestPath) => {
               const attempt = (data.path_attempts ?? []).find((item: PathAttempt) => item.path_id === path.id);
-              return !attempt || attempt.phase === "REVISING" || !isSolutionRevision(attempt.solution_revision);
+              return !attempt || attempt.state === "REVISING" || !isSolutionRevision(attempt.solution_revision);
             })
             .map((path: ManifestPath) => path.id);
           const runKey = `${identity.name}:alternatives:${pendingPathIds.join(",")}`;
@@ -997,7 +980,7 @@ export default function Home() {
     .filter((path) => path.selected)
     .filter((path) => {
       const attempt = pathAttempts.find((item) => item.path_id === path.id);
-      return !attempt || attempt.phase === "REVISING" || !isSolutionRevision(attempt.solution_revision);
+      return !attempt || attempt.state === "REVISING" || !isSolutionRevision(attempt.solution_revision);
     })
     .map((path) => path.id);
   const completedExplorationCount = manifestPaths.filter((path) => path.selected).length - pendingExplorationPathIds.length;
@@ -1123,11 +1106,11 @@ export default function Home() {
       <div className="pathExplorationProgress" aria-label="Path 探索进度">
         {manifestPaths.filter((path) => path.selected).map((path) => {
           const attempt = pathAttempts.find((item) => item.path_id === path.id);
-          const complete = isSolutionRevision(attempt?.solution_revision) && attempt?.phase !== "REVISING";
+          const complete = isSolutionRevision(attempt?.solution_revision) && attempt?.state !== "REVISING";
           return (
             <article className={complete ? "complete" : "pending"} key={path.id}>
               <span>{complete ? "✓" : "AI"}</span>
-              <div><strong>{path.title}</strong><small>{complete ? "SolutionRevision 已就绪" : attempt?.phase === "REVISING" ? "根据专业意见重新推演" : "等待 Path Agent 完成"}</small></div>
+              <div><strong>{path.title}</strong><small>{complete ? "SolutionRevision 已就绪" : attempt?.state === "REVISING" ? "根据专业意见重新推演" : "等待 Path Agent 完成"}</small></div>
             </article>
           );
         })}
@@ -1151,7 +1134,7 @@ export default function Home() {
         {selectedPathViews.map(({ path, revision, nodes, runs }) => {
           const rootNodes = nodes.filter((node) => node.depends_on.length === 0);
           const downstreamNodes = nodes.filter((node) => node.depends_on.length > 0);
-          const completedNodes = nodes.filter((node) => ["READY", "COMMITTED"].includes(node.status)).length;
+          const completedNodes = nodes.filter((node) => node.status === "READY").length;
           return (
             <section className="pathApprovalGroup" aria-label={`${path.title} 审批 DAG`} key={path.id}>
               <header className="pathApprovalHeader">
@@ -1380,7 +1363,7 @@ export default function Home() {
             <div>
               <div className="eyebrow">SUPPLY CHAIN CASE <span>·</span> {caseDetails?.business_payload?.risk_level === "HIGH" ? "高" : caseDetails?.business_payload?.risk_level === "LOW" ? "低" : "中"}优先级</div>
               <h1>{caseDetails?.title ?? "正在加载 Case"} <span>#{caseDetails?.id ?? activeCaseId}</span></h1>
-              <p><span className={`openBadge ${caseStatus.toLowerCase()}`}>● {caseStatus === "CLOSED" ? "Closed" : caseStatus === "PENDING" ? "Pending" : "Open"}</span> {caseDetails?.owner ?? "Case Owner"} 于 {formatThreadTime(caseCreatedAt)} 创建 · 当前由 <strong>{caseDetails?.owner ?? "—"}</strong> 负责</p>
+              <p><span className={`openBadge ${caseStatus.toLowerCase()}`}>● {caseStatus === "CLOSED" ? "Closed" : "Open"}</span> {caseDetails?.owner ?? "Case Owner"} 于 {formatThreadTime(caseCreatedAt)} 创建 · 当前由 <strong>{caseDetails?.owner ?? "—"}</strong> 负责</p>
             </div>
             <button className="primary">继续处理 <span>→</span></button>
           </header>

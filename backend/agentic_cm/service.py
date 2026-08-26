@@ -18,6 +18,8 @@ from .domain import (
     NodeStatus,
     OrchestrationPhase,
     OwnerDecisionAction,
+    PathAttempt,
+    PathAttemptState,
     utc_now,
 )
 from .orchestrator import Orchestrator, PlannerAdapter, planner_from_environment
@@ -99,8 +101,8 @@ class CaseService:
             if (
                 case.phase is OrchestrationPhase.PATH_EXPLORATION
                 and case.path_attempts
-                and all(attempt.get("solution_revision") for attempt in case.path_attempts)
-                and not any(attempt.get("phase") == "REVISING" for attempt in case.path_attempts)
+                and all(attempt.solution_revision for attempt in case.path_attempts)
+                and not any(attempt.state is PathAttemptState.REVISING for attempt in case.path_attempts)
             ):
                 case.phase = OrchestrationPhase.PROFESSIONAL_COMMITMENT
                 case.touch()
@@ -130,16 +132,16 @@ class CaseService:
                 })
             if case.phase is OrchestrationPhase.PROFESSIONAL_COMMITMENT:
                 previous_attempt_states = [
-                    (attempt.get("path_id"), attempt.get("phase"), attempt.get("outcome"))
+                    (attempt.path_id, attempt.state)
                     for attempt in case.path_attempts
                 ]
                 for attempt in list(case.path_attempts):
-                    path_id = attempt.get("path_id")
+                    path_id = attempt.path_id
                     path_nodes = [node for node in case.commitment_nodes if node.path_id == path_id]
                     if any(node.status is NodeStatus.REJECTED for node in path_nodes):
-                        self._update_path_attempt(case, path_id, phase="DONE", outcome="REJECTED")
+                        self._update_path_attempt(case, path_id, state=PathAttemptState.REJECTED)
                     elif path_nodes and all(node.status is NodeStatus.READY for node in path_nodes):
-                        self._update_path_attempt(case, path_id, phase="DONE", outcome="SUCCEEDED")
+                        self._update_path_attempt(case, path_id, state=PathAttemptState.SUCCEEDED)
                 if self._all_selected_paths_terminal(case):
                     case.phase = OrchestrationPhase.FINAL_REVIEW
                     case.touch()
@@ -149,7 +151,7 @@ class CaseService:
                         "reason": "all selected Path approval DAGs are terminal",
                     })
                 elif previous_attempt_states != [
-                    (attempt.get("path_id"), attempt.get("phase"), attempt.get("outcome"))
+                    (attempt.path_id, attempt.state)
                     for attempt in case.path_attempts
                 ]:
                     case.touch()
@@ -308,7 +310,6 @@ class CaseService:
                     "revision": manifest.revision,
                     "planner_profile": manifest.planner_profile,
                     "path_definitions": [path.definition for path in manifest.paths],
-                    "policy_refs": list(manifest.policy_refs),
                 },
             )
             run.complete(
@@ -353,52 +354,37 @@ class CaseService:
         snapshots = dict(case.manifest.capability_snapshots)
         for path in selected_paths:
             if path.id not in snapshots:
-                if len(selected_paths) == 1 and case.manifest.capability_snapshot:
-                    snapshots[path.id] = case.manifest.capability_snapshot
-                else:
-                    snapshots[path.id] = self._resolve_case_capabilities(case, path.id)
+                snapshots[path.id] = self._resolve_case_capabilities(case, path.id)
             if not snapshots[path.id]["compiled_policy"].get("commitments"):
                 raise InvalidTransitionError(f"No mandatory commitments were compiled for Path {path.id}")
         case.manifest = replace(
             case.manifest,
-            capability_snapshot=snapshots[selected_paths[0].id],
             capability_snapshots=snapshots,
         )
 
         case.phase = OrchestrationPhase.PATH_EXPLORATION
-        attempts: list[dict] = []
+        attempts: list[PathAttempt] = []
         nodes: list[CommitmentNode] = []
-        for index, path in enumerate(selected_paths, start=1):
-            attempts.append({
-                "id": f"ATTEMPT-{index:02d}",
-                "path_id": path.id,
-                "definition": path.definition,
-                "title": path.title,
-                "phase": "AWAITING_HUMAN",
-                "outcome": None,
-                "solution_revision": None,
-            })
+        for path in selected_paths:
+            attempts.append(PathAttempt(path_id=path.id, state=PathAttemptState.PLANNED))
             nodes.extend(
                 CommitmentNode(
                     id=item["id"],
                     role=item["role"],
-                    node_type=item["node_type"],
+                    review_dimension=item["review_dimension"],
                     status=NodeStatus.BLOCKED if item.get("depends_on") else NodeStatus.PENDING,
-                    reviews=tuple(item["reviews"]),
                     depends_on=tuple(item.get("depends_on", [])),
                     path_id=path.id,
                 )
                 for item in snapshots[path.id]["compiled_policy"]["commitments"]
             )
         case.path_attempts = attempts
-        case.path_attempt = attempts[0]
         case.commitment_nodes = nodes
         case.touch()
         self.repository.save(case, CaseEvent.MANIFEST_APPROVED, {
             "manifest_id": case.manifest.id,
             "revision": case.manifest.revision,
             "actor": actor,
-            "path_attempt_ids": [attempt["id"] for attempt in attempts],
             "selected_path_ids": [path.id for path in selected_paths],
         })
         return case
@@ -478,9 +464,9 @@ class CaseService:
         ) as run:
             initial_attempt = next(
                 attempt for attempt in case_snapshot.path_attempts
-                if attempt.get("path_id") == path_id
+                if attempt.path_id == path_id
             )
-            initial_solution_revision = initial_attempt.get("solution_revision")
+            initial_solution_revision = initial_attempt.solution_revision
             solution_revision = await self.path_agent.run(case_snapshot, path_id, run.trace)
 
             lock = self._path_commit_locks.setdefault(case_id, asyncio.Lock())
@@ -489,26 +475,22 @@ class CaseService:
                 self._require_case_owner(case, actor=actor, role=role)
                 current_attempt = next(
                     attempt for attempt in case.path_attempts
-                    if attempt.get("path_id") == path_id
+                    if attempt.path_id == path_id
                 )
-                if current_attempt.get("solution_revision") != initial_solution_revision:
+                if current_attempt.solution_revision != initial_solution_revision:
                     raise InvalidTransitionError(
                         f"Path {path_id} changed while its Agent was running"
                     )
                 case.path_attempts = [
-                    {
-                        **attempt,
-                        "phase": "AWAITING_HUMAN",
-                        "solution_revision": solution_revision,
-                    }
-                    if attempt.get("path_id") == path_id else attempt
+                    replace(
+                        attempt,
+                        state=PathAttemptState.AWAITING_COMMITMENT,
+                        solution_revision=solution_revision,
+                    )
+                    if attempt.path_id == path_id else attempt
                     for attempt in case.path_attempts
                 ]
-                case.path_attempt = next(
-                    (dict(attempt) for attempt in case.path_attempts if attempt.get("path_id") == path_id),
-                    case.path_attempt,
-                )
-                if all(attempt.get("solution_revision") for attempt in case.path_attempts):
+                if all(attempt.solution_revision for attempt in case.path_attempts):
                     case.phase = OrchestrationPhase.PROFESSIONAL_COMMITMENT
                 ready_ids = {
                     node.id for node in case.commitment_nodes
@@ -558,37 +540,20 @@ class CaseService:
                     attempt = next(
                         (
                             item for item in case.path_attempts
-                            if item.get("path_id") == node.path_id
+                            if item.path_id == node.path_id
                         ),
                         None,
                     )
                     revision = (
-                        attempt.get("solution_revision")
-                        if isinstance(attempt, dict)
-                        and isinstance(attempt.get("solution_revision"), dict)
+                        attempt.solution_revision
+                        if attempt and isinstance(attempt.solution_revision, dict)
                         else None
                     )
-                    snapshot = (
-                        case.manifest.capability_snapshots.get(node.path_id, {})
-                        if case.manifest else {}
-                    )
-                    commitment = next(
-                        (
-                            item
-                            for item in snapshot.get("compiled_policy", {}).get("commitments", [])
-                            if item.get("id") == node.id
-                        ),
-                        {},
-                    )
-                    report_contract = commitment.get("role_report", {})
                     role_report = next(
                         (
                             item for item in (revision or {}).get("role_reports", [])
                             if item.get("role") == node.role
-                            and (
-                                not report_contract.get("dimension")
-                                or item.get("dimension") == report_contract.get("dimension")
-                            )
+                            and item.get("dimension") == node.review_dimension
                         ),
                         None,
                     )
@@ -676,7 +641,7 @@ class CaseService:
         elif decision is CommitmentDecision.REVISE:
             nodes[target_index] = replace(target, status=NodeStatus.STALE)
             event_type = CaseEvent.COMMITMENT_REVISION_REQUESTED
-            self._update_path_attempt(case, path_id, phase="REVISING", outcome=None)
+            self._update_path_attempt(case, path_id, state=PathAttemptState.REVISING)
             case.phase = OrchestrationPhase.PATH_EXPLORATION
         elif decision is CommitmentDecision.REJECT:
             nodes[target_index] = replace(target, status=NodeStatus.REJECTED)
@@ -689,17 +654,17 @@ class CaseService:
                 for node in nodes
             ]
             event_type = CaseEvent.COMMITMENT_REJECTED
-            self._update_path_attempt(case, path_id, phase="DONE", outcome="REJECTED")
+            self._update_path_attempt(case, path_id, state=PathAttemptState.REJECTED)
         else:
             raise InvalidTransitionError(f"Unsupported Commitment decision: {decision}")
         case.commitment_nodes = nodes
         for attempt in list(case.path_attempts):
-            attempt_path_id = attempt.get("path_id")
+            attempt_path_id = attempt.path_id
             path_nodes = [node for node in nodes if node.path_id == attempt_path_id]
             if any(node.status is NodeStatus.REJECTED for node in path_nodes):
-                self._update_path_attempt(case, attempt_path_id, phase="DONE", outcome="REJECTED")
+                self._update_path_attempt(case, attempt_path_id, state=PathAttemptState.REJECTED)
             elif path_nodes and all(node.status is NodeStatus.READY for node in path_nodes):
-                self._update_path_attempt(case, attempt_path_id, phase="DONE", outcome="SUCCEEDED")
+                self._update_path_attempt(case, attempt_path_id, state=PathAttemptState.SUCCEEDED)
         if self._all_selected_paths_terminal(case):
             case.phase = OrchestrationPhase.FINAL_REVIEW
         case.touch()
@@ -716,10 +681,10 @@ class CaseService:
         selected_ids = {
             path.id for path in (case.manifest.paths if case.manifest else ()) if path.selected
         }
-        attempts = {attempt.get("path_id"): attempt for attempt in case.path_attempts}
+        attempts = {attempt.path_id: attempt for attempt in case.path_attempts}
         return bool(selected_ids) and all(
-            attempts.get(path_id, {}).get("phase") == "DONE"
-            and attempts.get(path_id, {}).get("outcome") in {"SUCCEEDED", "REJECTED"}
+            attempts.get(path_id) is not None
+            and attempts[path_id].state in {PathAttemptState.SUCCEEDED, PathAttemptState.REJECTED}
             for path_id in selected_ids
         )
 
@@ -776,20 +741,22 @@ class CaseService:
         if action is OwnerDecisionAction.MODIFY and not normalized_guidance:
             raise InvalidTransitionError("Modification requires Case Owner guidance for the Orchestrator")
         previous_human_proposal = dict(case.human_proposal) if case.human_proposal else None
-        decision = {
+        decision_summary = {
             "action": action.value,
             "actor": actor,
             "role": role,
             "synthesis_revision": case.synthesis_report["revision"],
             "decided_at": utc_now(),
+        }
+        decision_event = decision_summary | {
             "synthesis_snapshot": dict(case.synthesis_report),
-            "path_attempts_snapshot": [dict(attempt) for attempt in case.path_attempts],
+            "path_attempts_snapshot": [asdict(attempt) for attempt in case.path_attempts],
             "commitments_snapshot": [asdict(node) for node in case.commitment_nodes],
         }
         if action is OwnerDecisionAction.MODIFY:
-            decision["guidance"] = normalized_guidance
-            decision["previous_human_proposal_snapshot"] = previous_human_proposal
-        case.owner_decision = decision
+            decision_event["guidance"] = normalized_guidance
+            decision_event["previous_human_proposal_snapshot"] = previous_human_proposal
+        case.owner_decision = decision_summary
         if action is OwnerDecisionAction.CLOSE:
             case.status = CaseStatus.CLOSED
         elif action is OwnerDecisionAction.KEEP_OPEN:
@@ -804,7 +771,6 @@ class CaseService:
             case.status = CaseStatus.OPEN
             case.phase = OrchestrationPhase.INTAKE
             case.manifest = None
-            case.path_attempt = None
             case.path_attempts = []
             case.commitment_nodes = []
             case.synthesis_report = None
@@ -812,19 +778,17 @@ class CaseService:
             raise InvalidTransitionError(f"Unsupported Owner decision: {action}")
         # The Case timestamp is the decision instant, not a fresh "now".
         case.version += 1
-        case.updated_at = decision["decided_at"]
-        self.repository.save(case, CaseEvent.OWNER_DECISION, decision)
+        case.updated_at = decision_summary["decided_at"]
+        self.repository.save(case, CaseEvent.OWNER_DECISION, decision_event)
         return case
 
     @staticmethod
-    def _update_path_attempt(case, path_id: str, *, phase: str, outcome: str | None) -> None:
+    def _update_path_attempt(case, path_id: str, *, state: PathAttemptState) -> None:
         case.path_attempts = [
-            {**attempt, "phase": phase, "outcome": outcome}
-            if attempt["path_id"] == path_id else attempt
+            replace(attempt, state=state)
+            if attempt.path_id == path_id else attempt
             for attempt in case.path_attempts
         ]
-        if case.path_attempt and case.path_attempt.get("path_id") == path_id:
-            case.path_attempt = {**case.path_attempt, "phase": phase, "outcome": outcome}
 
     def reset_demo(self, dataset_id: str):
         if dataset_id != DEMO_DATASET_ID:
@@ -841,8 +805,6 @@ class CaseService:
         snapshot = None
         if case.manifest and target_path:
             snapshot = case.manifest.capability_snapshots.get(target_path.id)
-            if not snapshot and len(selected_paths) == 1:
-                snapshot = case.manifest.capability_snapshot
         snapshot_status = "frozen"
         if not snapshot:
             snapshot = self._resolve_case_capabilities(case, target_path.id if target_path else None)

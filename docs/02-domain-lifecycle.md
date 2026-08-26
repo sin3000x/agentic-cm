@@ -112,15 +112,12 @@ Case 的业务状态与系统编排阶段必须分离。
 ```mermaid
 stateDiagram-v2
     [*] --> OPEN
-    OPEN --> PENDING: Owner decides pending
-    PENDING --> OPEN: Re-evaluation trigger
     OPEN --> CLOSED: Owner closes case
-    PENDING --> CLOSED: Owner closes case
+    OPEN --> OPEN: Owner keeps open or modifies
     CLOSED --> [*]
 ```
 
-- `OPEN`：正在处理或等待当前编排；
-- `PENDING`：业务决定暂不关闭，等待明确条件或日期；
+- `OPEN`：正在处理、等待当前编排，或 Owner 选择继续保持开启；
 - `CLOSED`：Owner 已作关闭决定。
 
 ### 3.2 Orchestration phase
@@ -142,40 +139,29 @@ stateDiagram-v2
 - `PROFESSIONAL_COMMITMENT`
 - `FINAL_REVIEW`
 
-`PENDING` 不等于等待某次审批；等待审批属于 Path 和 Commitment 层。
+Case `status` 只表达 `OPEN/CLOSED`；等待审批属于 Path 和 Commitment 层，由 `phase` 与节点状态表达。
 
 ## 4. PathAttempt 生命周期
 
-PathAttempt 的 phase 与 outcome 分离。
+PathAttempt 使用一个权威 `state`，不再维护容易不一致的 `phase + outcome` 组合。AgentRun 单独记录运行中的技术状态。
 
 ```mermaid
 stateDiagram-v2
     [*] --> PLANNED
-    PLANNED --> EXPLORING: Agent run starts
-    EXPLORING --> AWAITING_HUMAN: Commitment nodes ready
-    AWAITING_HUMAN --> REVISING: Changes requested
-    REVISING --> AWAITING_HUMAN: New revision ready
-    AWAITING_HUMAN --> DONE: All required commitments satisfied
-    AWAITING_HUMAN --> DONE: A node declines
-    PLANNED --> DONE: Owner cancels
-    EXPLORING --> DONE: Owner cancels
-    REVISING --> DONE: Owner cancels
+    PLANNED --> AWAITING_COMMITMENT: SolutionRevision ready
+    AWAITING_COMMITMENT --> REVISING: Changes requested
+    REVISING --> AWAITING_COMMITMENT: New revision ready
+    AWAITING_COMMITMENT --> SUCCEEDED: All required commitments approved
+    AWAITING_COMMITMENT --> REJECTED: A node rejects
 ```
 
-Phase：
+State：
 
 - `PLANNED`
-- `EXPLORING`
-- `AWAITING_HUMAN`
+- `AWAITING_COMMITMENT`
 - `REVISING`
-- `DONE`
-
-Outcome：
-
-- 空值：尚未结束；
-- `SUCCEEDED`：产生满足强制承诺要求的方案；
-- `FAILED`：专业角色明确 DECLINE，证明本次 PathAttempt 不可行；
-- `CANCELLED`：Case Owner 主动终止。
+- `SUCCEEDED`
+- `REJECTED`
 
 阻塞信息存放在 `active_blockers[]`，不将 `BLOCKED` 设为终态。阻塞解除后恢复原 phase。无法解决的阻塞必须升级给 Coordinator 和 Owner，由 Owner 继续等待或取消 Path；系统不能自动伪装为失败。
 
@@ -215,7 +201,7 @@ Coordinator 可以查看、提醒、升级、转达、标记阻塞和建议改�
 平台自动保存 Actor、角色、时间、SolutionRevision、Claim 与当时展示的证据。`COMMIT` 可以不填写说明；`REQUEST_CHANGES` 和 `DECLINE` 必须填写简短原因。
 
 - `REQUEST_CHANGES` 触发 Agent 生成新 SolutionRevision；
-- `DECLINE` 使当前 PathAttempt 进入 `DONE + FAILED`；
+- `DECLINE` 使当前 PathAttempt 进入 `REJECTED`；
 - 缺少信息时首版使用 `REQUEST_CHANGES`，暂不引入 `REQUEST_INFORMATION`。
 
 ### 5.4 并行审批与最小责任 DAG
@@ -245,7 +231,7 @@ Golden Path 中，上游承诺一开始覆盖候选物料 A 和 B。客户拒绝
 
 如果 Agent 引入未被上游评审的物料 C，则 `supply` 和 `technical` 必须变化并触发相应重审。
 
-`max_revision_rounds` 为可配置项，优先级为 Path/Policy override 高于平台默认值，并在 Manifest 生成时冻结。达到上限后，Path 保持 `AWAITING_HUMAN`，并增加 `revision_limit_reached` blocker；Owner 可以留痕追加一轮或取消 Path，不自动判定失败。
+`max_revision_rounds` 为可配置项，优先级为 Path/Policy override 高于平台默认值，并在 Manifest 生成时冻结。达到上限后，Path 保持 `AWAITING_COMMITMENT`，并增加 `revision_limit_reached` blocker；Owner 可以留痕追加一轮或取消 Path，不自动判定失败。
 
 ## 7. OwnerDecision
 

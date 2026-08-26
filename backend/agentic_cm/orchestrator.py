@@ -463,36 +463,13 @@ class Orchestrator:
             for path, (_, _, resolution) in zip(manifest_paths, selected)
         }
 
-        def aggregate_refs(kind: str) -> tuple[str, ...]:
-            seen: set[str] = set()
-            refs: list[str] = []
-            for _, _, resolution in selected:
-                for item in getattr(resolution, kind):
-                    value = f"{item.id}@{item.version}"
-                    if value not in seen:
-                        seen.add(value)
-                        refs.append(value)
-            return tuple(refs)
-
-        experience_refs: list[str] = []
-        for _, _, resolution in selected:
-            for item, payload in zip(resolution.knowledge, resolution.asset_payloads["knowledge"]):
-                value = f"{item.id}@{item.version}"
-                if payload.get("knowledge_type") == "experience" and value not in experience_refs:
-                    experience_refs.append(value)
         manifest = Manifest(
             id=f"MAN-{case.id}-{case.version}",
             revision=1,
-            status="DRAFT",
             paths=manifest_paths,
-            policy_refs=aggregate_refs("policies"),
-            skill_refs=aggregate_refs("skills"),
-            knowledge_refs=aggregate_refs("knowledge"),
-            experience_refs=tuple(experience_refs),
-            capability_snapshot=capability_snapshots[manifest_paths[0].id],
+            capability_snapshots=capability_snapshots,
             planner_profile=result.planner_profile,
             generated_from_case_version=case.version,
-            capability_snapshots=capability_snapshots,
         )
         trace(
             "manifest.compose",
@@ -503,9 +480,6 @@ class Orchestrator:
                 "revision": manifest.revision,
                 "planner_profile": manifest.planner_profile,
                 "paths": [asdict(path) for path in manifest.paths],
-                "policy_refs": list(manifest.policy_refs),
-                "skill_refs": list(manifest.skill_refs),
-                "knowledge_refs": list(manifest.knowledge_refs),
                 "snapshot_path_ids": list(manifest.capability_snapshots),
             },
         )

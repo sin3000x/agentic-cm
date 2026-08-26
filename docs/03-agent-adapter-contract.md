@@ -146,7 +146,7 @@ Adapter 不得通过自己的模型或 Tool 绕开上下文权限范围。
 
 当前最小实现已经落地：`backend/agentic_cm/path_agent.py` 从已批准 Path 的冻结 Manifest 快照组装 `PathAgentContext`，OpenAI-compatible Adapter 通过官方 `openai-python` SDK 请求 `PathAgentResult/v1`，由 Pydantic 生成并解析结构 Schema；平台继续负责 option 引用、角色报告和 Manifest 授权范围等业务校验，全部通过后才持久化 `SolutionRevision`。模型请求失败或输出非法时只保留 `agent_type=path` 的审计 trace，不改变 Case、PathAttempt、Commitment 或业务事件。
 
-首版稳定外层字段为：`summary`、`options[]`、`recommendation`、`evidence_gaps`、`role_reports[]`。平台补入 revision、Path/Manifest 引用、强制 Commitment id 和 adapter profile。候选与只读模拟 Tool 来自冻结 Skill；角色报告契约来自冻结 Policy Commitments。框架按每条 Path 实际命中的 Policy 执行角色/维度、句首和完整句校验，不复制 A/B 或固定角色的领域判断。
+首版稳定外层字段为：`summary`、`options[]`、`recommendation`、`evidence_gaps`、`role_reports[]`。平台只补入 revision 和 adapter profile；Path、Manifest 与强制 Commitment 关系由父级对象和冻结快照提供，不在 SolutionRevision 重复保存。候选与只读模拟 Tool 来自冻结 Skill；角色报告契约来自冻结 Policy Commitments。框架按每条 Path 实际命中的 Policy 执行角色/维度、统一的 `{role}维度：` 句首和完整句校验，不复制 A/B 或固定角色的领域判断。
 
 建议结构：
 
@@ -172,7 +172,7 @@ Agent 提供的影响范围只是建议；平台根据 Section 哈希、节点�
 
 ## 7. CaseSynthesisResult
 
-当前最小实现位于 `backend/agentic_cm/synthesis_agent.py`。只有所有已选 Path 的审批 DAG 均进入 `DONE/SUCCEEDED` 或 `DONE/REJECTED` 后，Case 才能生成报告；成功与失败 Path 必须各自出现一次。报告与 `agent_type=synthesis` 的逐步 trace 仅 Case Owner 可见，失败运行不改变 CaseSynthesis。
+当前最小实现位于 `backend/agentic_cm/synthesis_agent.py`。只有所有已选 PathAttempt 均进入 `SUCCEEDED` 或 `REJECTED` 后，Case 才能生成报告；成功与失败 Path 必须各自出现一次。报告与 `agent_type=synthesis` 的逐步 trace 仅 Case Owner 可见，失败运行不改变 CaseSynthesis。
 
 建议结构：
 

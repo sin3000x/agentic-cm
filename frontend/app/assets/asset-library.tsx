@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import AppSidebar from "../app-sidebar";
 import { apiGet, isAbort } from "../lib/api";
 import { coreDemoIdentities as demoIdentities } from "../lib/identities";
@@ -8,16 +8,16 @@ import { coreDemoIdentities as demoIdentities } from "../lib/identities";
 export type AssetGroup = "skills" | "policies" | "knowledge";
 
 type AssetRef = { id: string; version: string; digest: string; source: "builtin" | "local" };
-type Commitment = { id: string; role: string; node_type: string; reviews: string[]; depends_on?: string[] };
+type Commitment = { id: string; role: string; review_dimension: string; depends_on?: string[] };
 type CapabilityAsset = {
   id: string;
   title: string;
   description?: string;
-  purpose?: string;
   selector?: Record<string, string[]> | null;
   instructions_markdown?: string;
   files?: Array<{ path: string }>;
   paths?: Array<{ id: string; title: string; description: string }>;
+  members?: string[];
   requirements?: { commitments?: Commitment[] };
   confidence?: string;
   source?: { type?: string; case_id?: string; observed_at?: string; reviewed_by?: string };
@@ -58,17 +58,86 @@ function Selector({ selector }: { selector?: Record<string, string[]> | null }) 
 
 function AssetBody({ group, asset }: { group: AssetGroup; asset: CapabilityAsset }) {
   if (group === "skills") return <>
-    <p className="assetSummary">{asset.description ?? asset.purpose}</p>
+    <p className="assetSummary">{asset.description}</p>
     {asset.paths && asset.paths.length > 0 && <div className="assetPathList"><strong>提供的 Paths</strong>{asset.paths.map(path => <span key={path.id}><b>{path.title}</b><small>{path.id} · {path.description}</small></span>)}</div>}
     <details><summary>查看 SKILL.md 指令与文件</summary><pre>{asset.instructions_markdown}</pre><p className="assetFiles">{asset.files?.map(file => file.path).join(" · ")}</p></details>
   </>;
-  if (group === "policies") return <div className="commitmentList">{asset.requirements?.commitments?.map(node => <div key={node.id}><span>{node.node_type}</span><strong>{node.id}</strong><p>{node.role} · 评审 {node.reviews.join("、")}</p><small>{node.depends_on?.length ? `依赖 ${node.depends_on.join("、")}` : "无前置依赖"}</small></div>)}</div>;
+  if (group === "policies") return <div className="commitmentList">{asset.requirements?.commitments?.map(node => <div key={node.id}><strong>{node.id}</strong><p>{node.role} · {node.review_dimension}</p><small>{node.depends_on?.length ? `依赖 ${node.depends_on.join("、")}` : "无前置依赖"}</small></div>)}</div>;
   const sourceType = asset.source?.type === "closed_case" ? "已关闭 Case" : asset.source?.type;
   const confidence = asset.confidence === "medium" ? "中" : asset.confidence === "high" ? "高" : asset.confidence === "low" ? "低" : asset.confidence;
   return <>
     <p className="assetSummary">{asset.content?.summary}</p>
     <ul className="knowledgeObservations">{asset.content?.observations?.map(item => <li key={item}>{item}</li>)}</ul>
     <dl className="knowledgeSource"><div><dt>来源</dt><dd>{sourceType}{asset.source?.case_id ? ` · ${asset.source.case_id}` : ""}</dd></div><div><dt>观察日期</dt><dd>{asset.source?.observed_at ?? "—"}</dd></div><div><dt>审核</dt><dd>{asset.source?.reviewed_by ?? "—"}</dd></div><div><dt>置信度</dt><dd>{confidence ?? "—"}</dd></div></dl>
+  </>;
+}
+
+function AssetCard({ group, asset, level, children }: { group: AssetGroup; asset: CapabilityAsset; level?: string; children?: ReactNode }) {
+  return <article className={`assetCard${level ? ` skill-${level.toLowerCase().replace(" ", "-")}` : ""}`}>
+    <header><div className={`assetKind kind-${group}`}>{group === "skills" ? "S" : group === "policies" ? "P" : "K"}</div><div>{level && <span className="assetLevel">{level}</span>}<h2>{asset.title}</h2><p>{asset.id} · v{asset.resolved_ref.version}</p></div><span className={`assetOrigin ${asset.resolved_ref.source}`}>{asset.resolved_ref.source === "local" ? "本地覆盖" : "内置"}</span></header>
+    <Selector selector={asset.selector}/>
+    <AssetBody group={group} asset={asset}/>
+    {children}
+    <footer><span>SHA-256</span><code>{asset.resolved_ref.digest.replace("sha256:", "").slice(0, 16)}</code></footer>
+  </article>;
+}
+
+function assetMatches(asset: CapabilityAsset, keyword: string) {
+  return !keyword || [asset.title, asset.id, asset.description, asset.content?.summary].some(value => value?.toLowerCase().includes(keyword));
+}
+
+function sharesCaseType(left: CapabilityAsset, right: CapabilityAsset) {
+  const leftTypes = left.selector?.case_type ?? [];
+  const rightTypes = right.selector?.case_type ?? [];
+  return leftTypes.some(caseType => rightTypes.includes(caseType));
+}
+
+function SkillHierarchy({ skills, search }: { skills: CapabilityAsset[]; search: string }) {
+  const keyword = search.trim().toLowerCase();
+  const byId = new Map(skills.map(skill => [skill.id, skill]));
+  const memberIds = new Set(skills.flatMap(skill => skill.members ?? []));
+  const playbooks = skills.filter(skill => skill.paths?.length);
+  const assignedTopLevel = new Set<string>();
+
+  const trees = playbooks.map(playbook => {
+    const playbookMatch = assetMatches(playbook, keyword);
+    const branches = (playbook.paths ?? []).map(path => {
+      const pathMatch = !keyword || [path.id, path.title, path.description].some(value => value.toLowerCase().includes(keyword));
+      const nodes = skills.filter(skill =>
+        !skill.paths?.length
+        && !memberIds.has(skill.id)
+        && skill.selector?.path_definition?.includes(path.id)
+        && sharesCaseType(playbook, skill)
+      ).map(skill => {
+        assignedTopLevel.add(skill.id);
+        const members = (skill.members ?? []).map(memberId => byId.get(memberId)).filter((member): member is CapabilityAsset => Boolean(member));
+        const skillMatch = assetMatches(skill, keyword);
+        const visibleMembers = playbookMatch || pathMatch || skillMatch ? members : members.filter(member => assetMatches(member, keyword));
+        return { skill, members: visibleMembers, visible: playbookMatch || pathMatch || skillMatch || visibleMembers.length > 0 };
+      }).filter(node => node.visible);
+      return { path, nodes, visible: playbookMatch || pathMatch || nodes.length > 0 };
+    }).filter(branch => branch.visible);
+    return { playbook, branches, visible: playbookMatch || branches.length > 0 };
+  }).filter(tree => tree.visible);
+
+  const standalone = skills.filter(skill =>
+    !skill.paths?.length
+    && !memberIds.has(skill.id)
+    && !assignedTopLevel.has(skill.id)
+    && assetMatches(skill, keyword)
+  );
+
+  if (trees.length === 0 && standalone.length === 0) return null;
+  return <>
+    {trees.map(({ playbook, branches }) => <AssetCard key={playbook.id} group="skills" asset={playbook} level="CASE PLAYBOOK">
+      <div className="skillPathTree">{branches.map(({ path, nodes }) => <section className="skillPathBranch" key={path.id}>
+        <header><span>PATH</span><div><h3>{path.title}</h3><code>{path.id}</code><p>{path.description}</p></div></header>
+        <div className="skillPathCapabilities">{nodes.map(({ skill, members }) => <AssetCard key={skill.id} group="skills" asset={skill} level={skill.members ? "PATH BUNDLE" : "ATOMIC SKILL"}>
+          {skill.members && <div className="skillMembers"><p>Bundle 成员 · Path Agent 按需展开</p>{members.map(member => <AssetCard key={member.id} group="skills" asset={member} level="ATOMIC SKILL" />)}</div>}
+        </AssetCard>)}</div>
+      </section>)}</div>
+    </AssetCard>)}
+    {standalone.length > 0 && <section className="standaloneSkills"><header><span>STANDALONE</span><h2>独立 Skills</h2></header><div className="assetGrid">{standalone.map(skill => <AssetCard key={skill.id} group="skills" asset={skill} level="ATOMIC SKILL" />)}</div></section>}
   </>;
 }
 
@@ -89,8 +158,13 @@ export default function AssetLibrary({ group }: { group: AssetGroup }) {
 
   const assets = useMemo(() => {
     const keyword = search.trim().toLowerCase();
-    return (data?.assets[group] ?? []).filter(asset => !keyword || [asset.title, asset.id, asset.description, asset.content?.summary].some(value => value?.toLowerCase().includes(keyword)));
+    return (data?.assets[group] ?? []).filter(asset => assetMatches(asset, keyword));
   }, [data, group, search]);
+  const skillHasMatch = group === "skills" && Boolean(data) && (data?.assets.skills.some(asset =>
+    assetMatches(asset, search.trim().toLowerCase())
+    || asset.paths?.some(path => [path.id, path.title, path.description].some(value => value.toLowerCase().includes(search.trim().toLowerCase())))
+  ) ?? false);
+  const isEmpty = group === "skills" ? !skillHasMatch : assets.length === 0;
 
   return <div className="appShell">
     <AppSidebar active={group} identity={demoIdentities[identityIndex]} identities={demoIdentities} inboxCount={3} onIdentitySelect={setIdentityIndex}/>
@@ -105,13 +179,11 @@ export default function AssetLibrary({ group }: { group: AssetGroup }) {
         </section>}
         {error && <div className="assetMessage error"><strong>无法读取后台资产</strong><p>请确认 Agentic CM API 已启动并可从当前页面访问。</p></div>}
         {!data && !error && <div className="assetMessage"><strong>正在读取后台资产…</strong><p>数据来自当前运行中的 CapabilityRegistry。</p></div>}
-        {data && assets.length === 0 && <div className="assetMessage"><strong>{search ? "没有匹配的资产" : copy.empty}</strong><p>{search ? "请尝试其他名称、ID 或描述关键词。" : "发布资产后刷新即可显示。"}</p></div>}
-        <section className="assetGrid" aria-live="polite">{assets.map(asset => <article className="assetCard" key={asset.resolved_ref.id}>
-          <header><div className={`assetKind kind-${group}`}>{group === "skills" ? "S" : group === "policies" ? "P" : "K"}</div><div><h2>{asset.title}</h2><p>{asset.id} · v{asset.resolved_ref.version}</p></div><span className={`assetOrigin ${asset.resolved_ref.source}`}>{asset.resolved_ref.source === "local" ? "本地覆盖" : "内置"}</span></header>
-          <Selector selector={asset.selector}/>
-          <AssetBody group={group} asset={asset}/>
-          <footer><span>SHA-256</span><code>{asset.resolved_ref.digest.replace("sha256:", "").slice(0, 16)}</code></footer>
-        </article>)}</section>
+        {data && isEmpty && <div className="assetMessage"><strong>{search ? "没有匹配的资产" : copy.empty}</strong><p>{search ? "请尝试其他名称、ID、Path 或描述关键词。" : "发布资产后刷新即可显示。"}</p></div>}
+        <section className={group === "skills" ? "skillHierarchy" : "assetGrid"} aria-live="polite">
+          {group === "skills" && data && <SkillHierarchy skills={data.assets.skills} search={search} />}
+          {group !== "skills" && assets.map(asset => <AssetCard group={group} asset={asset} key={asset.resolved_ref.id} />)}
+        </section>
       </div>
     </main>
   </div>;

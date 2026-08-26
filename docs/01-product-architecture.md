@@ -33,7 +33,7 @@ flowchart LR
     P --> H["业务角色评审与承诺"]
     H --> R["PathResult"]
     R --> S["Synthesis Agent 汇总"]
-    S --> D["Case Owner: CLOSE / PENDING"]
+    S --> D["Case Owner: CLOSE / KEEP_OPEN / MODIFY"]
     D --> C
 ```
 

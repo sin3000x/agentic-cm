@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "members": [
+    "material-substitution-engineering-review",
+    "material-substitution-master-planning-review",
+    "material-substitution-supply-manager-review"
+  ]
+}

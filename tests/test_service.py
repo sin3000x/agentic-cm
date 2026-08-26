@@ -19,6 +19,7 @@ from agentic_cm.domain import (
     NodeStatus,
     OrchestrationPhase,
     OwnerDecisionAction,
+    PathAttemptState,
 )
 from agentic_cm.demo import DEMO_DATASET_ID, demo_cases
 from agentic_cm.orchestrator import (
@@ -186,15 +187,28 @@ def test_orchestrator_builds_manifest_from_open_delay_case(tmp_path: Path) -> No
     assert all(
         "候选 A/B" not in path.rationale for path in case.manifest.paths
     )
-    assert set(case.manifest.policy_refs) == {
+    policy_refs = {
+        f"{asset['id']}@{asset['version']}"
+        for snapshot in case.manifest.capability_snapshots.values()
+        for asset in snapshot["asset_payloads"]["policies"]
+    }
+    assert policy_refs == {
         "POL-SUBSTITUTION-3@3.3.0", "POL-CUSTOMER-2@2.4.0",
         "POL-EXPEDITING-1@1.3.0", "POL-ORDER-SPLIT-1@1.3.0",
     }
-    assert {item["id"] for item in case.manifest.capability_snapshot["compiled_policy"]["commitments"]} == {
+    assert {item["id"] for item in case.manifest.capability_snapshots["PATH-01"]["compiled_policy"]["commitments"]} == {
         "SUPPLY", "TECH", "CUSTOMER"
     }
     manifest = service.get_case_manifest(
         "CM-2026-014", actor=OWNER_ACTOR, role=OWNER_ROLE
+    )
+    assert set(manifest) == {
+        "id", "revision", "paths", "capability_snapshots",
+        "planner_profile", "generated_from_case_version",
+    }
+    assert all(
+        set(snapshot) == {"schema_version", "context", "compiled_policy", "asset_payloads"}
+        for snapshot in manifest["capability_snapshots"].values()
     )
     assert manifest["id"] == "MAN-CM-2026-014-1"
     assert manifest["planner_profile"] == "deterministic/v1"
@@ -273,7 +287,7 @@ def test_professional_commitments_open_only_after_path_exploration(tmp_path: Pat
     assert pending == {"SUPPLY", "TECH"}
     assert service.get_inbox("主计划") == []
     assert service.get_inbox("研发") == []
-    assert [attempt["definition"] for attempt in case.path_attempts] == ["MaterialSubstitution"]
+    assert [attempt.path_id for attempt in case.path_attempts] == ["PATH-01"]
     assert case.commitment_nodes[-1].status is NodeStatus.BLOCKED
 
     case = asyncio.run(service.execute_path(
@@ -398,7 +412,48 @@ def test_capability_library_reports_every_effective_asset(client) -> None:
     for group in ("policies", "skills", "knowledge"):
         assert body["counts"][group] == len(body["assets"][group])
         assert body["counts"][group] > 0
-    assert "shortage-response-planning" in {asset["id"] for asset in body["assets"]["skills"]}
+    skills = {asset["id"]: asset for asset in body["assets"]["skills"]}
+    assert all(
+        not ({"kind", "status", "purpose", "entrypoint"} & set(asset))
+        for assets in body["assets"].values()
+        for asset in assets
+    )
+    assert [path["id"] for path in skills["shortage-response-planning"]["paths"]] == [
+        "MaterialSubstitution", "SupplyExpediting", "OrderSplit"
+    ]
+    assert skills["material-substitution-analysis"]["members"] == [
+        "material-substitution-engineering-review",
+        "material-substitution-master-planning-review",
+        "material-substitution-supply-manager-review",
+    ]
+    assert all(member in skills for member in skills["material-substitution-analysis"]["members"])
+
+
+def test_skill_bundle_rejects_an_unknown_member(tmp_path: Path) -> None:
+    builtin = tmp_path / "builtin"
+    skill_dir = builtin / "skills" / "review-bundle"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: review-bundle\ndescription: Review one path.\n---\n\n# Review\n"
+    )
+    (skill_dir / "bundle.json").write_text(json.dumps({
+        "schema_version": 1,
+        "members": ["missing-review"],
+    }))
+    (builtin / "skill-bindings.json").write_text(json.dumps({
+        "schema_version": 1,
+        "bindings": {"review-bundle": {"selector": {
+            "case_type": ["QUALITY_INCIDENT"],
+            "path_definition": ["ManualReview"],
+        }}},
+    }))
+
+    try:
+        CapabilityRegistry.from_directories(builtin, None)
+    except CapabilityConfigurationError as exc:
+        assert "references unknown member" in str(exc)
+    else:
+        raise AssertionError("A Skill bundle must reference existing atomic Skills")
 
 
 def test_http_golden_path_runs_from_orchestration_to_owner_decision(client) -> None:
@@ -528,7 +583,7 @@ def test_commitment_revision_request_enters_revising_and_leaves_inbox(tmp_path: 
         "TECH": NodeStatus.PENDING,
         "CUSTOMER": NodeStatus.BLOCKED,
     }
-    assert case.path_attempts[0]["phase"] == "REVISING"
+    assert case.path_attempts[0].state is PathAttemptState.REVISING
     assert case.phase is OrchestrationPhase.PATH_EXPLORATION
     assert service.get_inbox("主计划") == []
     assert service.get_case_timeline("CM-2026-014")[-1]["event_type"] == "commitment.revision_requested"
@@ -548,8 +603,7 @@ def test_commitment_rejection_ends_path_and_invalidates_open_nodes(tmp_path: Pat
         "TECH": NodeStatus.REJECTED,
         "CUSTOMER": NodeStatus.STALE,
     }
-    assert case.path_attempts[0]["phase"] == "DONE"
-    assert case.path_attempts[0]["outcome"] == "REJECTED"
+    assert case.path_attempts[0].state is PathAttemptState.REJECTED
     assert service.get_inbox("主计划") == []
     assert service.get_inbox("研发") == []
     assert service.get_case_timeline("CM-2026-014")[-1]["event_type"] == "commitment.rejected"
@@ -559,18 +613,21 @@ def test_demo_manifest_freezes_resolved_capabilities(tmp_path: Path) -> None:
     service = make_service(tmp_path)
     orchestrate(service)
     case = service.get_case("CM-2026-014")
-    snapshot = case.manifest.capability_snapshot
+    snapshot = case.manifest.capability_snapshots["PATH-01"]
     assert snapshot is not None
-    assert {item["id"] for item in snapshot["policies"]} == {"POL-SUBSTITUTION-3", "POL-CUSTOMER-2"}
-    assert {item["id"] for item in snapshot["skills"]} == {
+    assert {item["id"] for item in snapshot["asset_payloads"]["policies"]} == {"POL-SUBSTITUTION-3", "POL-CUSTOMER-2"}
+    assert {item["id"] for item in snapshot["asset_payloads"]["skills"]} == {
         "material-substitution-analysis",
         "material-substitution-engineering-review",
         "material-substitution-master-planning-review",
         "material-substitution-supply-manager-review",
         "shortage-response-planning",
     }
-    assert [item["id"] for item in snapshot["knowledge"]] == ["KNOW-2025-041"]
-    assert all(item["digest"].startswith("sha256:") for item in snapshot["policies"])
+    assert [item["id"] for item in snapshot["asset_payloads"]["knowledge"]] == ["KNOW-2025-041"]
+    assert all(
+        item["resolved_ref"]["digest"].startswith("sha256:")
+        for item in snapshot["asset_payloads"]["policies"]
+    )
     assert "path_inputs" not in case.business_payload
     base_skill = next(
         item for item in snapshot["asset_payloads"]["skills"]
@@ -583,7 +640,7 @@ def test_demo_manifest_freezes_resolved_capabilities(tmp_path: Path) -> None:
         "mock.customer-acceptance.lookup",
     ]
     role_contracts = {
-        item["role"]: item["role_report"]["dimension"]
+        item["role"]: item["review_dimension"]
         for item in snapshot["compiled_policy"]["commitments"]
     }
     assert role_contracts == {
@@ -662,10 +719,8 @@ def test_incompatible_commitment_policy_conflict_fails_closed(tmp_path: Path) ->
     policy_dir.mkdir(parents=True)
     base = {
         "schema_version": 1,
-        "kind": "policy",
         "version": "1",
         "title": "conflict fixture",
-        "status": "published",
         "selector": {
             "case_type": ["ORDER_DELIVERY_RISK"],
             "path_definition": ["MaterialSubstitution"],
@@ -673,9 +728,8 @@ def test_incompatible_commitment_policy_conflict_fails_closed(tmp_path: Path) ->
         "requirements": {
             "commitments": [
                 {
-                    "id": "REVIEW", "role": "主计划", "node_type": "REVIEW",
-                    "reviews": ["supply"], "depends_on": [],
-                    "role_report": {"dimension": "供应可行性", "sentence_prefix": "主计划维度："},
+                    "id": "REVIEW", "role": "主计划",
+                    "review_dimension": "供应可行性", "depends_on": [],
                 }
             ]
         },
@@ -686,9 +740,8 @@ def test_incompatible_commitment_policy_conflict_fails_closed(tmp_path: Path) ->
         "requirements": {
             "commitments": [
                 {
-                    "id": "REVIEW", "role": "研发", "node_type": "REVIEW",
-                    "reviews": ["technical"], "depends_on": [],
-                    "role_report": {"dimension": "技术可行性", "sentence_prefix": "研发维度："},
+                    "id": "REVIEW", "role": "研发",
+                    "review_dimension": "技术可行性", "depends_on": [],
                 }
             ]
         },
@@ -712,6 +765,17 @@ def test_incompatible_commitment_policy_conflict_fails_closed(tmp_path: Path) ->
 # The conflict rule is separate: it fails at resolve time, not load time.
 INVALID_POLICY_FIXTURES = [
     pytest.param(
+        {"requirements": {"commitments": [{
+            "id": "REVIEW",
+            "role": "主计划",
+            "node_type": "REVIEW",
+            "review_dimension": "供应可行性",
+            "depends_on": [],
+        }]}},
+        "Policy commitment has unsupported fields",
+        id="removed-node-type-field",
+    ),
+    pytest.param(
         {"requirements": {"commitments": [], "constraints": {"unused": True}}},
         "Unsupported initial Policy requirements",
         id="requirements-field-with-no-consumer",
@@ -731,6 +795,16 @@ INVALID_POLICY_FIXTURES = [
         "priority is not part of the initial contract",
         id="policy-priority-not-in-contract",
     ),
+    pytest.param(
+        {"kind": "policy"},
+        "Capability asset has removed fields ['kind']",
+        id="kind-derived-from-directory",
+    ),
+    pytest.param(
+        {"status": "published"},
+        "Capability asset has removed fields ['status']",
+        id="fixed-publication-status-removed",
+    ),
 ]
 
 
@@ -742,18 +816,16 @@ def test_policy_loading_fails_closed_on_out_of_contract_fields(
     policy_dir.mkdir(parents=True)
     policy = {
         "schema_version": 1,
-        "kind": "policy",
         "id": "POL-FIXTURE",
         "version": "1",
         "title": "fail-closed fixture",
-        "status": "published",
         "selector": {
             "case_type": ["ORDER_DELIVERY_RISK"],
             "path_definition": ["MaterialSubstitution"],
         },
         "requirements": {"commitments": []},
     } | overrides
-    # A deliberately unrelated filename: identity comes from kind+id, not the path.
+    # A deliberately unrelated filename: identity comes from directory+id, not the filename.
     (policy_dir / "arbitrary-name.json").write_text(json.dumps(policy))
 
     try:
@@ -841,7 +913,7 @@ class _InventingPathAgent:
             role_reports=tuple(
                 RoleReport(
                     role=item["role"], dimension=item["dimension"],
-                    report=f"{item['sentence_prefix']}A 与 B 的比较属于不受支持的测试输出。",
+                    report=f"{item['role']}维度：A 与 B 的比较属于不受支持的测试输出。",
                 )
                 for item in context.required_role_reports
             ),
@@ -860,7 +932,11 @@ def test_skill_declares_three_candidates_and_manifest_supports_all_paths(tmp_pat
     assert [candidate.definition for candidate in planner.candidates] == expected_definitions
     assert [path.definition for path in case.manifest.paths] == expected_definitions
     assert set(case.manifest.capability_snapshots) == {"PATH-01", "PATH-02", "PATH-03"}
-    assert {ref.split("@", 1)[0] for ref in case.manifest.skill_refs} == {
+    assert {
+        item["id"]
+        for snapshot in case.manifest.capability_snapshots.values()
+        for item in snapshot["asset_payloads"]["skills"]
+    } == {
         "shortage-response-planning",
         "material-substitution-analysis",
         "material-substitution-engineering-review",
@@ -873,8 +949,8 @@ def test_skill_declares_three_candidates_and_manifest_supports_all_paths(tmp_pat
     approved = service.approve_manifest(
         "CM-2026-014", actor=OWNER_ACTOR, role=OWNER_ROLE
     )
-    assert [attempt["definition"] for attempt in approved.path_attempts] == expected_definitions
-    assert [attempt["title"] for attempt in approved.path_attempts] == [
+    assert [attempt.path_id for attempt in approved.path_attempts] == ["PATH-01", "PATH-02", "PATH-03"]
+    assert [path.title for path in approved.manifest.paths] == [
         "物料替代", "供应提拉", "订单拆分"
     ]
     assert {node.path_id for node in approved.commitment_nodes} == {"PATH-01", "PATH-02", "PATH-03"}
@@ -885,7 +961,7 @@ def test_skill_declares_three_candidates_and_manifest_supports_all_paths(tmp_pat
         "SPLIT-PLAN", "SPLIT-CUSTOMER"
     }
     expediting_reports = {
-        (item["role"], item["role_report"]["dimension"])
+        (item["role"], item["review_dimension"])
         for item in case.manifest.capability_snapshots["PATH-02"]["compiled_policy"]["commitments"]
     }
     assert expediting_reports == {
@@ -893,7 +969,7 @@ def test_skill_declares_three_candidates_and_manifest_supports_all_paths(tmp_pat
         ("物流", "运输与到货日期"),
     }
     split_reports = {
-        (item["role"], item["role_report"]["dimension"])
+        (item["role"], item["review_dimension"])
         for item in case.manifest.capability_snapshots["PATH-03"]["compiled_policy"]["commitments"]
     }
     assert split_reports == {
@@ -901,7 +977,7 @@ def test_skill_declares_three_candidates_and_manifest_supports_all_paths(tmp_pat
         ("供应经理", "客户接受度与剩余承诺"),
     }
     split_capabilities = service.get_case_capabilities("CM-2026-014", "PATH-03")
-    assert {item["id"] for item in split_capabilities["snapshot"]["policies"]} == {"POL-ORDER-SPLIT-1"}
+    assert {item["id"] for item in split_capabilities["assets"]["policies"]} == {"POL-ORDER-SPLIT-1"}
 
 
 def test_multi_path_exploration_finishes_only_after_every_solution_revision(tmp_path: Path) -> None:
@@ -918,20 +994,20 @@ def test_multi_path_exploration_finishes_only_after_every_solution_revision(tmp_
         case = asyncio.run(service.execute_path(
             "CM-2026-014", path_id, actor=OWNER_ACTOR, role=OWNER_ROLE
         ))
-        attempt = next(item for item in case.path_attempts if item["path_id"] == path_id)
+        attempt = next(item for item in case.path_attempts if item.path_id == path_id)
         expected_roles = {
             item["role"]
             for item in case.manifest.capability_snapshots[path_id]["compiled_policy"]["commitments"]
         }
-        assert {item["role"] for item in attempt["solution_revision"]["role_reports"]} == expected_roles
+        assert {item["role"] for item in attempt.solution_revision["role_reports"]} == expected_roles
         assert case.phase is OrchestrationPhase.PATH_EXPLORATION
         assert service.get_inbox("主计划") == []
 
     case = asyncio.run(service.execute_path(
         "CM-2026-014", "PATH-03", actor=OWNER_ACTOR, role=OWNER_ROLE
     ))
-    split_attempt = next(item for item in case.path_attempts if item["path_id"] == "PATH-03")
-    assert {item["role"] for item in split_attempt["solution_revision"]["role_reports"]} == {
+    split_attempt = next(item for item in case.path_attempts if item.path_id == "PATH-03")
+    assert {item["role"] for item in split_attempt.solution_revision["role_reports"]} == {
         "主计划", "供应经理"
     }
     assert case.phase is OrchestrationPhase.PROFESSIONAL_COMMITMENT
@@ -952,14 +1028,14 @@ def test_path_batch_limits_parallelism_and_serializes_case_merges(tmp_path: Path
     approved = service.approve_manifest(
         "CM-2026-014", actor=OWNER_ACTOR, role=OWNER_ROLE
     )
-    path_ids = [attempt["path_id"] for attempt in approved.path_attempts]
+    path_ids = [attempt.path_id for attempt in approved.path_attempts]
 
     case = asyncio.run(service.execute_paths(
         "CM-2026-014", path_ids, actor=OWNER_ACTOR, role=OWNER_ROLE
     ))
 
     assert probe.max_active == 2
-    assert all(attempt["solution_revision"] for attempt in case.path_attempts)
+    assert all(attempt.solution_revision for attempt in case.path_attempts)
     assert case.phase is OrchestrationPhase.PROFESSIONAL_COMMITMENT
     assert case.version == approved.version + len(path_ids)
     assert {
@@ -982,14 +1058,14 @@ def test_path_batch_can_be_configured_to_run_serially(tmp_path: Path) -> None:
     approved = service.approve_manifest(
         "CM-2026-014", actor=OWNER_ACTOR, role=OWNER_ROLE
     )
-    path_ids = [attempt["path_id"] for attempt in approved.path_attempts]
+    path_ids = [attempt.path_id for attempt in approved.path_attempts]
 
     case = asyncio.run(service.execute_paths(
         "CM-2026-014", path_ids, actor=OWNER_ACTOR, role=OWNER_ROLE
     ))
 
     assert probe.max_active == 1
-    assert all(attempt["solution_revision"] for attempt in case.path_attempts)
+    assert all(attempt.solution_revision for attempt in case.path_attempts)
 
 
 def test_synthesis_waits_for_every_path_dag_and_includes_success_and_failure(tmp_path: Path) -> None:
@@ -1034,7 +1110,9 @@ def test_synthesis_waits_for_every_path_dag_and_includes_success_and_failure(tmp
         )
 
     assert case.phase is OrchestrationPhase.FINAL_REVIEW
-    assert {attempt["outcome"] for attempt in case.path_attempts} == {"SUCCEEDED", "REJECTED"}
+    assert {attempt.state for attempt in case.path_attempts} == {
+        PathAttemptState.SUCCEEDED, PathAttemptState.REJECTED
+    }
     report_case = asyncio.run(service.synthesize_case(
         case.id, actor=OWNER_ACTOR, role=OWNER_ROLE
     ))
@@ -1135,7 +1213,7 @@ def test_openai_synthesis_repairs_paraphrased_artifact_refs(tmp_path: Path) -> N
     assert "manifest_ref" not in prompt_revision
     assert "required_commitment_ids" not in prompt_revision
     assert all(
-        set(commitment) == {"id", "role", "status", "reviews"}
+        set(commitment) == {"id", "role", "review_dimension", "status"}
         for commitment in request_context["path_results"][0]["commitments"]
     )
     assert "READY means that its responsible human has already approved it" in request_payload["messages"][0]["content"]
@@ -1196,8 +1274,15 @@ def test_owner_can_close_keep_open_or_modify_after_synthesis(tmp_path: Path) -> 
     assert modified.synthesis_report is None
     assert modified.commitment_nodes == []
     assert modified.owner_decision["action"] == "MODIFY"
-    assert modified.owner_decision["guidance"] == guidance
-    assert modified.owner_decision["previous_human_proposal_snapshot"]["revision"] == 1
+    assert set(modified.owner_decision) == {
+        "action", "actor", "role", "synthesis_revision", "decided_at"
+    }
+    decision_event = next(
+        event for event in reversed(service.repository.list_events(case.id))
+        if event["event_type"] == "owner.decision"
+    )["payload"]
+    assert decision_event["guidance"] == guidance
+    assert decision_event["previous_human_proposal_snapshot"]["revision"] == 1
     assert modified.human_proposal == {
         "revision": 2,
         "author": "陈澄",
@@ -1555,13 +1640,14 @@ def test_path_agent_builds_solution_revision_from_frozen_manifest(tmp_path: Path
     case = approve_and_execute_path(service)
 
     attempt = case.path_attempts[0]
-    revision = attempt["solution_revision"]
-    assert revision["path_definition"] == "MaterialSubstitution"
-    assert revision["manifest_ref"]["id"] == "MAN-CM-2026-014-1"
+    revision = attempt.solution_revision
+    assert set(revision) == {
+        "schema_version", "revision", "summary", "options", "recommendation",
+        "evidence_gaps", "role_reports", "generated_by",
+    }
     assert [option["id"] for option in revision["options"]] == ["A", "B"]
     assert {item["role"] for item in revision["role_reports"]} == {"研发", "主计划", "供应经理"}
     assert all("A" in item["report"] and "B" in item["report"] for item in revision["role_reports"])
-    assert revision["required_commitment_ids"] == ["SUPPLY", "TECH", "CUSTOMER"]
     assert revision["generated_by"] == "deterministic-path/v1"
     assert case.phase is OrchestrationPhase.PROFESSIONAL_COMMITMENT
     assert case.commitment_nodes[0].status is NodeStatus.PENDING
@@ -1580,7 +1666,7 @@ def test_repository_normalizes_legacy_numeric_solution_revision(tmp_path: Path) 
         ).fetchone()
         payload = json.loads(row["payload"])
         payload["path_attempts"][0]["solution_revision"] = 1
-        payload["path_attempt"]["solution_revision"] = 1
+        payload["path_attempt"] = dict(payload["path_attempts"][0])
         connection.execute(
             "UPDATE cases SET payload = ? WHERE id = ?",
             (json.dumps(payload, ensure_ascii=False), "CM-2026-014"),
@@ -1588,8 +1674,7 @@ def test_repository_normalizes_legacy_numeric_solution_revision(tmp_path: Path) 
 
     reloaded = service.get_case("CM-2026-014")
 
-    assert reloaded.path_attempts[0]["solution_revision"] is None
-    assert reloaded.path_attempt["solution_revision"] is None
+    assert reloaded.path_attempts[0].solution_revision is None
 
 
 def test_path_agent_trace_audits_manifest_assembly_and_persistence(tmp_path: Path) -> None:
@@ -1669,7 +1754,7 @@ def test_path_agent_cannot_invent_manifest_unauthorized_option(tmp_path: Path) -
         raise AssertionError("Path Agent must not invent an unauthorized option")
 
     unchanged = service.get_case("CM-2026-014")
-    assert unchanged.path_attempts[0]["solution_revision"] is None
+    assert unchanged.path_attempts[0].solution_revision is None
     assert [event["event_type"] for event in repository.list_events("CM-2026-014")] == [
         "manifest.proposed", "manifest.approved"
     ]
@@ -1746,7 +1831,7 @@ def test_openai_compatible_path_agent_uses_manifest_assembled_context(tmp_path: 
             )
 
     case = asyncio.run(run_file_backed(tmp_path))
-    revision = case.path_attempts[0]["solution_revision"]
+    revision = case.path_attempts[0].solution_revision
     assert observed["attempts"] == 2
     assert revision["generated_by"] == "openai-compatible-path/vendor-model-42"
     assert observed["api_key"] == "path-secret"
@@ -1842,13 +1927,11 @@ def test_supply_expediting_role_reports_are_assembled_from_frozen_policy(tmp_pat
     assert context["required_role_reports"] == [{
         "role": "采购与供应协同",
         "dimension": "供应商产能与供应日期",
-        "sentence_prefix": "采购与供应协同维度：",
     }, {
         "role": "物流",
         "dimension": "运输与到货日期",
-        "sentence_prefix": "物流维度：",
     }]
-    revision = case.path_attempts[0]["solution_revision"]
+    revision = case.path_attempts[0].solution_revision
     assert {item["role"] for item in revision["role_reports"]} == {"采购与供应协同", "物流"}
 
 
@@ -1924,7 +2007,7 @@ def test_path_agent_retries_one_transient_connection_failure(tmp_path: Path) -> 
     case = asyncio.run(scenario())
     # The timeout was retried once and the Path still produced a revision.
     assert attempts == 2
-    revision = case.path_attempts[0]["solution_revision"]
+    revision = case.path_attempts[0].solution_revision
     assert [option["id"] for option in revision["options"]] == ["A", "B"]
 
 
@@ -1957,7 +2040,7 @@ def test_failed_path_agent_trace_is_kept_without_solution_mutation(tmp_path: Pat
 
     service = asyncio.run(scenario())
     unchanged = service.get_case("CM-2026-014")
-    assert unchanged.path_attempts[0]["solution_revision"] is None
+    assert unchanged.path_attempts[0].solution_revision is None
     assert [event["event_type"] for event in service.repository.list_events("CM-2026-014")] == [
         "manifest.proposed", "manifest.approved"
     ]

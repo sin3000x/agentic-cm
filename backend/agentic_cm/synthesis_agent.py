@@ -20,7 +20,7 @@ from .config import (
     agent_adapter_from_environment,
     agent_llm_config_from_environment,
 )
-from .domain import Case, OrchestrationPhase
+from .domain import Case, OrchestrationPhase, PathAttemptState
 from .llm import OpenAICompatibleClient, build_openai_compatible_client
 
 
@@ -304,7 +304,7 @@ def _synthesis_prompt_context(context: SynthesisContext) -> SynthesisPromptConte
             },
             "commitments": [{
                 key: node[key]
-                for key in ("id", "role", "status", "reviews")
+                for key in ("id", "role", "review_dimension", "status")
                 if key in node
             } for node in item["commitments"]],
             "authorized_supporting_refs": item["authorized_supporting_refs"],
@@ -333,15 +333,15 @@ class SynthesisAgent:
         selected_paths = [path for path in case.manifest.paths if path.selected]
         path_results: list[dict[str, Any]] = []
         for path in selected_paths:
-            attempt = next((item for item in case.path_attempts if item.get("path_id") == path.id), None)
+            attempt = next((item for item in case.path_attempts if item.path_id == path.id), None)
             nodes = [node for node in case.commitment_nodes if node.path_id == path.id]
-            if not attempt or not isinstance(attempt.get("solution_revision"), dict):
+            if not attempt or not isinstance(attempt.solution_revision, dict):
                 raise SynthesisAgentError(f"Path {path.id} has no SolutionRevision")
-            if attempt.get("phase") != "DONE" or attempt.get("outcome") not in {"SUCCEEDED", "REJECTED"}:
+            if attempt.state not in {PathAttemptState.SUCCEEDED, PathAttemptState.REJECTED}:
                 raise SynthesisAgentError(f"Path {path.id} approval DAG is not terminal")
-            status: PathStatus = "SUCCEEDED" if attempt["outcome"] == "SUCCEEDED" else "FAILED"
+            status: PathStatus = "SUCCEEDED" if attempt.state is PathAttemptState.SUCCEEDED else "FAILED"
             authorized_refs = [
-                f"{path.id}/solution-revision/{attempt['solution_revision']['revision']}",
+                f"{path.id}/solution-revision/{attempt.solution_revision['revision']}",
                 *(
                     f"{path.id}/commitment/{node.id}"
                     for node in nodes
@@ -352,7 +352,7 @@ class SynthesisAgent:
                 "definition": path.definition,
                 "title": path.title,
                 "status": status,
-                "solution_revision": attempt["solution_revision"],
+                "solution_revision": attempt.solution_revision,
                 "commitments": [asdict(node) for node in nodes],
                 "authorized_supporting_refs": authorized_refs,
             })

@@ -133,8 +133,18 @@ test("each asset route renders its own kind with a search affordance", async () 
     const html = await renderHtml(`/assets/${path}`);
     assert.match(html, new RegExp(`<h1>${heading}</h1>`));
     assert.match(html, new RegExp(`aria-label="搜索 ${heading}"`));
-    assert.match(html, /<section class="assetGrid" aria-live="polite"/);
+    assert.match(html, new RegExp(`<section class="${path === "skills" ? "skillHierarchy" : "assetGrid"}" aria-live="polite"`));
   }
+});
+
+test("the Skills library derives its hierarchy from paths and bundle members", async () => {
+  const source = await readFile(new URL("../app/assets/asset-library.tsx", import.meta.url), "utf8");
+  assert.match(source, /skill\.paths\?\.length/);
+  assert.match(source, /skill\.members \?\? \[\]/);
+  assert.match(source, /CASE PLAYBOOK/);
+  assert.match(source, /PATH BUNDLE/);
+  assert.match(source, /ATOMIC SKILL/);
+  assert.doesNotMatch(source, /assigned_via|composition/);
 });
 
 test("stylesheets keep responsive breakpoints and honour reduced motion", async () => {
