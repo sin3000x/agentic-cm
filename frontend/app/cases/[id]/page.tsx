@@ -175,7 +175,7 @@ type CasePhase =
 
 type CaseManifest = {
   id?: string;
-  version?: number;
+  revision?: number;
   paths?: ManifestPath[];
   capability_snapshots?: Record<string, CapabilitySnapshot>;
 };
@@ -498,7 +498,9 @@ export default function Home() {
   const [capabilities, setCapabilities] = useState<CapabilityDetails | null>(null);
   const [showCapabilities, setShowCapabilities] = useState(false);
   const [manifestPaths, setManifestPaths] = useState<ManifestPath[]>([]);
+  const [manifestVersion, setManifestVersion] = useState<number | null>(null);
   const [capabilitySnapshots, setCapabilitySnapshots] = useState<Record<string, CapabilitySnapshot>>({});
+  const [showApprovedManifest, setShowApprovedManifest] = useState(false);
   const [selectedPathIds, setSelectedPathIds] = useState<string[]>([]);
   const [commitmentNodes, setCommitmentNodes] = useState<CommitmentNode[]>([]);
   const [pathAttempts, setPathAttempts] = useState<PathAttempt[]>([]);
@@ -570,7 +572,9 @@ export default function Home() {
     identityIndexRef.current = nextIdentityIndex;
     setCanViewManifest(false);
     setManifestPaths([]);
+    setManifestVersion(null);
     setCapabilitySnapshots({});
+    setShowApprovedManifest(false);
     setSelectedPathIds([]);
     setCapabilities(null);
     setShowCapabilities(false);
@@ -602,6 +606,7 @@ export default function Home() {
       selected: true,
     })));
     setManifestPaths(paths);
+    setManifestVersion(manifest?.revision ?? null);
     setCapabilitySnapshots(manifest?.capability_snapshots ?? {});
     const substitution = paths.find((path) => path.definition === "MaterialSubstitution");
     setSelectedPathIds(substitution ? [substitution.id] : paths.slice(0, 1).map((path) => path.id));
@@ -888,7 +893,9 @@ export default function Home() {
       setCapabilities(null);
       setShowCapabilities(false);
       setManifestPaths([]);
+      setManifestVersion(null);
       setCapabilitySnapshots({});
+      setShowApprovedManifest(false);
       setSelectedPathIds([]);
       setCommitmentNodes([]);
       setPathAttempts([]);
@@ -1016,6 +1023,9 @@ export default function Home() {
   const latestFailedRunCount = latestFailedOrchestratorRuns.length
     + latestFailedPathRuns.length
     + latestFailedSynthesisRuns.length;
+  const hasApprovedManifest = canViewManifest
+    && manifestPaths.length > 0
+    && ["PATH_EXPLORATION", "PROFESSIONAL_COMMITMENT", "FINAL_REVIEW"].includes(phase);
 
   function approvalActions(caseId: string, node: CommitmentNode) {
     if (node.status !== "PENDING" || node.role !== currentIdentity.role) return null;
@@ -1470,6 +1480,56 @@ export default function Home() {
                   <header><strong>Agentic CM</strong><span>{phase === "FINAL_REVIEW" ? "Synthesis Agent" : phase === "PROFESSIONAL_COMMITMENT" ? "Commitment Workflow" : approved ? "Path Agent" : "Orchestrator"} · 当前步骤</span><b className="currentLabel">{currentStage}</b></header>
                   <div className="commentBody actionBody">
                     {orchestrationCard}
+                    {hasApprovedManifest && (
+                      <section className={`approvedManifestArchive ${showApprovedManifest ? "expanded" : ""}`} aria-label="已批准 Manifest">
+                        <header>
+                          <span className="approvedManifestIcon">M</span>
+                          <span>
+                            <small>CASE KEY MATERIAL · FROZEN</small>
+                            <strong>已批准 Manifest{manifestVersion ? ` v${manifestVersion}` : ""}</strong>
+                            <p>{manifestPaths.filter((path) => path.selected).length} 条 Path 已批准进入本轮探索 · 原始理由与能力快照持续保留</p>
+                          </span>
+                          <button
+                            type="button"
+                            aria-expanded={showApprovedManifest}
+                            onClick={() => setShowApprovedManifest((current) => !current)}
+                          >
+                            {showApprovedManifest ? "收起 Manifest ↑" : "查看已批准 Manifest →"}
+                          </button>
+                        </header>
+                        {showApprovedManifest && (
+                          <div className="approvedManifestBody">
+                            <p className="manifestBoundary">这是批准时冻结的 Manifest，只用于查阅与审计；后续 Path 结果和专业审批不会改写这份材料。</p>
+                            <div className="approvedManifestPaths">
+                              {manifestPaths.map((path, index) => {
+                                const snapshot = capabilitySnapshots[path.id];
+                                return (
+                                  <article className={path.selected ? "selected" : "notSelected"} key={path.id}>
+                                    <div>
+                                      <span>PATH {String(index + 1).padStart(2, "0")}</span>
+                                      <em>{path.selected ? "已批准" : "本轮未选"}</em>
+                                    </div>
+                                    <h3>{path.title}</h3>
+                                    <small>{path.id} · {path.definition}</small>
+                                    <p>{path.rationale || "Manifest 未记录额外理由。"}</p>
+                                    <dl>
+                                      <div><dt>责任节点</dt><dd>{snapshot?.compiled_policy.commitments.length ?? 0}</dd></div>
+                                      <div><dt>Policy</dt><dd>{snapshot?.policies.length ?? 0}</dd></div>
+                                      <div><dt>Skill</dt><dd>{snapshot?.skills.length ?? 0}</dd></div>
+                                      <div><dt>Knowledge</dt><dd>{snapshot?.knowledge.length ?? 0}</dd></div>
+                                    </dl>
+                                  </article>
+                                );
+                              })}
+                            </div>
+                            <button className="linkButton capabilityToggle" onClick={toggleCapabilities}>
+                              {showCapabilities ? "收起完整能力快照 ↑" : "查看完整冻结能力快照 →"}
+                            </button>
+                            {showCapabilities && capabilities && <CapabilityPanel details={capabilities} />}
+                          </div>
+                        )}
+                      </section>
+                    )}
                     {canViewManifest && latestFailedRunCount > 0 && (
                       <section className="failedAgentTraces" aria-label="最新失败 Agent Trace">
                         <header>

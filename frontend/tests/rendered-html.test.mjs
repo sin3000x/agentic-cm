@@ -107,6 +107,23 @@ test("the Case workspace treats CLOSED as a completed workflow for every role", 
   assert.match(source, /Case Owner 已基于 Synthesis/);
 });
 
+test("the Case Owner keeps a persistent approved Manifest material after review", async () => {
+  const source = await readFile(
+    new URL("../app/cases/[id]/page.tsx", import.meta.url),
+    "utf8",
+  );
+  // The Manifest review UI is phase-specific, but the approved artifact must
+  // remain reachable throughout every later Case phase.
+  assert.match(source, /const hasApprovedManifest = canViewManifest/);
+  for (const phase of ["PATH_EXPLORATION", "PROFESSIONAL_COMMITMENT", "FINAL_REVIEW"]) {
+    assert.match(source, new RegExp(`hasApprovedManifest[\\s\\S]*${phase}`));
+  }
+  assert.match(source, /aria-label="已批准 Manifest"/);
+  assert.match(source, /查看已批准 Manifest/);
+  assert.match(source, /批准时冻结的 Manifest/);
+  assert.match(source, /查看完整冻结能力快照/);
+});
+
 test("each asset route renders its own kind with a search affordance", async () => {
   for (const [path, heading] of [
     ["skills", "Skills"],
