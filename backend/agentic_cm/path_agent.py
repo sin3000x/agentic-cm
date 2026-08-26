@@ -21,7 +21,7 @@ from .config import (
     agent_adapter_from_environment,
     agent_llm_config_from_environment,
 )
-from .domain import Case, OrchestrationPhase
+from .domain import Case, OrchestrationPhase, PathAttemptState
 from .llm import OpenAICompatibleClient, build_openai_compatible_client
 
 
@@ -237,7 +237,7 @@ class DeterministicPathAgentAdapter:
                     role=contract["role"],
                     dimension=contract["dimension"],
                     report=(
-                        f"{contract['sentence_prefix']}冻结 Skill 中的{option_reference}已按{contract['dimension']}形成比较，"
+                        f"{contract['role']}维度：冻结 Skill 中的{option_reference}已按{contract['dimension']}形成比较，"
                         f"但模拟查询结果仍须由{contract['role']}核验后才能形成业务判断。"
                     ),
                 )
@@ -398,10 +398,7 @@ def _path_prompt_context(context: PathAgentContext) -> PathPromptContext:
         )
         if key in item
     } for item in context.knowledge)
-    path_attempt = {
-        key: context.path_attempt.get(key)
-        for key in ("id", "phase", "outcome")
-    }
+    path_attempt = dict(context.path_attempt)
     return PathPromptContext(
         case_snapshot=context.case_snapshot,
         human_proposal=context.human_proposal,
@@ -438,7 +435,7 @@ class PathAgent:
         path = next((item for item in case.manifest.paths if item.id == path_id and item.selected), None)
         if path is None:
             raise PathAgentError(f"Unknown selected Manifest Path: {path_id}")
-        attempt = next((item for item in case.path_attempts if item.get("path_id") == path_id), None)
+        attempt = next((item for item in case.path_attempts if item.path_id == path_id), None)
         if attempt is None:
             raise PathAgentError(f"PathAttempt does not exist for {path_id}")
         snapshot = case.manifest.capability_snapshots.get(path_id)
@@ -461,15 +458,16 @@ class PathAgent:
         missing_report_contracts = [
             commitment.get("id", "<unknown>")
             for commitment in commitments
-            if not isinstance(commitment.get("role_report"), dict)
+            if not isinstance(commitment.get("review_dimension"), str)
+            or not commitment["review_dimension"].strip()
         ]
         if missing_report_contracts:
             raise PathAgentError(
                 "Frozen Manifest Policy commitments have no role-report contract; "
                 f"regenerate the Manifest with current Policies: {missing_report_contracts}"
             )
-        previous = attempt.get("solution_revision") if isinstance(attempt.get("solution_revision"), dict) else None
-        if previous and attempt.get("phase") != "REVISING":
+        previous = attempt.solution_revision if isinstance(attempt.solution_revision, dict) else None
+        if previous and attempt.state is not PathAttemptState.REVISING:
             raise PathAgentError("An existing SolutionRevision can only be regenerated after a human revision request")
 
         option_contracts = [
@@ -483,8 +481,7 @@ class PathAgent:
         required_role_reports = tuple(
             {
                 "role": commitment["role"],
-                "dimension": commitment["role_report"]["dimension"],
-                "sentence_prefix": commitment["role_report"]["sentence_prefix"],
+                "dimension": commitment["review_dimension"],
             }
             for commitment in commitments
         )
@@ -556,7 +553,7 @@ class PathAgent:
                 "generated_from_case_version": case.manifest.generated_from_case_version,
             },
             path=asdict(path),
-            path_attempt=dict(attempt) | {"solution_revision": None},
+            path_attempt={"path_id": attempt.path_id, "state": attempt.state.value},
             commitment_dag_snapshot=tuple(
                 asdict(node) for node in case.commitment_nodes if node.path_id == path_id
             ),
@@ -589,8 +586,6 @@ class PathAgent:
         solution_revision = {
             "schema_version": 1,
             "revision": revision,
-            "path_id": path.id,
-            "path_definition": path.definition,
             "summary": result.summary,
             "options": [asdict(option) for option in result.options],
             "recommendation": {
@@ -599,9 +594,7 @@ class PathAgent:
             },
             "evidence_gaps": list(result.evidence_gaps),
             "role_reports": [asdict(item) for item in result.role_reports],
-            "required_commitment_ids": [item["id"] for item in commitments],
             "generated_by": result.adapter_profile,
-            "manifest_ref": context.manifest_ref,
         }
         trace(
             "solution_revision.compose",
@@ -645,9 +638,10 @@ def _validate_result_against_context(
         )
     for key, contract in required_role_keys.items():
         report = returned_role_reports[key].report
-        if not report.startswith(contract["sentence_prefix"]):
+        sentence_prefix = f"{contract['role']}维度："
+        if not report.startswith(sentence_prefix):
             raise PathAgentOutputError(
-                f"Role report {key} must start with {contract['sentence_prefix']}"
+                f"Role report {key} must start with {sentence_prefix}"
             )
         if not all(option_id in report for option_id in context.authorized_option_ids):
             raise PathAgentOutputError(f"Role report {key} must mention every authorized option")

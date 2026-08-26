@@ -72,7 +72,7 @@ CommitmentDAG 中：
 
 ### 2.4 汇总与关闭
 
-1. PathAttempt 进入 `DONE + SUCCEEDED`；
+1. PathAttempt 进入 `SUCCEEDED`；
 2. 所有批准 Path 均已终态；
 3. Synthesis Agent 检查结果并生成单 Path 决策简报；
 4. Case Owner 点击 `CLOSE`；
@@ -86,9 +86,9 @@ CommitmentDAG 中：
 
 1. Path Agent 生成替代方案；
 2. 研发提交 `DECLINE`；
-3. 当前 PathAttempt 进入 `DONE + FAILED`；
+3. 当前 PathAttempt 进入 `REJECTED`；
 4. Synthesis Agent 说明当前没有已验证可行方案；
-5. Owner 选择 `PENDING`；
+5. Owner 选择 `KEEP_OPEN`；
 6. 平台自动保存决定快照。
 
 ## 4. 核心页面
@@ -152,7 +152,7 @@ Golden Path 的预期解释是：
 - [ ] Coordinator 不能代替其他业务角色 COMMIT；
 - [ ] 角色只能从左下角全局身份区切换，DAG 节点不提供快捷切换；
 - [ ] COMMIT、REQUEST_CHANGES、DECLINE 均保留 Actor、角色、版本和时间；
-- [ ] DECLINE 使当前 PathAttempt 进入 FAILED；
+- [ ] DECLINE 使当前 PathAttempt 进入 REJECTED；
 - [ ] 技术运行失败不会被记录为业务 DECLINE。
 
 ### 6.4 方案修订与局部重审
@@ -164,7 +164,7 @@ Golden Path 的预期解释是：
 - [ ] 无关 Commitment 保持有效；
 - [ ] 引入候选 C 时能正确触发供应和技术重审；
 - [ ] 修订轮数上限来自 Manifest 中冻结的配置；
-- [ ] 达到修订上限时保持 AWAITING_HUMAN，并产生 revision_limit_reached blocker；
+- [ ] 达到修订上限时保持 AWAITING_COMMITMENT，并产生 revision_limit_reached blocker；
 - [ ] Owner 可以留痕追加一轮。
 
 ### 6.5 Agent Adapter
@@ -183,8 +183,8 @@ Golden Path 的预期解释是：
 - [ ] 后端模型支持至少两个 PathAttempt 并行；
 - [ ] Synthesis 只引用已有 PathResult 和 Commitment；
 - [ ] CaseSynthesis 版本化，OwnerDecision 引用具体版本；
-- [ ] Owner 可以选择 CLOSE 或 PENDING；
-- [ ] 平台自动保存决定时的完整快照；
+- [ ] Owner 可以选择 CLOSE、KEEP_OPEN 或 MODIFY；
+- [ ] 平台在 append-only 事件中保存决定时的完整快照，Case 当前状态只保留决定摘要；
 - [ ] CLOSE 不触发真实业务系统修改。
 
 ## 7. 自动化验证要求
@@ -229,7 +229,7 @@ Reset 必须验证目标数据集 ID，不得实现为无边界的通用清库�
 4. Deterministic Adapter 稳定复现全流程；
 5. 模型 Adapter 证明契约可插拔；
 6. 后端测试证明多 Path 汇总门槛有效；
-7. 失败 preset 可以到达 FAILED 与 PENDING；
+7. 失败 preset 可以到达 PathAttempt REJECTED，并由 Owner 保持 Case OPEN；
 8. 全链路 Artifact、版本、Actor、角色和时间可审计；
 9. 页面明确说明不接真实业务系统、无生产级身份权限；
 10. 本设计文档与实现没有未记录的语义偏离。

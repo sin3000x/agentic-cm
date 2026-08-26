@@ -17,7 +17,6 @@ def utc_now() -> str:
 
 class CaseStatus(StrEnum):
     OPEN = "OPEN"
-    PENDING = "PENDING"
     CLOSED = "CLOSED"
 
 
@@ -33,8 +32,15 @@ class NodeStatus(StrEnum):
     BLOCKED = "BLOCKED"
     PENDING = "PENDING"
     READY = "READY"
-    COMMITTED = "COMMITTED"
     STALE = "STALE"
+    REJECTED = "REJECTED"
+
+
+class PathAttemptState(StrEnum):
+    PLANNED = "PLANNED"
+    AWAITING_COMMITMENT = "AWAITING_COMMITMENT"
+    REVISING = "REVISING"
+    SUCCEEDED = "SUCCEEDED"
     REJECTED = "REJECTED"
 
 
@@ -79,11 +85,17 @@ class CaseEvent(StrEnum):
 class CommitmentNode:
     id: str
     role: str
-    node_type: str
+    review_dimension: str
     status: NodeStatus
-    reviews: tuple[str, ...]
     depends_on: tuple[str, ...] = ()
     path_id: str = ""
+
+
+@dataclass(frozen=True)
+class PathAttempt:
+    path_id: str
+    state: PathAttemptState
+    solution_revision: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -99,16 +111,10 @@ class ManifestPath:
 class Manifest:
     id: str
     revision: int
-    status: str
     paths: tuple[ManifestPath, ...]
-    policy_refs: tuple[str, ...]
-    skill_refs: tuple[str, ...]
-    knowledge_refs: tuple[str, ...]
-    experience_refs: tuple[str, ...]
-    capability_snapshot: dict[str, Any] | None
+    capability_snapshots: dict[str, dict[str, Any]]
     planner_profile: str = "unknown"
     generated_from_case_version: int = 0
-    capability_snapshots: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass
@@ -124,8 +130,7 @@ class Case:
     human_proposal: dict[str, Any] | None
     classification: dict[str, str] = field(default_factory=dict)
     manifest: Manifest | None = None
-    path_attempt: dict[str, Any] | None = None
-    path_attempts: list[dict[str, Any]] = field(default_factory=list)
+    path_attempts: list[PathAttempt] = field(default_factory=list)
     commitment_nodes: list[CommitmentNode] = field(default_factory=list)
     synthesis_report: dict[str, Any] | None = None
     owner_decision: dict[str, Any] | None = None

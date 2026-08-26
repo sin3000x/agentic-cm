@@ -19,17 +19,17 @@
 ```json
 {
   "schema_version": 1,
-  "kind": "policy | knowledge",
   "id": "稳定业务 ID",
   "version": "发布版本",
-  "title": "人可读名称",
-  "status": "published"
+  "title": "人可读名称"
 }
 ```
 
+资产类型由所在的 `policies/` 或 `knowledge/` 目录唯一确定；进入这些目录即表示发布，不再重复声明 `kind` 或固定的 `status=published`。
+
 ### 2.1 Policy
 
-Policy 初版只包含结构化 `selector` 和 `requirements.commitments`。`selector` 只接受 `case_type` 与 `path_definition`，每个字段都必须命中；缺少字段视为不适用，不交给 LLM 猜测。每个 Commitment 同时声明 `role`、评审范围、依赖关系及 `role_report.dimension/sentence_prefix`。这些报告契约由命中的 Policy 编译并随逐 Path Manifest 快照冻结，Path Agent 不得自行增删角色。
+Policy 初版只包含结构化 `selector` 和 `requirements.commitments`。`selector` 只接受 `case_type` 与 `path_definition`，每个字段都必须命中；缺少字段视为不适用，不交给 LLM 猜测。每个 Commitment 只声明 `id`、`role`、`review_dimension` 与可选的 `depends_on`。这些报告契约由命中的 Policy 编译并随逐 Path Manifest 快照冻结，Path Agent 不得自行增删角色；报告句首由平台按 `{role}维度：` 统一生成和校验。
 
 当前 Demo 的四个实例是：
 
@@ -55,6 +55,7 @@ Skill 复用通行的文件夹约定；只有需要被平台确定性消费的�
 ```text
 material-substitution-analysis/
 ├── SKILL.md          # 必需；YAML name/description + Markdown 指令
+├── bundle.json       # 可选；Path Bundle 直接包含的 Atomic Skill ID
 ├── path-options.json # 可选；由 Skill 拥有的 Path 候选，而非框架默认值
 ├── tools.json        # 可选；随 Manifest 冻结的只读模拟查询
 ├── scripts/          # 可选；确定性脚本
@@ -63,6 +64,17 @@ material-substitution-analysis/
 ```
 
 这样可以直接复用已有 Skill 文件夹，也能让不同 Agent Runtime 使用同一份能力。`SKILL.md` frontmatter 始终只包含标准的 `name` 和 `description`。
+
+平台不在 frontmatter 增加 `type`、`level` 或 `assigned_via`。层级由文件结构唯一推导：有 `paths.json` 的 Skill 是 Case Playbook；没有 `paths.json`、但有 `bundle.json` 的 Skill 是 Path Bundle；两者都没有的是 Atomic Skill。`bundle.json` 只保留最小成员关系：
+
+```json
+{
+  "schema_version": 1,
+  "members": ["material-substitution-engineering-review"]
+}
+```
+
+Bundle 成员必须存在、与 Bundle 使用相同 selector、不能再拥有 `paths.json` 或 `bundle.json`，且只能属于一个 Bundle。组织资产页据此展示 `Case Playbook → Path → Path Bundle/独立 Skill → Atomic Skill`；Bundle 内部成员不需要暴露给 Orchestrator，Path Agent 确认需要时再按成员关系展开。
 
 Path 与 Skill 的确定性关系单独放在 `capabilities/builtin/skill-bindings.json`。它有两种用途：
 
@@ -175,16 +187,14 @@ cp -R examples/local-capabilities/. .agentic-cm/capabilities/
 
 ### 4.2 接入自己的 Policy
 
-在本地 `policies/` 下放置任意文件名的 JSON。系统不使用文件名识别 Policy，而使用文件内容中的 `(kind, id)`：
+在本地 `policies/` 下放置任意文件名的 JSON。目录确定资产类型，系统使用文件内容中的 `id` 识别 Policy：
 
 ```json
 {
   "schema_version": 1,
-  "kind": "policy",
   "id": "POL-MY-COMPANY-REGION-001",
   "version": "1.0.0",
   "title": "目标地区认证检查要求",
-  "status": "published",
   "selector": {
     "case_type": ["ORDER_DELIVERY_RISK"],
     "path_definition": ["MaterialSubstitution"]

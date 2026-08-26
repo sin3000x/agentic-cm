@@ -22,6 +22,7 @@ async function renderHtml(pathname = "/") {
 test("every route server-renders without throwing", async () => {
   for (const pathname of [
     "/",
+    "/inbox",
     "/cases/CM-2026-014",
     "/assets/skills",
     "/assets/policies",
@@ -33,26 +34,33 @@ test("every route server-renders without throwing", async () => {
   }
 });
 
-test("the global Sidebar renders on every route with its full destination set", async () => {
+test("the global Sidebar exposes overview, inbox, and organization assets without Case shortcuts", async () => {
   // The Sidebar is shared layout: every route must expose the same navigation.
-  for (const pathname of ["/", "/cases/CM-2026-014", "/assets/skills"]) {
+  for (const pathname of ["/", "/inbox", "/cases/CM-2026-014", "/assets/skills"]) {
     const html = await renderHtml(pathname);
     assert.match(html, /<nav [^>]*aria-label="主导航"/);
     for (const href of [
       '"/"',
-      '"/cases/CM-2026-014"',
+      '"/inbox"',
       '"/assets/skills"',
       '"/assets/policies"',
       '"/assets/knowledge"',
     ]) {
       assert.match(html, new RegExp(`href=${href}`), `${pathname} sidebar must link ${href}`);
     }
-    // The inbox is a link from other routes but an in-place drawer trigger on
-    // the workspace itself, so assert the affordance rather than the element.
     assert.match(html, /我的待办/, `${pathname} sidebar must expose the inbox`);
+    assert.doesNotMatch(html, />Case 工作台</, `${pathname} sidebar must not expose a Case-specific shortcut`);
+    assert.doesNotMatch(html, />协作动态</, `${pathname} sidebar must not expose an activity shortcut`);
     // Identities are a demo simulation, never a real role switch.
     assert.doesNotMatch(html, /切换至该角色/);
   }
+});
+
+test("the inbox route renders a role-scoped cross-Case approval summary", async () => {
+  const html = await renderHtml("/inbox");
+  assert.match(html, /<h1>我的待办<\/h1>/);
+  assert.match(html, /汇总所有 Case 中分配给当前角色/);
+  assert.match(html, /正在同步待审批节点/);
 });
 
 test("the overview homepage renders its Case list, filters, and activity regions", async () => {
@@ -107,6 +115,34 @@ test("the Case workspace treats CLOSED as a completed workflow for every role", 
   assert.match(source, /Case Owner 已基于 Synthesis/);
 });
 
+test("resetting the Demo reaches the automatic orchestration refresh", async () => {
+  const source = await readFile(
+    new URL("../app/cases/[id]/page.tsx", import.meta.url),
+    "utf8",
+  );
+  const resetDemo = source.slice(
+    source.indexOf("async function resetDemo()"),
+    source.indexOf("function togglePath("),
+  );
+
+  assert.doesNotMatch(resetDemo, /setShowInbox|setInboxItems/);
+  assert.match(resetDemo, /automaticRunsRef\.current\.clear\(\)/);
+  assert.match(resetDemo, /setCaseRefreshKey\(\(current\) => current \+ 1\)/);
+});
+
+test("Manifest statistics use the current frozen capability snapshot contract", async () => {
+  const source = await readFile(
+    new URL("../app/cases/[id]/page.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(source, /asset_payloads:\s*\{[\s\S]*policies:[\s\S]*skills:[\s\S]*knowledge:/);
+  assert.match(source, /snapshot\?\.asset_payloads\.policies\.length/g);
+  assert.match(source, /snapshot\?\.asset_payloads\.skills\.length/g);
+  assert.match(source, /snapshot\?\.asset_payloads\.knowledge\.length/g);
+  assert.doesNotMatch(source, /snapshot\?\.(?:policies|skills|knowledge)\.length/);
+});
+
 test("the Case Owner keeps a persistent approved Manifest material after review", async () => {
   const source = await readFile(
     new URL("../app/cases/[id]/page.tsx", import.meta.url),
@@ -133,8 +169,18 @@ test("each asset route renders its own kind with a search affordance", async () 
     const html = await renderHtml(`/assets/${path}`);
     assert.match(html, new RegExp(`<h1>${heading}</h1>`));
     assert.match(html, new RegExp(`aria-label="搜索 ${heading}"`));
-    assert.match(html, /<section class="assetGrid" aria-live="polite"/);
+    assert.match(html, new RegExp(`<section class="${path === "skills" ? "skillHierarchy" : "assetGrid"}" aria-live="polite"`));
   }
+});
+
+test("the Skills library derives its hierarchy from paths and bundle members", async () => {
+  const source = await readFile(new URL("../app/assets/asset-library.tsx", import.meta.url), "utf8");
+  assert.match(source, /skill\.paths\?\.length/);
+  assert.match(source, /skill\.members \?\? \[\]/);
+  assert.match(source, /CASE PLAYBOOK/);
+  assert.match(source, /PATH BUNDLE/);
+  assert.match(source, /ATOMIC SKILL/);
+  assert.doesNotMatch(source, /assigned_via|composition/);
 });
 
 test("stylesheets keep responsive breakpoints and honour reduced motion", async () => {

@@ -1,10 +1,8 @@
 {
   "schema_version": 1,
-  "kind": "knowledge",
   "id": "KNOW-2025-041",
   "version": "1.2.0",
   "title": "同地区替代料确认历史观察",
-  "status": "published",
   "knowledge_type": "experience",
   "selector": {
     "case_type": ["ORDER_DELIVERY_RISK"],

@@ -37,7 +37,7 @@ type CapabilityAsset = {
   id?: string;
   title?: string;
   version?: string;
-  purpose?: string;
+  description?: string;
   instructions?: string[];
   requirements?: { commitments?: Array<{ role: string }> };
   content?: { summary?: string };
@@ -62,17 +62,19 @@ type ManifestPath = {
 };
 
 type CapabilitySnapshot = {
-  policies: Array<{ id: string }>;
-  skills: Array<{ id: string }>;
-  knowledge: Array<{ id: string }>;
   compiled_policy: { commitments: Array<{ id: string; depends_on?: string[] }> };
+  asset_payloads: {
+    policies: CapabilityAsset[];
+    skills: CapabilityAsset[];
+    knowledge: CapabilityAsset[];
+  };
 };
 
 type CommitmentNode = {
   id: string;
   role: string;
-  node_type: string;
-  status: "BLOCKED" | "PENDING" | "READY" | "COMMITTED" | "STALE" | "REJECTED";
+  review_dimension: string;
+  status: "BLOCKED" | "PENDING" | "READY" | "STALE" | "REJECTED";
   depends_on: string[];
   path_id: string;
 };
@@ -90,16 +92,12 @@ type SolutionOption = {
 
 type SolutionRevision = {
   revision: number;
-  path_id: string;
-  path_definition: string;
   summary: string;
   options: SolutionOption[];
   recommendation: { option_ids: string[]; rationale: string };
   evidence_gaps: string[];
   role_reports: Array<{ role: string; dimension: string; report: string }>;
-  required_commitment_ids: string[];
   generated_by: string;
-  manifest_ref: { id: string; revision: number };
 };
 
 type ApprovalContext = {
@@ -119,11 +117,8 @@ type ApprovalReview = {
 };
 
 type PathAttempt = {
-  id: string;
   path_id: string;
-  definition: string;
-  title?: string;
-  phase: string;
+  state: "PLANNED" | "AWAITING_COMMITMENT" | "REVISING" | "SUCCEEDED" | "REJECTED";
   solution_revision: SolutionRevision | null;
 };
 
@@ -165,7 +160,7 @@ type PathExecutionResponse = {
   case: CaseDetails;
 };
 
-type CaseStatusValue = "OPEN" | "PENDING" | "CLOSED";
+type CaseStatusValue = "OPEN" | "CLOSED";
 type CasePhase =
   | "INTAKE"
   | "MANIFEST_REVIEW"
@@ -254,15 +249,6 @@ function approvalContextFor(revision: SolutionRevision | null, role: string): Ap
     role_report: revision?.role_reports.find((item) => item.role === role) ?? null,
   };
 }
-
-type InboxItem = {
-  case_id: string;
-  case_title: string;
-  path_id: string;
-  path_title: string;
-  node: CommitmentNode;
-  approval_context: ApprovalContext;
-};
 
 type TimelineEvent = {
   id: number;
@@ -428,7 +414,7 @@ function CapabilityPanel({ details }: { details: CapabilityDetails }) {
                 <span><b>{asset.title ?? asset.resolved_ref.id}</b><small>{asset.resolved_ref.id} · v{asset.resolved_ref.version}</small></span>
                 <span className={`assetSource ${asset.resolved_ref.source}`}>{asset.resolved_ref.source}</span>
                 <code>{asset.resolved_ref.digest.slice(7, 19)}</code>
-                <p>{asset.purpose ?? asset.content?.summary ?? asset.instructions?.[0] ?? `${asset.requirements?.commitments?.length ?? 0} 个强制责任节点`}</p>
+                <p>{asset.description ?? asset.content?.summary ?? asset.instructions?.[0] ?? `${asset.requirements?.commitments?.length ?? 0} 个强制责任节点`}</p>
               </article>
             ))}
           </div>
@@ -522,20 +508,12 @@ export default function Home() {
   const [caseRefreshKey, setCaseRefreshKey] = useState(0);
   const identityIndexRef = useRef(0);
   const automaticRunsRef = useRef(new Set<string>());
-  const [showInbox, setShowInbox] = useState(false);
-  const [inboxItems, setInboxItems] = useState<InboxItem[]>([]);
   const [approvalReview, setApprovalReview] = useState<ApprovalReview | null>(null);
   const currentIdentity = demoIdentities[identityIndex];
   const startAutomaticManifest = useEffectEvent(() => { void generateManifest(); });
   const startAutomaticAlternatives = useEffectEvent((pathIds: string[]) => { void generateAlternatives(pathIds); });
   const startAutomaticSynthesis = useEffectEvent(() => { void generateSynthesis(); });
   const refreshLiveTrace = useEffectEvent(() => { void refreshAgentRuns(); });
-
-  useEffect(() => {
-    if (window.location.hash !== "#inbox") return;
-    const frame = window.requestAnimationFrame(() => setShowInbox(true));
-    return () => window.cancelAnimationFrame(frame);
-  }, []);
 
   useEffect(() => {
     apiGet<{ path_execution_mode?: string; path_max_concurrency?: number }>("/api/runtime-config")
@@ -588,23 +566,15 @@ export default function Home() {
     setModifyGuidance("");
     setShowOrchestratorTrace(false);
     setExpandedPathTraces({});
-    setInboxItems([]);
     setApprovalReview(null);
     setIdentityIndex(nextIdentityIndex);
   }
 
   function loadManifest(
     manifest: CaseManifest | null | undefined,
-    attempts: PathAttempt[] = [],
     workflowPaths: ManifestPath[] = [],
   ) {
-    const paths = manifest?.paths ?? (workflowPaths.length > 0 ? workflowPaths : attempts.map((attempt) => ({
-      id: attempt.path_id,
-      definition: attempt.definition,
-      title: attempt.title ?? attempt.definition,
-      rationale: "",
-      selected: true,
-    })));
+    const paths = manifest?.paths ?? workflowPaths;
     setManifestPaths(paths);
     setManifestVersion(manifest?.revision ?? null);
     setCapabilitySnapshots(manifest?.capability_snapshots ?? {});
@@ -620,9 +590,8 @@ export default function Home() {
     Promise.all([
       apiGet<CaseDetails>(`/api/cases/${activeCaseId}`, identityQuery, controller.signal),
       apiGet<TimelineEvent[]>(`/api/cases/${activeCaseId}/timeline`, undefined, controller.signal),
-      apiGet<InboxItem[]>("/api/inbox", { role: identity.role }, controller.signal),
     ])
-      .then(([data, timeline, inbox]) => {
+      .then(([data, timeline]) => {
         setCaseDetails(data);
         setPhase(data.phase);
         setCaseStatus(data.status);
@@ -633,10 +602,9 @@ export default function Home() {
         setOwnerDecision(data.owner_decision ?? null);
         setHumanProposal(data.human_proposal ?? initialHumanProposal);
         setTimelineEvents(timeline);
-        setInboxItems(inbox);
         setCaseCreatedAt(data.created_at);
         setCanViewManifest(data.permissions?.can_view_manifest === true);
-        loadManifest(data.manifest, data.path_attempts ?? [], data.workflow_paths ?? []);
+        loadManifest(data.manifest, data.workflow_paths ?? []);
         if (["PATH_EXPLORATION", "PROFESSIONAL_COMMITMENT", "FINAL_REVIEW"].includes(data.phase)) {
           setSelectedPathIds((data.manifest?.paths ?? []).filter((path: ManifestPath) => path.selected).map((path: ManifestPath) => path.id));
         }
@@ -672,7 +640,7 @@ export default function Home() {
             .filter((path: ManifestPath) => path.selected)
             .filter((path: ManifestPath) => {
               const attempt = (data.path_attempts ?? []).find((item: PathAttempt) => item.path_id === path.id);
-              return !attempt || attempt.phase === "REVISING" || !isSolutionRevision(attempt.solution_revision);
+              return !attempt || attempt.state === "REVISING" || !isSolutionRevision(attempt.solution_revision);
             })
             .map((path: ManifestPath) => path.id);
           const runKey = `${identity.name}:alternatives:${pendingPathIds.join(",")}`;
@@ -701,14 +669,6 @@ export default function Home() {
       setTimelineEvents(await apiGet<TimelineEvent[]>(`/api/cases/${activeCaseId}/timeline`));
     } catch {
       // The business action has already succeeded; the next Case refresh will reload the Thread.
-    }
-  }
-
-  async function refreshInbox() {
-    try {
-      setInboxItems(await apiGet<InboxItem[]>("/api/inbox", { role: currentIdentity.role }));
-    } catch {
-      // Inbox can be refreshed independently without changing the Case decision.
     }
   }
 
@@ -916,8 +876,6 @@ export default function Home() {
       setCaseStatus("OPEN");
       identityIndexRef.current = 0;
       setIdentityIndex(0);
-      setShowInbox(false);
-      setInboxItems([]);
       setApprovalReview(null);
       setFailedAiRun(null);
       automaticRunsRef.current.clear();
@@ -971,7 +929,6 @@ export default function Home() {
         setPhase(data.phase);
         await refreshTimeline();
       }
-      await refreshInbox();
       setApprovalReview(null);
       const result = decision === "APPROVE" ? "通过" : decision === "REVISE" ? "要求修改" : "否决";
       setMessage(`${currentIdentity.name} 已${result} ${caseId} 的 ${node.id} 节点。`);
@@ -997,7 +954,7 @@ export default function Home() {
     .filter((path) => path.selected)
     .filter((path) => {
       const attempt = pathAttempts.find((item) => item.path_id === path.id);
-      return !attempt || attempt.phase === "REVISING" || !isSolutionRevision(attempt.solution_revision);
+      return !attempt || attempt.state === "REVISING" || !isSolutionRevision(attempt.solution_revision);
     })
     .map((path) => path.id);
   const completedExplorationCount = manifestPaths.filter((path) => path.selected).length - pendingExplorationPathIds.length;
@@ -1123,11 +1080,11 @@ export default function Home() {
       <div className="pathExplorationProgress" aria-label="Path 探索进度">
         {manifestPaths.filter((path) => path.selected).map((path) => {
           const attempt = pathAttempts.find((item) => item.path_id === path.id);
-          const complete = isSolutionRevision(attempt?.solution_revision) && attempt?.phase !== "REVISING";
+          const complete = isSolutionRevision(attempt?.solution_revision) && attempt?.state !== "REVISING";
           return (
             <article className={complete ? "complete" : "pending"} key={path.id}>
               <span>{complete ? "✓" : "AI"}</span>
-              <div><strong>{path.title}</strong><small>{complete ? "SolutionRevision 已就绪" : attempt?.phase === "REVISING" ? "根据专业意见重新推演" : "等待 Path Agent 完成"}</small></div>
+              <div><strong>{path.title}</strong><small>{complete ? "SolutionRevision 已就绪" : attempt?.state === "REVISING" ? "根据专业意见重新推演" : "等待 Path Agent 完成"}</small></div>
             </article>
           );
         })}
@@ -1151,7 +1108,7 @@ export default function Home() {
         {selectedPathViews.map(({ path, revision, nodes, runs }) => {
           const rootNodes = nodes.filter((node) => node.depends_on.length === 0);
           const downstreamNodes = nodes.filter((node) => node.depends_on.length > 0);
-          const completedNodes = nodes.filter((node) => ["READY", "COMMITTED"].includes(node.status)).length;
+          const completedNodes = nodes.filter((node) => node.status === "READY").length;
           return (
             <section className="pathApprovalGroup" aria-label={`${path.title} 审批 DAG`} key={path.id}>
               <header className="pathApprovalHeader">
@@ -1342,8 +1299,8 @@ export default function Home() {
               <div className="pathStats">
                 <span><small>责任节点</small><strong>{commitments.length}</strong></span>
                 <span><small>并行起点</small><strong>{commitments.filter((item) => !(item.depends_on?.length)).length}</strong></span>
-                <span><small>强制 Policy</small><strong>{snapshot?.policies.length ?? 0}</strong></span>
-                <span><small>命中 Skill</small><strong>{snapshot?.skills.length ?? 0}</strong></span>
+                <span><small>强制 Policy</small><strong>{snapshot?.asset_payloads.policies.length ?? 0}</strong></span>
+                <span><small>命中 Skill</small><strong>{snapshot?.asset_payloads.skills.length ?? 0}</strong></span>
               </div>
             </article>
           );
@@ -1361,12 +1318,10 @@ export default function Home() {
   return (
     <main className="shell">
       <AppSidebar
-        active={showInbox ? "inbox" : "workspace"}
+        active="none"
         identity={currentIdentity}
         identities={demoIdentities}
-        inboxCount={inboxItems.length}
         busy={busy}
-        onInboxOpen={() => setShowInbox(true)}
         onIdentitySelect={selectIdentity}
       />
 
@@ -1380,7 +1335,7 @@ export default function Home() {
             <div>
               <div className="eyebrow">SUPPLY CHAIN CASE <span>·</span> {caseDetails?.business_payload?.risk_level === "HIGH" ? "高" : caseDetails?.business_payload?.risk_level === "LOW" ? "低" : "中"}优先级</div>
               <h1>{caseDetails?.title ?? "正在加载 Case"} <span>#{caseDetails?.id ?? activeCaseId}</span></h1>
-              <p><span className={`openBadge ${caseStatus.toLowerCase()}`}>● {caseStatus === "CLOSED" ? "Closed" : caseStatus === "PENDING" ? "Pending" : "Open"}</span> {caseDetails?.owner ?? "Case Owner"} 于 {formatThreadTime(caseCreatedAt)} 创建 · 当前由 <strong>{caseDetails?.owner ?? "—"}</strong> 负责</p>
+              <p><span className={`openBadge ${caseStatus.toLowerCase()}`}>● {caseStatus === "CLOSED" ? "Closed" : "Open"}</span> {caseDetails?.owner ?? "Case Owner"} 于 {formatThreadTime(caseCreatedAt)} 创建 · 当前由 <strong>{caseDetails?.owner ?? "—"}</strong> 负责</p>
             </div>
             <button className="primary">继续处理 <span>→</span></button>
           </header>
@@ -1514,9 +1469,9 @@ export default function Home() {
                                     <p>{path.rationale || "Manifest 未记录额外理由。"}</p>
                                     <dl>
                                       <div><dt>责任节点</dt><dd>{snapshot?.compiled_policy.commitments.length ?? 0}</dd></div>
-                                      <div><dt>Policy</dt><dd>{snapshot?.policies.length ?? 0}</dd></div>
-                                      <div><dt>Skill</dt><dd>{snapshot?.skills.length ?? 0}</dd></div>
-                                      <div><dt>Knowledge</dt><dd>{snapshot?.knowledge.length ?? 0}</dd></div>
+                                      <div><dt>Policy</dt><dd>{snapshot?.asset_payloads.policies.length ?? 0}</dd></div>
+                                      <div><dt>Skill</dt><dd>{snapshot?.asset_payloads.skills.length ?? 0}</dd></div>
+                                      <div><dt>Knowledge</dt><dd>{snapshot?.asset_payloads.knowledge.length ?? 0}</dd></div>
                                     </dl>
                                   </article>
                                 );
@@ -1599,37 +1554,6 @@ export default function Home() {
           </div>
         </div>
       </section>
-
-      {showInbox && (
-        <div className="inboxBackdrop" role="presentation">
-          <aside className="inboxDrawer" aria-label={`${currentIdentity.role} Inbox`}>
-            <header>
-              <div><small>ROLE INBOX</small><h2>{currentIdentity.role}</h2><p>{currentIdentity.name} · Demo identity simulation</p></div>
-              <button aria-label="关闭 Inbox" onClick={() => setShowInbox(false)}>×</button>
-            </header>
-            <div className="inboxHint">汇总所有 Case 中分配给当前角色、且依赖已经满足的待审批节点。请从左下角切换演示身份。</div>
-            <div className="inboxList">
-              {inboxItems.length ? inboxItems.map((item) => (
-                <article key={`${item.case_id}-${item.path_id}-${item.node.id}`}>
-                  <div><span>PENDING</span><small>{item.path_id} · {item.node.id}</small></div>
-                  <h3>{commitmentCopy[item.node.id] ?? item.node.role}</h3>
-                  <p>Case {item.case_id} · {item.case_title} · {item.path_title}</p>
-                  {approvalReviewButton(
-                    item.case_id,
-                    item.case_title,
-                    item.path_title,
-                    item.node,
-                    item.approval_context,
-                  )}
-                  {approvalActions(item.case_id, item.node)}
-                </article>
-              )) : (
-                <div className="emptyInbox"><strong>当前没有待批准事项</strong><p>如果 Manifest 已批准，请切换到主计划或研发身份查看各自任务。</p></div>
-              )}
-            </div>
-          </aside>
-        </div>
-      )}
 
       {approvalReview && (
         <div

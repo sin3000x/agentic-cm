@@ -10,7 +10,7 @@ import { formatDay, formatDayTime } from "./lib/format";
 type CaseStatus = "处理中" | "暂缓" | "已关闭";
 type CaseRisk = "高" | "中" | "低";
 type CaseSummary = { id:string; title:string; description:string; status:CaseStatus; risk:CaseRisk; owner:string; ownerRole:string; ownerInitial:string; customer:string; due:string; dueTone:"danger"|"warning"|"normal"|"muted"; phase:number; phaseLabel:string; updated:string; attention?:string };
-type ApiCase = { id:string; title:string; description:string; status:"OPEN"|"PENDING"|"CLOSED"; phase:"INTAKE"|"MANIFEST_REVIEW"|"PATH_EXPLORATION"|"PROFESSIONAL_COMMITMENT"|"FINAL_REVIEW"; owner:string; owner_role:string; business_payload?:{customer?:string;risk_level?:"HIGH"|"MEDIUM"|"LOW";commitment_due_date?:string}; commitment_nodes?:Array<{status:string}>; updated_at:string };
+type ApiCase = { id:string; title:string; description:string; status:"OPEN"|"CLOSED"; phase:"INTAKE"|"MANIFEST_REVIEW"|"PATH_EXPLORATION"|"PROFESSIONAL_COMMITMENT"|"FINAL_REVIEW"; owner:string; owner_role:string; business_payload?:{customer?:string;risk_level?:"HIGH"|"MEDIUM"|"LOW";commitment_due_date?:string}; commitment_nodes?:Array<{status:string}>; updated_at:string };
 const filters = ["全部","处理中","暂缓","已关闭"] as const;
 const stages = ["受理","评审","探索","承诺","决策"];
 

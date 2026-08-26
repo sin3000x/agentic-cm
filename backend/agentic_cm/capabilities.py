@@ -49,9 +49,6 @@ class CapabilityResolution:
         return {
             "schema_version": 1,
             "context": deepcopy(self.context),
-            "policies": [asdict(item) for item in self.policies],
-            "skills": [asdict(item) for item in self.skills],
-            "knowledge": [asdict(item) for item in self.knowledge],
             "compiled_policy": deepcopy(self.compiled_policy),
             "asset_payloads": deepcopy(self.asset_payloads),
         }
@@ -62,7 +59,6 @@ class SkillPathDefinition:
     id: str
     title: str
     description: str
-    skill_refs: tuple[AssetRef, ...]
 
 
 @dataclass(frozen=True)
@@ -76,6 +72,33 @@ class CapabilityRegistry:
 
     def __init__(self, assets: dict[tuple[str, str], _LoadedAsset]) -> None:
         self._assets = assets
+        self._validate_skill_bundles()
+
+    def _validate_skill_bundles(self) -> None:
+        member_owner: dict[str, str] = {}
+        for (kind, skill_id), asset in self._assets.items():
+            if kind != "skill" or "members" not in asset.data:
+                continue
+            for member_id in asset.data["members"]:
+                member = self._assets.get(("skill", member_id))
+                if member is None:
+                    raise CapabilityConfigurationError(
+                        f"Skill bundle {skill_id!r} references unknown member {member_id!r}"
+                    )
+                if member.data.get("paths") or member.data.get("members"):
+                    raise CapabilityConfigurationError(
+                        f"Skill bundle {skill_id!r} member {member_id!r} must be an atomic Skill"
+                    )
+                if member.data.get("selector") != asset.data.get("selector"):
+                    raise CapabilityConfigurationError(
+                        f"Skill bundle {skill_id!r} member {member_id!r} must use the same selector"
+                    )
+                previous_owner = member_owner.setdefault(member_id, skill_id)
+                if previous_owner != skill_id:
+                    raise CapabilityConfigurationError(
+                        f"Atomic Skill {member_id!r} belongs to multiple bundles: "
+                        f"{previous_owner!r}, {skill_id!r}"
+                    )
 
     @classmethod
     def from_directories(
@@ -154,28 +177,25 @@ class CapabilityRegistry:
             if required:
                 raise CapabilityConfigurationError(f"Capability directory does not exist: {root}")
             return
-        json_paths = [
-            path
-            for directory in (root / "policies", root / "knowledge")
-            if directory.exists()
-            for path in directory.rglob("*.json")
-        ]
-        for path in sorted(json_paths):
-            try:
-                raw = path.read_bytes()
-                data = json.loads(raw)
-            except (OSError, json.JSONDecodeError) as exc:
-                raise CapabilityConfigurationError(f"Cannot load capability asset {path}: {exc}") from exc
-            cls._validate_asset(data, path)
-            kind = data["kind"]
-            ref = AssetRef(
-                kind=kind,
-                id=data["id"],
-                version=data["version"],
-                digest=f"sha256:{hashlib.sha256(raw).hexdigest()}",
-                source=source,
-            )
-            target[(kind, data["id"])] = _LoadedAsset(data=data, ref=ref)
+        for directory_name, kind in (("policies", "policy"), ("knowledge", "knowledge")):
+            directory = root / directory_name
+            if not directory.exists():
+                continue
+            for path in sorted(directory.rglob("*.json")):
+                try:
+                    raw = path.read_bytes()
+                    data = json.loads(raw)
+                except (OSError, json.JSONDecodeError) as exc:
+                    raise CapabilityConfigurationError(f"Cannot load capability asset {path}: {exc}") from exc
+                cls._validate_asset(data, path, kind)
+                ref = AssetRef(
+                    kind=kind,
+                    id=data["id"],
+                    version=data["version"],
+                    digest=f"sha256:{hashlib.sha256(raw).hexdigest()}",
+                    source=source,
+                )
+                target[(kind, data["id"])] = _LoadedAsset(data=data, ref=ref)
 
         skills_root = root / "skills"
         if not skills_root.exists():
@@ -245,6 +265,32 @@ class CapabilityRegistry:
             if len(selector.get("case_type", [])) != 1 or "path_definition" in selector:
                 raise CapabilityConfigurationError(
                     f"A Skill owning paths.json must bind exactly one case_type and not path_definition: {paths_file}"
+                )
+
+        bundle_file = skill_path / "bundle.json"
+        bundle_members: list[str] | None = None
+        if bundle_file.is_file():
+            try:
+                bundle_payload = json.loads(bundle_file.read_text())
+            except (OSError, json.JSONDecodeError) as exc:
+                raise CapabilityConfigurationError(f"Cannot load Skill bundle {bundle_file}: {exc}") from exc
+            if (
+                not isinstance(bundle_payload, dict)
+                or set(bundle_payload) != {"schema_version", "members"}
+                or bundle_payload.get("schema_version") != 1
+                or not isinstance(bundle_payload.get("members"), list)
+                or not bundle_payload["members"]
+                or any(not isinstance(member, str) or not member.strip() for member in bundle_payload["members"])
+            ):
+                raise CapabilityConfigurationError(f"Invalid Skill bundle contract: {bundle_file}")
+            bundle_members = [member.strip() for member in bundle_payload["members"]]
+            if len(set(bundle_members)) != len(bundle_members):
+                raise CapabilityConfigurationError(f"Skill bundle members must be unique: {bundle_file}")
+            if frontmatter["name"] in bundle_members:
+                raise CapabilityConfigurationError(f"Skill bundle cannot contain itself: {bundle_file}")
+            if declared_paths:
+                raise CapabilityConfigurationError(
+                    f"A Case Playbook with paths.json cannot also be a Path Bundle: {skill_path}"
                 )
 
         path_options: list[dict[str, str]] = []
@@ -318,21 +364,19 @@ class CapabilityRegistry:
         digest_hex = digest.hexdigest()
         data = {
             "schema_version": 1,
-            "kind": "skill",
             "id": frontmatter["name"],
             "version": digest_hex[:12],
             "title": display_title,
-            "status": "published",
             "selector": deepcopy(selector) if selector else None,
             "paths": deepcopy(declared_paths),
             "path_options": deepcopy(path_options),
             "tools": deepcopy(tools),
             "description": frontmatter["description"],
-            "purpose": frontmatter["description"],
-            "entrypoint": "SKILL.md",
             "instructions_markdown": body.strip(),
             "files": inventory,
         }
+        if bundle_members is not None:
+            data["members"] = deepcopy(bundle_members)
         ref = AssetRef(
             kind="skill",
             id=frontmatter["name"],
@@ -343,25 +387,24 @@ class CapabilityRegistry:
         return _LoadedAsset(data=data, ref=ref)
 
     @staticmethod
-    def _validate_asset(data: Any, path: Path) -> None:
+    def _validate_asset(data: Any, path: Path, kind: str) -> None:
         if not isinstance(data, dict):
             raise CapabilityConfigurationError(f"Capability asset must be an object: {path}")
-        for field in ("schema_version", "kind", "id", "version", "title", "status"):
+        for field in ("schema_version", "id", "version", "title"):
             if field not in data:
                 raise CapabilityConfigurationError(f"Missing {field!r} in {path}")
         if data["schema_version"] != 1:
             raise CapabilityConfigurationError(f"Unsupported schema_version in {path}")
-        if data["kind"] not in ASSET_KINDS:
-            raise CapabilityConfigurationError(f"Unsupported capability kind in {path}")
-        if data["kind"] == "skill":
-            raise CapabilityConfigurationError(f"Skill assets must use a SKILL.md folder, not JSON: {path}")
-        if data["status"] != "published":
-            raise CapabilityConfigurationError(f"Only published assets can be loaded: {path}")
+        removed_fields = set(data) & {"kind", "status"}
+        if removed_fields:
+            raise CapabilityConfigurationError(
+                f"Capability asset has removed fields {sorted(removed_fields)}: {path}"
+            )
         selector = data.get("selector")
-        CapabilityRegistry._validate_selector(selector, data["kind"].title(), path)
-        if data["kind"] == "policy" and not isinstance(data.get("requirements"), dict):
+        CapabilityRegistry._validate_selector(selector, kind.title(), path)
+        if kind == "policy" and not isinstance(data.get("requirements"), dict):
             raise CapabilityConfigurationError(f"Policy requirements must be an object: {path}")
-        if data["kind"] == "policy":
+        if kind == "policy":
             requirements = data["requirements"]
             unsupported = set(requirements) - {"commitments"}
             if unsupported:
@@ -375,31 +418,19 @@ class CapabilityRegistry:
             for node in requirements.get("commitments", []):
                 if not isinstance(node, dict) or any(
                     field not in node
-                    for field in ("id", "role", "node_type", "reviews", "role_report")
+                    for field in ("id", "role", "review_dimension")
                 ):
                     raise CapabilityConfigurationError(f"Policy commitment has an invalid contract: {path}")
-                if set(node) - {"id", "role", "node_type", "reviews", "depends_on", "role_report"}:
+                if set(node) - {"id", "role", "review_dimension", "depends_on"}:
                     raise CapabilityConfigurationError(f"Policy commitment has unsupported fields: {path}")
                 if any(
                     not isinstance(node.get(field), str) or not node[field].strip()
-                    for field in ("id", "role", "node_type")
+                    for field in ("id", "role", "review_dimension")
                 ):
                     raise CapabilityConfigurationError(f"Policy commitment strings must be non-empty: {path}")
-                if not isinstance(node["reviews"], list) or not isinstance(node.get("depends_on", []), list):
-                    raise CapabilityConfigurationError(f"Policy commitment reviews/dependencies must be lists: {path}")
-                role_report = node["role_report"]
-                if (
-                    not isinstance(role_report, dict)
-                    or set(role_report) != {"dimension", "sentence_prefix"}
-                    or any(
-                        not isinstance(role_report.get(field), str) or not role_report[field].strip()
-                        for field in ("dimension", "sentence_prefix")
-                    )
-                ):
-                    raise CapabilityConfigurationError(
-                        f"Policy commitment role_report has an invalid contract: {path}"
-                    )
-        if data["kind"] == "knowledge":
+                if not isinstance(node.get("depends_on", []), list):
+                    raise CapabilityConfigurationError(f"Policy commitment dependencies must be a list: {path}")
+        if kind == "knowledge":
             if not isinstance(data.get("source"), dict) or not isinstance(data.get("content"), dict):
                 raise CapabilityConfigurationError(f"Knowledge source/content must be objects: {path}")
 
@@ -451,7 +482,6 @@ class CapabilityRegistry:
                     id=definition["id"],
                     title=definition["title"],
                     description=definition["description"],
-                    skill_refs=(current.skill_refs if current else ()) + (asset.ref,),
                 )
         return tuple(candidates.values())
 
@@ -459,8 +489,10 @@ class CapabilityRegistry:
         groups: dict[str, list[dict[str, Any]]] = {}
         frozen_payloads = snapshot.get("asset_payloads", {})
         for group, kind in (("policies", "policy"), ("skills", "skill"), ("knowledge", "knowledge")):
-            groups[group] = []
-            for ref in snapshot.get(group, []):
+            groups[group] = deepcopy(frozen_payloads.get(group, []))
+            if groups[group]:
+                continue
+            for ref in snapshot.get(group, []):  # Legacy snapshots stored refs separately.
                 frozen = next(
                     (
                         item for item in frozen_payloads.get(group, [])
