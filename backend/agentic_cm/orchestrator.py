@@ -97,6 +97,20 @@ class PlanningContext:
 
 
 @dataclass(frozen=True)
+class PlannerPromptCandidate:
+    definition: str
+    title: str
+    description: str
+
+
+@dataclass(frozen=True)
+class PlannerPromptContext:
+    case: PlanningContext
+    candidates: tuple[PlannerPromptCandidate, ...]
+    skill_guidance: tuple[dict[str, str], ...]
+
+
+@dataclass(frozen=True)
 class PlannedPath:
     definition: str
     rationale: str
@@ -217,6 +231,13 @@ class OpenAICompatiblePlannerAdapter:
         trace: AgentTraceSink,
     ) -> ManifestDraftResult:
         response_schema = _ManifestDraftPayload.model_json_schema()
+        prompt_context = _planner_prompt_context(context, candidates)
+        trace(
+            "planner.context_projection",
+            "COMPLETED",
+            "将完整候选能力投影为去重的 Planner 模型上下文",
+            {"context": asdict(prompt_context)},
+        )
         request = {
             "model": self._model,
             "messages": [
@@ -233,10 +254,7 @@ class OpenAICompatiblePlannerAdapter:
                 },
                 {
                     "role": "user",
-                    "content": json.dumps(
-                        {"case": asdict(context), "candidates": [asdict(item) for item in candidates]},
-                        ensure_ascii=False,
-                    ),
+                    "content": json.dumps(asdict(prompt_context), ensure_ascii=False),
                 },
             ],
             "response_format": {"type": "json_object"},
@@ -268,6 +286,29 @@ class OpenAICompatiblePlannerAdapter:
             execution_error=PlannerExecutionError,
             output_error=PlannerOutputError,
         )
+
+
+def _planner_prompt_context(
+    context: PlanningContext,
+    candidates: tuple[PlanningCandidate, ...],
+) -> PlannerPromptContext:
+    guidance_by_identity: dict[tuple[str, str], dict[str, str]] = {}
+    for candidate in candidates:
+        for guidance in candidate.skill_guidance:
+            identity = (guidance["id"], guidance["instructions_markdown"])
+            guidance_by_identity.setdefault(identity, {
+                "id": guidance["id"],
+                "description": guidance["description"],
+                "instructions_markdown": guidance["instructions_markdown"],
+            })
+    return PlannerPromptContext(
+        case=context,
+        candidates=tuple(
+            PlannerPromptCandidate(item.definition, item.title, item.description)
+            for item in candidates
+        ),
+        skill_guidance=tuple(guidance_by_identity.values()),
+    )
 
 
 class Orchestrator:

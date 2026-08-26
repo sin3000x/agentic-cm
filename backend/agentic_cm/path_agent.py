@@ -135,6 +135,21 @@ class PathAgentContext:
 
 
 @dataclass(frozen=True)
+class PathPromptContext:
+    case_snapshot: dict[str, Any]
+    human_proposal: dict[str, Any] | None
+    manifest_ref: dict[str, Any]
+    path: dict[str, Any]
+    path_attempt: dict[str, Any]
+    execution_skills: tuple[dict[str, Any], ...]
+    knowledge: tuple[dict[str, Any], ...]
+    authorized_options: tuple[dict[str, str], ...]
+    tool_results: tuple[dict[str, Any], ...]
+    required_role_reports: tuple[dict[str, str], ...]
+    previous_solution_revision: dict[str, Any] | None
+
+
+@dataclass(frozen=True)
 class ProposedOption:
     id: str
     title: str
@@ -299,6 +314,13 @@ class OpenAICompatiblePathAgentAdapter:
         trace: AgentTraceSink,
     ) -> PathAgentResult:
         response_schema = _PathAgentResultPayload.model_json_schema()
+        prompt_context = _path_prompt_context(context)
+        trace(
+            "model.context_projection",
+            "COMPLETED",
+            "将完整 PathRunContext 投影为去重的模型上下文",
+            {"context": asdict(prompt_context)},
+        )
         request = {
             "model": self._model,
             "messages": [
@@ -323,7 +345,7 @@ class OpenAICompatiblePathAgentAdapter:
                 },
                 {
                     "role": "user",
-                    "content": json.dumps(asdict(context), ensure_ascii=False),
+                    "content": json.dumps(asdict(prompt_context), ensure_ascii=False),
                 },
             ],
             "response_format": {"type": "json_object"},
@@ -360,6 +382,39 @@ class OpenAICompatiblePathAgentAdapter:
             # options or role reports the Manifest never authorized.
             recoverable_output_errors=(PathAgentOutputError,),
         )
+
+
+def _path_prompt_context(context: PathAgentContext) -> PathPromptContext:
+    execution_skills = tuple({
+        "id": skill["id"],
+        "version": skill["version"],
+        "description": skill["description"],
+        "instructions_markdown": skill["instructions_markdown"],
+    } for skill in context.execution_skills)
+    knowledge = tuple({
+        key: item[key]
+        for key in (
+            "id", "version", "title", "knowledge_type", "source", "confidence", "content"
+        )
+        if key in item
+    } for item in context.knowledge)
+    path_attempt = {
+        key: context.path_attempt.get(key)
+        for key in ("id", "phase", "outcome")
+    }
+    return PathPromptContext(
+        case_snapshot=context.case_snapshot,
+        human_proposal=context.human_proposal,
+        manifest_ref=context.manifest_ref,
+        path=context.path,
+        path_attempt=path_attempt,
+        execution_skills=execution_skills,
+        knowledge=knowledge,
+        authorized_options=context.authorized_options,
+        tool_results=context.tool_results,
+        required_role_reports=context.required_role_reports,
+        previous_solution_revision=context.previous_solution_revision,
+    )
 
 
 class PathAgent:
