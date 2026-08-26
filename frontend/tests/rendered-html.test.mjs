@@ -115,6 +115,34 @@ test("the Case workspace treats CLOSED as a completed workflow for every role", 
   assert.match(source, /Case Owner 已基于 Synthesis/);
 });
 
+test("resetting the Demo reaches the automatic orchestration refresh", async () => {
+  const source = await readFile(
+    new URL("../app/cases/[id]/page.tsx", import.meta.url),
+    "utf8",
+  );
+  const resetDemo = source.slice(
+    source.indexOf("async function resetDemo()"),
+    source.indexOf("function togglePath("),
+  );
+
+  assert.doesNotMatch(resetDemo, /setShowInbox|setInboxItems/);
+  assert.match(resetDemo, /automaticRunsRef\.current\.clear\(\)/);
+  assert.match(resetDemo, /setCaseRefreshKey\(\(current\) => current \+ 1\)/);
+});
+
+test("Manifest statistics use the current frozen capability snapshot contract", async () => {
+  const source = await readFile(
+    new URL("../app/cases/[id]/page.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(source, /asset_payloads:\s*\{[\s\S]*policies:[\s\S]*skills:[\s\S]*knowledge:/);
+  assert.match(source, /snapshot\?\.asset_payloads\.policies\.length/g);
+  assert.match(source, /snapshot\?\.asset_payloads\.skills\.length/g);
+  assert.match(source, /snapshot\?\.asset_payloads\.knowledge\.length/g);
+  assert.doesNotMatch(source, /snapshot\?\.(?:policies|skills|knowledge)\.length/);
+});
+
 test("the Case Owner keeps a persistent approved Manifest material after review", async () => {
   const source = await readFile(
     new URL("../app/cases/[id]/page.tsx", import.meta.url),

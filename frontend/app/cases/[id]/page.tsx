@@ -63,6 +63,11 @@ type ManifestPath = {
 
 type CapabilitySnapshot = {
   compiled_policy: { commitments: Array<{ id: string; depends_on?: string[] }> };
+  asset_payloads: {
+    policies: CapabilityAsset[];
+    skills: CapabilityAsset[];
+    knowledge: CapabilityAsset[];
+  };
 };
 
 type CommitmentNode = {
@@ -871,8 +876,6 @@ export default function Home() {
       setCaseStatus("OPEN");
       identityIndexRef.current = 0;
       setIdentityIndex(0);
-      setShowInbox(false);
-      setInboxItems([]);
       setApprovalReview(null);
       setFailedAiRun(null);
       automaticRunsRef.current.clear();
@@ -1296,8 +1299,8 @@ export default function Home() {
               <div className="pathStats">
                 <span><small>责任节点</small><strong>{commitments.length}</strong></span>
                 <span><small>并行起点</small><strong>{commitments.filter((item) => !(item.depends_on?.length)).length}</strong></span>
-                <span><small>强制 Policy</small><strong>{snapshot?.policies.length ?? 0}</strong></span>
-                <span><small>命中 Skill</small><strong>{snapshot?.skills.length ?? 0}</strong></span>
+                <span><small>强制 Policy</small><strong>{snapshot?.asset_payloads.policies.length ?? 0}</strong></span>
+                <span><small>命中 Skill</small><strong>{snapshot?.asset_payloads.skills.length ?? 0}</strong></span>
               </div>
             </article>
           );
@@ -1466,9 +1469,9 @@ export default function Home() {
                                     <p>{path.rationale || "Manifest 未记录额外理由。"}</p>
                                     <dl>
                                       <div><dt>责任节点</dt><dd>{snapshot?.compiled_policy.commitments.length ?? 0}</dd></div>
-                                      <div><dt>Policy</dt><dd>{snapshot?.policies.length ?? 0}</dd></div>
-                                      <div><dt>Skill</dt><dd>{snapshot?.skills.length ?? 0}</dd></div>
-                                      <div><dt>Knowledge</dt><dd>{snapshot?.knowledge.length ?? 0}</dd></div>
+                                      <div><dt>Policy</dt><dd>{snapshot?.asset_payloads.policies.length ?? 0}</dd></div>
+                                      <div><dt>Skill</dt><dd>{snapshot?.asset_payloads.skills.length ?? 0}</dd></div>
+                                      <div><dt>Knowledge</dt><dd>{snapshot?.asset_payloads.knowledge.length ?? 0}</dd></div>
                                     </dl>
                                   </article>
                                 );
