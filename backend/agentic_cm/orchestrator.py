@@ -367,7 +367,9 @@ class Orchestrator:
                         "instructions_markdown": payload["instructions_markdown"],
                     }
                     for payload in resolution.asset_payloads["skills"]
-                    if any(path["id"] == definition.id for path in payload.get("paths", []))
+                    if definition.id in (payload.get("selector") or {}).get(
+                        "path_definition", []
+                    )
                 ],
             }
             for definition, resolution in eligible
@@ -430,11 +432,12 @@ class Orchestrator:
                     _manifest_ref(ref)
                     for ref in resolution.skills
                     if ref.id in {
-                        payload["id"]
+                        skill_id
                         for payload in resolution.asset_payloads["skills"]
                         if definition.id in (payload.get("selector") or {}).get(
                             "path_definition", []
                         )
+                        for skill_id in (payload["id"], *payload.get("members", []))
                     }
                 ),
                 policies=tuple(_manifest_ref(ref) for ref in resolution.policies),

@@ -88,7 +88,6 @@ class CapabilityRegistry:
         self._validate_skill_bundles()
 
     def _validate_skill_bundles(self) -> None:
-        member_owner: dict[str, str] = {}
         for (kind, skill_id), asset in self._assets.items():
             if kind != "skill" or "members" not in asset.data:
                 continue
@@ -102,15 +101,10 @@ class CapabilityRegistry:
                     raise CapabilityConfigurationError(
                         f"Skill bundle {skill_id!r} member {member_id!r} must be an atomic Skill"
                     )
-                if member.data.get("selector") != asset.data.get("selector"):
+                member_selector = member.data.get("selector")
+                if member_selector and member_selector != asset.data.get("selector"):
                     raise CapabilityConfigurationError(
-                        f"Skill bundle {skill_id!r} member {member_id!r} must use the same selector"
-                    )
-                previous_owner = member_owner.setdefault(member_id, skill_id)
-                if previous_owner != skill_id:
-                    raise CapabilityConfigurationError(
-                        f"Atomic Skill {member_id!r} belongs to multiple bundles: "
-                        f"{previous_owner!r}, {skill_id!r}"
+                        f"Skill bundle {skill_id!r} member {member_id!r} has a conflicting selector"
                     )
 
     @classmethod
@@ -501,6 +495,11 @@ class CapabilityRegistry:
             )
             for kind in ASSET_KINDS
         }
+        selected_skills = {asset.ref.id: asset for asset in selected["skill"]}
+        for asset in tuple(selected["skill"]):
+            for member_id in asset.data.get("members", []):
+                selected_skills[member_id] = self._assets[("skill", member_id)]
+        selected["skill"] = sorted(selected_skills.values(), key=lambda asset: asset.ref.id)
         return CapabilityResolution(
             context=deepcopy(context),
             policies=tuple(asset.ref for asset in selected["policy"]),

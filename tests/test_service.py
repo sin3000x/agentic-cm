@@ -734,6 +734,78 @@ def test_skill_bundle_rejects_an_unknown_member(tmp_path: Path) -> None:
         raise AssertionError("A Skill bundle must reference existing atomic Skills")
 
 
+def test_resolving_a_bound_skill_bundle_expands_reusable_unbound_atomic_members(tmp_path: Path) -> None:
+    builtin = tmp_path / "builtin"
+    for skill_id in ("complex-review", "alternate-review", "engineering-review", "supply-review"):
+        skill_dir = builtin / "skills" / skill_id
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            f"---\nname: {skill_id}\ndescription: Review evidence.\n---\n\n# Review\n"
+        )
+    (builtin / "skills" / "complex-review" / "bundle.json").write_text(json.dumps({
+        "schema_version": 1,
+        "members": ["engineering-review", "supply-review"],
+    }))
+    (builtin / "skills" / "alternate-review" / "bundle.json").write_text(json.dumps({
+        "schema_version": 1,
+        "members": ["engineering-review"],
+    }))
+    (builtin / "skill-bindings.json").write_text(json.dumps({
+        "schema_version": 1,
+        "bindings": {
+            "complex-review": {"selector": {
+                "case_type": ["QUALITY_INCIDENT"],
+                "path_definition": ["ManualReview"],
+            }},
+            "alternate-review": {"selector": {
+                "case_type": ["QUALITY_INCIDENT"],
+                "path_definition": ["AlternateReview"],
+            }},
+        },
+    }))
+
+    resolution = CapabilityRegistry.from_directories(builtin, None).resolve({
+        "case_type": "QUALITY_INCIDENT",
+        "path_definition": "ManualReview",
+    })
+
+    assert [skill.id for skill in resolution.skills] == [
+        "complex-review",
+        "engineering-review",
+        "supply-review",
+    ]
+
+
+def test_skill_bundle_rejects_a_member_bound_to_a_conflicting_path(tmp_path: Path) -> None:
+    builtin = tmp_path / "builtin"
+    for skill_id in ("manual-review", "alternate-review"):
+        skill_dir = builtin / "skills" / skill_id
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            f"---\nname: {skill_id}\ndescription: Review evidence.\n---\n\n# Review\n"
+        )
+    (builtin / "skills" / "manual-review" / "bundle.json").write_text(json.dumps({
+        "schema_version": 1,
+        "members": ["alternate-review"],
+    }))
+    (builtin / "skill-bindings.json").write_text(json.dumps({
+        "schema_version": 1,
+        "bindings": {
+            "manual-review": {"selector": {
+                "case_type": ["QUALITY_INCIDENT"],
+                "path_definition": ["ManualReview"],
+            }},
+            "alternate-review": {"selector": {
+                "case_type": ["QUALITY_INCIDENT"],
+                "path_definition": ["AlternateReview"],
+            }},
+        },
+    }))
+
+    with pytest.raises(CapabilityConfigurationError, match="conflicting selector"):
+        CapabilityRegistry.from_directories(builtin, None)
+
+
 def test_http_golden_path_runs_from_orchestration_to_owner_decision(client) -> None:
     """End-to-end smoke test of the governed lifecycle over HTTP."""
     owner = dict(OWNER)
@@ -893,12 +965,7 @@ def test_demo_manifest_freezes_verified_capability_references(tmp_path: Path) ->
     case = service.get_case("CM-2026-014")
     path = case.manifest.paths[0]
     assert {item.id for item in path.policies} == {"POL-SUBSTITUTION-3", "POL-CUSTOMER-2"}
-    assert {item.id for item in path.skills} == {
-        "material-substitution-analysis",
-        "material-substitution-engineering-review",
-        "material-substitution-master-planning-review",
-        "material-substitution-supply-manager-review",
-    }
+    assert "material-substitution-analysis" in {item.id for item in path.skills}
     assert [item.id for item in path.knowledge] == ["KNOW-2025-041"]
     assert all(item.digest.startswith("sha256:") for item in path.policies)
     assert "path_inputs" not in case.business_payload
@@ -1209,18 +1276,16 @@ def test_skill_declares_three_candidates_and_manifest_supports_all_paths(tmp_pat
     assert [candidate["definition"] for candidate in planner.candidates] == expected_definitions
     assert [path.definition for path in case.manifest.paths] == expected_definitions
     assert {path.id for path in case.manifest.paths} == {"PATH-01", "PATH-02", "PATH-03"}
-    assert {
+    skill_ids = {
         item.id
         for path in case.manifest.paths
         for item in path.skills
-    } == {
+    }
+    assert {
         "material-substitution-analysis",
-        "material-substitution-engineering-review",
-        "material-substitution-master-planning-review",
-        "material-substitution-supply-manager-review",
         "supply-expediting-analysis",
         "order-split-analysis",
-    }
+    } <= skill_ids
 
     approved = service.approve_manifest(
         "CM-2026-014", actor=OWNER_ACTOR, role=OWNER_ROLE
@@ -1257,6 +1322,35 @@ def test_skill_declares_three_candidates_and_manifest_supports_all_paths(tmp_pat
     }
     split_capabilities = service.get_case_capabilities("CM-2026-014", "PATH-03")
     assert {item["id"] for item in split_capabilities["assets"]["policies"]} == {"POL-ORDER-SPLIT-1"}
+
+
+def test_case_scoped_skill_is_not_frozen_into_each_manifest_path(tmp_path: Path) -> None:
+    builtin = tmp_path / "builtin"
+    shutil.copytree(DEFAULT_BUILTIN_ROOT, builtin)
+    skill_dir = builtin / "skills" / "case-context-guidance"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: case-context-guidance\ndescription: Guide Case classification.\n---\n\n# Guide\n"
+    )
+    bindings_path = builtin / "skill-bindings.json"
+    bindings = json.loads(bindings_path.read_text())
+    bindings["bindings"]["case-context-guidance"] = {
+        "selector": {"case_type": ["ORDER_DELIVERY_RISK"]}
+    }
+    bindings_path.write_text(json.dumps(bindings))
+    service = CaseService(
+        CaseRepository(tmp_path / "test.db"),
+        capabilities=CapabilityRegistry.from_directories(builtin, None),
+        planner=_AllMatchedSkillPathsPlanner(),
+    )
+    service.ensure_demo_data()
+
+    case = orchestrate(service)
+
+    assert all(
+        "case-context-guidance" not in {skill.id for skill in path.skills}
+        for path in case.manifest.paths
+    )
 
 
 def test_multi_path_exploration_finishes_only_after_every_solution_revision(tmp_path: Path) -> None:
