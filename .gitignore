@@ -17,3 +17,4 @@ frontend/.next/
 frontend/dist/
 frontend/.wrangler/
 .DS_Store
+docs/superpowers/

@@ -190,13 +190,14 @@ test("each asset route renders its own kind with a search affordance", async () 
   }
 });
 
-test("the Skills library derives its hierarchy from paths and bundle members", async () => {
+test("the Skills library derives its hierarchy from Case Type catalogs and bundle members", async () => {
   const source = await readFile(new URL("../app/assets/asset-library.tsx", import.meta.url), "utf8");
-  assert.match(source, /skill\.paths\?\.length/);
+  assert.match(source, /data\.case_types/);
   assert.match(source, /skill\.members \?\? \[\]/);
-  assert.match(source, /CASE PLAYBOOK/);
+  assert.match(source, /CASE TYPE/);
   assert.match(source, /PATH BUNDLE/);
   assert.match(source, /ATOMIC SKILL/);
+  assert.doesNotMatch(source, /CASE PLAYBOOK|playbooks|skill\.paths/);
   assert.doesNotMatch(source, /assigned_via|composition/);
 });
 

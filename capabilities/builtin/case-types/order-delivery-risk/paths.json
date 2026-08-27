@@ -1,5 +1,7 @@
 {
   "schema_version": 1,
+  "case_type": "ORDER_DELIVERY_RISK",
+  "title": "订单交付风险",
   "paths": [
     {
       "id": "MaterialSubstitution",
