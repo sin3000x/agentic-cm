@@ -347,7 +347,7 @@ class Orchestrator:
             )
         if incomplete:
             raise OrchestrationError(
-                f"Skill-declared Paths are not executable: {incomplete}"
+                f"Catalog-declared Paths are not executable: {incomplete}"
             )
         candidates = tuple(
             {
@@ -406,7 +406,7 @@ class Orchestrator:
         returned = set(selected_definitions)
         if returned != allowed:
             raise PlannerOutputError(
-                f"Planner must return every Skill-declared Path exactly once; "
+                f"Planner must return every Catalog-declared Path exactly once; "
                 f"missing={sorted(allowed - returned)}, unknown={sorted(returned - allowed)}"
             )
         trace(

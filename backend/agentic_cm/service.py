@@ -176,6 +176,7 @@ class CaseService:
         return {
             "assets": assets,
             "counts": {group: len(items) for group, items in assets.items()},
+            "case_types": self.capabilities.list_case_types(),
         }
 
     def get_case(self, case_id: str):

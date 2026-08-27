@@ -6,8 +6,8 @@
 
 ```text
 OPEN Case (INTAKE)
-  -> CapabilityRegistry 匹配 Case-level orchestration Skill
-  -> 从该 Skill 包的 paths.json 读取本 case_type 的 1..N 个 PathDefinition
+  -> CapabilityRegistry 按 case_type 读取 Case Type Path Catalog
+  -> 从 Catalog 读取本 case_type 的 1..N 个 PathDefinition
   -> CapabilityRegistry 要求每条 Path 同时命中 execution Skill 与强制 Policy
   -> 匹配 Case 级 Knowledge，供 Path 选择与排序使用
   -> 为每个 Path 匹配自己的 Policy / Skill / Knowledge
@@ -23,7 +23,7 @@ OPEN Case (INTAKE)
 
 ## 2. 主要边界
 
-- `CapabilityRegistry`：先通过 binding 按 `case_type` 匹配 orchestration Skill，再从该 Skill 包的 `paths.json` 展开可探索 Path。Path 定义没有第二份 catalog。
+- `CapabilityRegistry`：按 `case_type` 从 `case-types/<name>/paths.json` 展开可探索 Path。该 Catalog 是 Path 定义的唯一来源；本地同 `case_type` Catalog 整体覆盖内置版本。
 - `Path-level execution Skill`：定义获批 Path 如何分析以及 SolutionRevision 的输出结构。任一声明 Path 缺少 execution Skill 或强制 Policy 时，本次编排整体 fail closed。
 - `Policy`：定义强制责任节点与依赖，不负责说明 Agent 如何分析。Manifest 只保留 Policy 的 `id/version/digest`；批准时校验引用并从资产编译 Commitments。
 - `Knowledge`：只按 Case 匹配的 Knowledge 冻结在 Manifest 顶层，供 Orchestrator 选择与排序 Path；带 `path_definition` 的 Knowledge 只冻结在对应 Path 下。
@@ -32,13 +32,15 @@ OPEN Case (INTAKE)
 - `CaseService`：成功后才保存 `manifest.proposed` 事件并将 Case 推进至 `MANIFEST_REVIEW`。
 - `AgentRun trace`：每次调用先创建独立技术运行记录，逐步写入 eligibility、Path 发现、逐 Path 能力解析、Planner 输入、模型请求/响应、白名单校验、Manifest 组装和最终状态。失败 trace 也会保留，但不写业务事件、不修改 Case。
 
-当前内置的 `shortage-response-planning/paths.json` 声明三条候选：`SupplyExpediting`（提拉）、`MaterialSubstitution`（替代）、`OrderSplit`（拆分），因此 Manifest 必须包含三条。Owner 在 Manifest Review 中单选或多选本轮探索子集；批准后平台只为勾选的 Path 创建 PathAttempt 和 Commitment 节点。
+当前内置的 `case-types/order-delivery-risk/paths.json` 声明三条候选：`SupplyExpediting`（提拉）、`MaterialSubstitution`（替代）、`OrderSplit`（拆分），因此 Manifest 必须包含三条。Owner 在 Manifest Review 中单选或多选本轮探索子集；批准后平台只为勾选的 Path 创建 PathAttempt 和 Commitment 节点。
 
-新增其他 Case 类型时，应新增一个绑定该 `case_type` 的 orchestration Skill，并在其文件夹内提供：
+新增其他 Case 类型时，应新增一个独立 Case Type Catalog：
 
 ```json
 {
   "schema_version": 1,
+  "case_type": "QUALITY_INCIDENT",
+  "title": "质量事件",
   "paths": [
     {
       "id": "Containment",
@@ -49,7 +51,7 @@ OPEN Case (INTAKE)
 }
 ```
 
-Path ID 只要求在同一 orchestration Skill 内唯一。多个同时命中的 orchestration Skill 若对同一 ID 给出不同标题或描述，CapabilityRegistry 会 fail closed。
+Path ID 在同一 Catalog 内必须唯一。同一层出现两个相同 `case_type` Catalog 时 CapabilityRegistry 会 fail closed；local 与 builtin 同名时按完整 Catalog 覆盖，不做逐 Path 合并。
 
 ## 3. 两个 Adapter
 

@@ -65,7 +65,7 @@ material-substitution-analysis/
 
 这样可以直接复用已有 Skill 文件夹，也能让不同 Agent Runtime 使用同一份能力。`SKILL.md` frontmatter 始终只包含标准的 `name` 和 `description`。
 
-平台不在 frontmatter 增加 `type`、`level` 或 `assigned_via`。层级由文件结构唯一推导：有 `paths.json` 的 Skill 是 Case Playbook；没有 `paths.json`、但有 `bundle.json` 的 Skill 是 Path Bundle；两者都没有的是 Atomic Skill。`bundle.json` 只保留最小成员关系：
+平台不在 frontmatter 增加 `type`、`level` 或 `assigned_via`。Skill 层级由文件结构唯一推导：有 `bundle.json` 的 Skill 是 Path Bundle，没有 `bundle.json` 的是 Atomic Skill。Case 类型及其候选 Path 不属于 Skill，由独立的 `case-types/<name>/paths.json` 声明。`bundle.json` 只保留最小成员关系：
 
 ```json
 {
@@ -74,18 +74,17 @@ material-substitution-analysis/
 }
 ```
 
-Bundle 成员必须存在、与 Bundle 使用相同 selector、不能再拥有 `paths.json` 或 `bundle.json`，且只能属于一个 Bundle。组织资产页据此展示 `Case Playbook → Path → Path Bundle/独立 Skill → Atomic Skill`；Bundle 内部成员不需要暴露给 Orchestrator，Path Agent 确认需要时再按成员关系展开。
+Bundle 成员必须存在、与 Bundle 使用相同 selector、不能再拥有 `bundle.json`，且只能属于一个 Bundle。组织资产页据此展示 `Case Type → Path → Path Bundle/独立 Skill → Atomic Skill`；Bundle 内部成员不需要暴露给 Planner，Path Agent 确认需要时再按成员关系展开。
 
 Path 与 Skill 的确定性关系单独放在 `capabilities/builtin/skill-bindings.json`。它有两种用途：
 
 - 读取标准 `SKILL.md` 的 `name` 和 `description`；
-- Case-level orchestration Skill 用 binding selector 精确命中一个 `case_type`，并在同一 Skill 文件夹的 `paths.json` 中拥有可以探索的 `1..N` 条 Path；
 - Path-level execution Skill 用同时包含 `case_type` 与 `path_definition` 的 selector 注入某一条 Path；
 - 对整个 Skill 文件夹计算 SHA-256，任一脚本、参考资料或资产变化都会产生新版本摘要；
 - 冻结 `SKILL.md` 正文和文件清单，供审计与 Adapter 消费。
 - 若存在 `path-options.json` 或 `tools.json`，CapabilityRegistry 会校验其契约并把内容随 Skill payload 一起冻结；Path Agent 不从框架或 Demo Case 复制一份候选定义。
 
-Demo 的 `shortage-response-planning/paths.json` 是提拉、替代、拆分三条定义的唯一来源，`SKILL.md` 只说明如何根据当前 Case 解释和排序它们。`material-substitution-analysis/path-options.json` 是 A（MCU-X7A）和 B（MCU-X7B）的唯一机器可读来源；同包 `tools.json` 提供物料主数据、供应快照和客户接受度的只读模拟查询。角色 Skill 定义分析方法；Policy 的 Commitment 是报告角色、维度、句首、人类责任与依赖的唯一结构化来源。
+Demo 的 `case-types/order-delivery-risk/paths.json` 是提拉、替代、拆分三条定义的唯一来源。遍历全部候选、生成 rationale、不得遗漏或发明 Path 是 Orchestrator 的统一规则。`material-substitution-analysis/path-options.json` 是 A（MCU-X7A）和 B（MCU-X7B）的唯一机器可读来源；同包 `tools.json` 提供物料主数据、供应快照和客户接受度的只读模拟查询。角色 Skill 定义分析方法；Policy 的 Commitment 是报告角色、维度、句首、人类责任与依赖的唯一结构化来源。
 
 ### 2.3 Knowledge
 
@@ -103,8 +102,8 @@ Demo 的 `KNOW-2025-041` 来自已关闭 Case，提示“地区认证可能导�
 ```text
 Case classification
   -> CapabilityRegistry 合并 builtin 与 local 层
-  -> 按 case_type 命中 orchestration Skill，并读取其 paths.json
-  -> Planner 为 Skill 声明的全部 Path 生成 rationale 和排序
+  -> 按 case_type 读取唯一的 Case Type Path Catalog
+  -> Planner 为 Catalog 声明的全部 Path 生成 rationale 和排序
   -> 每条 Path 必须匹配 Path-level execution Skill 与强制 Policy
   -> 再解析该 Path 的全部 Skill / Policy / Knowledge
   -> Manifest 顶层及每条 Path 仅保存匹配能力的 id / version / digest
@@ -122,6 +121,9 @@ Manifest Review 中的“查看完整 Manifest YAML”会以 Case Owner 身份�
 
 ```text
 .agentic-cm/capabilities/
+├── case-types/
+│   └── my-case-type/
+│       └── paths.json
 ├── skill-bindings.json
 ├── skills/
 │   └── regional-certification-check/
@@ -151,11 +153,13 @@ cp -R examples/local-capabilities/. .agentic-cm/capabilities/
 3. `SKILL.md` 至少包含字符串类型的 `name` 和 `description`；
 4. 可原样保留已有的 `scripts/`、`references/`、`assets/`、`agents/` 等资源。
 
-平台不会仅根据正文自然语言猜测业务 Path。一个能为缺料 Case 提出多条 Path 的 orchestration Skill，应在 Skill 文件夹中增加 `paths.json`：
+平台不会仅根据 Skill 正文自然语言猜测业务 Path。新增或本地覆盖 Case 类型时，应在 `case-types/<name>/paths.json` 中声明完整候选集：
 
 ```json
 {
   "schema_version": 1,
+  "case_type": "ORDER_DELIVERY_RISK",
+  "title": "订单交付风险",
   "paths": [
     {
       "id": "SupplyExpediting",
@@ -166,22 +170,23 @@ cp -R examples/local-capabilities/. .agentic-cm/capabilities/
 }
 ```
 
-`skill-bindings.json` 只负责说明什么 Case 会命中这个 Skill：
+`skill-bindings.json` 只负责把具体执行 Skill 绑定到 Case 类型与 Path：
 
 ```json
 {
   "schema_version": 1,
   "bindings": {
-    "my-shortage-planning": {
+    "my-expediting-analysis": {
       "selector": {
-        "case_type": ["ORDER_DELIVERY_RISK"]
+        "case_type": ["ORDER_DELIVERY_RISK"],
+        "path_definition": ["SupplyExpediting"]
       }
     }
   }
 }
 ```
 
-拥有 `paths.json` 的 Skill 必须通过 binding 精确绑定一个 `case_type`，所以不同 Case 类型自然拥有不同 Path 集合。`paths.json` 写一条，Manifest 就只有一条；写三条，Manifest 必须包含三条。真正进入探索的子集由 Owner 在 Manifest Review 中单选或多选。
+每个 Catalog 显式声明一个 `case_type`。本地同 `case_type` Catalog 会整体覆盖内置 Catalog，不逐 Path 合并；`paths.json` 写一条，Manifest 就只有一条，写三条则 Manifest 必须包含三条。真正进入探索的子集由 Owner 在 Manifest Review 中单选或多选。
 
 每条声明的 Path 还必须命中至少一个 Path-level execution Skill 和至少一个能编译出 Commitment 的 Policy；任意一条缺失都会让本次编排整体 fail closed，避免 Skill 声明三条但 Manifest 静默缩水。Path-level Skill、Policy 和 Knowledge 引用 Path 时都必须同时声明 `case_type` 与 `path_definition`，避免不同 Case 类型的同名 Path 串用能力。
 

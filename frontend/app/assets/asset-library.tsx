@@ -9,6 +9,8 @@ export type AssetGroup = "skills" | "policies" | "knowledge";
 
 type AssetRef = { id: string; version: string; digest: string; source: "builtin" | "local" };
 type Commitment = { id: string; role: string; review_dimension: string; depends_on?: string[] };
+type PathDefinition = { id: string; title: string; description: string };
+type CaseTypeCatalog = { case_type: string; title: string; paths: PathDefinition[]; source: "builtin" | "local" };
 type CapabilityAsset = {
   id: string;
   title: string;
@@ -16,7 +18,6 @@ type CapabilityAsset = {
   selector?: Record<string, string[]> | null;
   instructions_markdown?: string;
   files?: Array<{ path: string }>;
-  paths?: Array<{ id: string; title: string; description: string }>;
   members?: string[];
   requirements?: { commitments?: Commitment[] };
   confidence?: string;
@@ -28,6 +29,7 @@ type CapabilityAsset = {
 type LibraryResponse = {
   assets: Record<AssetGroup, CapabilityAsset[]>;
   counts: Record<AssetGroup, number>;
+  case_types: CaseTypeCatalog[];
 };
 
 const groupCopy = {
@@ -59,7 +61,6 @@ function Selector({ selector }: { selector?: Record<string, string[]> | null }) 
 function AssetBody({ group, asset }: { group: AssetGroup; asset: CapabilityAsset }) {
   if (group === "skills") return <>
     <p className="assetSummary">{asset.description}</p>
-    {asset.paths && asset.paths.length > 0 && <div className="assetPathList"><strong>提供的 Paths</strong>{asset.paths.map(path => <span key={path.id}><b>{path.title}</b><small>{path.id} · {path.description}</small></span>)}</div>}
     <details><summary>查看 SKILL.md 指令与文件</summary><pre>{asset.instructions_markdown}</pre><p className="assetFiles">{asset.files?.map(file => file.path).join(" · ")}</p></details>
   </>;
   if (group === "policies") return <div className="commitmentList">{asset.requirements?.commitments?.map(node => <div key={node.id}><strong>{node.id}</strong><p>{node.role} · {node.review_dimension}</p><small>{node.depends_on?.length ? `依赖 ${node.depends_on.join("、")}` : "无前置依赖"}</small></div>)}</div>;
@@ -86,57 +87,49 @@ function assetMatches(asset: CapabilityAsset, keyword: string) {
   return !keyword || [asset.title, asset.id, asset.description, asset.content?.summary].some(value => value?.toLowerCase().includes(keyword));
 }
 
-function sharesCaseType(left: CapabilityAsset, right: CapabilityAsset) {
-  const leftTypes = left.selector?.case_type ?? [];
-  const rightTypes = right.selector?.case_type ?? [];
-  return leftTypes.some(caseType => rightTypes.includes(caseType));
-}
-
-function SkillHierarchy({ skills, search }: { skills: CapabilityAsset[]; search: string }) {
+function SkillHierarchy({ caseTypes, skills, search }: { caseTypes: CaseTypeCatalog[]; skills: CapabilityAsset[]; search: string }) {
   const keyword = search.trim().toLowerCase();
   const byId = new Map(skills.map(skill => [skill.id, skill]));
   const memberIds = new Set(skills.flatMap(skill => skill.members ?? []));
-  const playbooks = skills.filter(skill => skill.paths?.length);
   const assignedTopLevel = new Set<string>();
 
-  const trees = playbooks.map(playbook => {
-    const playbookMatch = assetMatches(playbook, keyword);
-    const branches = (playbook.paths ?? []).map(path => {
+  const trees = caseTypes.map(caseType => {
+    const caseTypeMatch = !keyword || [caseType.case_type, caseType.title].some(value => value.toLowerCase().includes(keyword));
+    const branches = caseType.paths.map(path => {
       const pathMatch = !keyword || [path.id, path.title, path.description].some(value => value.toLowerCase().includes(keyword));
       const nodes = skills.filter(skill =>
-        !skill.paths?.length
-        && !memberIds.has(skill.id)
+        !memberIds.has(skill.id)
         && skill.selector?.path_definition?.includes(path.id)
-        && sharesCaseType(playbook, skill)
+        && skill.selector?.case_type?.includes(caseType.case_type)
       ).map(skill => {
         assignedTopLevel.add(skill.id);
         const members = (skill.members ?? []).map(memberId => byId.get(memberId)).filter((member): member is CapabilityAsset => Boolean(member));
         const skillMatch = assetMatches(skill, keyword);
-        const visibleMembers = playbookMatch || pathMatch || skillMatch ? members : members.filter(member => assetMatches(member, keyword));
-        return { skill, members: visibleMembers, visible: playbookMatch || pathMatch || skillMatch || visibleMembers.length > 0 };
+        const visibleMembers = caseTypeMatch || pathMatch || skillMatch ? members : members.filter(member => assetMatches(member, keyword));
+        return { skill, members: visibleMembers, visible: caseTypeMatch || pathMatch || skillMatch || visibleMembers.length > 0 };
       }).filter(node => node.visible);
-      return { path, nodes, visible: playbookMatch || pathMatch || nodes.length > 0 };
+      return { path, nodes, visible: caseTypeMatch || pathMatch || nodes.length > 0 };
     }).filter(branch => branch.visible);
-    return { playbook, branches, visible: playbookMatch || branches.length > 0 };
+    return { caseType, branches, visible: caseTypeMatch || branches.length > 0 };
   }).filter(tree => tree.visible);
 
   const standalone = skills.filter(skill =>
-    !skill.paths?.length
-    && !memberIds.has(skill.id)
+    !memberIds.has(skill.id)
     && !assignedTopLevel.has(skill.id)
     && assetMatches(skill, keyword)
   );
 
   if (trees.length === 0 && standalone.length === 0) return null;
   return <>
-    {trees.map(({ playbook, branches }) => <AssetCard key={playbook.id} group="skills" asset={playbook} level="CASE PLAYBOOK">
+    {trees.map(({ caseType, branches }) => <article className="caseTypeCard" key={caseType.case_type}>
+      <header><div><span className="assetLevel">CASE TYPE</span><h2>{caseType.title}</h2><p>{caseType.case_type}</p></div><span className={`assetOrigin ${caseType.source}`}>{caseType.source === "local" ? "本地覆盖" : "内置"}</span></header>
       <div className="skillPathTree">{branches.map(({ path, nodes }) => <section className="skillPathBranch" key={path.id}>
         <header><span>PATH</span><div><h3>{path.title}</h3><code>{path.id}</code><p>{path.description}</p></div></header>
         <div className="skillPathCapabilities">{nodes.map(({ skill, members }) => <AssetCard key={skill.id} group="skills" asset={skill} level={skill.members ? "PATH BUNDLE" : "ATOMIC SKILL"}>
           {skill.members && <div className="skillMembers"><p>Bundle 成员 · Path Agent 按需展开</p>{members.map(member => <AssetCard key={member.id} group="skills" asset={member} level="ATOMIC SKILL" />)}</div>}
         </AssetCard>)}</div>
       </section>)}</div>
-    </AssetCard>)}
+    </article>)}
     {standalone.length > 0 && <section className="standaloneSkills"><header><span>STANDALONE</span><h2>独立 Skills</h2></header><div className="assetGrid">{standalone.map(skill => <AssetCard key={skill.id} group="skills" asset={skill} level="ATOMIC SKILL" />)}</div></section>}
   </>;
 }
@@ -162,8 +155,10 @@ export default function AssetLibrary({ group }: { group: AssetGroup }) {
   }, [data, group, search]);
   const skillHasMatch = group === "skills" && Boolean(data) && (data?.assets.skills.some(asset =>
     assetMatches(asset, search.trim().toLowerCase())
-    || asset.paths?.some(path => [path.id, path.title, path.description].some(value => value.toLowerCase().includes(search.trim().toLowerCase())))
-  ) ?? false);
+  ) || data?.case_types.some(caseType =>
+    [caseType.case_type, caseType.title].some(value => value.toLowerCase().includes(search.trim().toLowerCase()))
+    || caseType.paths.some(path => [path.id, path.title, path.description].some(value => value.toLowerCase().includes(search.trim().toLowerCase())))
+  ) || !search.trim());
   const isEmpty = group === "skills" ? !skillHasMatch : assets.length === 0;
 
   return <div className="appShell">
@@ -181,7 +176,7 @@ export default function AssetLibrary({ group }: { group: AssetGroup }) {
         {!data && !error && <div className="assetMessage"><strong>正在读取后台资产…</strong><p>数据来自当前运行中的 CapabilityRegistry。</p></div>}
         {data && isEmpty && <div className="assetMessage"><strong>{search ? "没有匹配的资产" : copy.empty}</strong><p>{search ? "请尝试其他名称、ID、Path 或描述关键词。" : "发布资产后刷新即可显示。"}</p></div>}
         <section className={group === "skills" ? "skillHierarchy" : "assetGrid"} aria-live="polite">
-          {group === "skills" && data && <SkillHierarchy skills={data.assets.skills} search={search} />}
+          {group === "skills" && data && <SkillHierarchy caseTypes={data.case_types} skills={data.assets.skills} search={search} />}
           {group !== "skills" && assets.map(asset => <AssetCard group={group} asset={asset} key={asset.resolved_ref.id} />)}
         </section>
       </div>

@@ -55,10 +55,18 @@ class CapabilityResolution:
 
 
 @dataclass(frozen=True)
-class SkillPathDefinition:
+class PathDefinition:
     id: str
     title: str
     description: str
+
+
+@dataclass(frozen=True)
+class CaseTypePathCatalog:
+    case_type: str
+    title: str
+    paths: tuple[PathDefinition, ...]
+    source: str
 
 
 @dataclass(frozen=True)
@@ -70,8 +78,13 @@ class _LoadedAsset:
 class CapabilityRegistry:
     """Loads built-ins, then adds or intentionally replaces workspace-local assets."""
 
-    def __init__(self, assets: dict[tuple[str, str], _LoadedAsset]) -> None:
+    def __init__(
+        self,
+        assets: dict[tuple[str, str], _LoadedAsset],
+        case_types: dict[str, CaseTypePathCatalog] | None = None,
+    ) -> None:
         self._assets = assets
+        self._case_types = case_types or {}
         self._validate_skill_bundles()
 
     def _validate_skill_bundles(self) -> None:
@@ -85,7 +98,7 @@ class CapabilityRegistry:
                     raise CapabilityConfigurationError(
                         f"Skill bundle {skill_id!r} references unknown member {member_id!r}"
                     )
-                if member.data.get("paths") or member.data.get("members"):
+                if member.data.get("members"):
                     raise CapabilityConfigurationError(
                         f"Skill bundle {skill_id!r} member {member_id!r} must be an atomic Skill"
                     )
@@ -112,10 +125,80 @@ class CapabilityRegistry:
         bindings = cls._load_skill_bindings(builtin_path, required=True)
         if local_path:
             bindings.update(cls._load_skill_bindings(local_path, required=False))
+        case_types = cls._load_case_type_catalogs(builtin_path, "builtin", required=True)
+        if local_path:
+            case_types.update(
+                cls._load_case_type_catalogs(local_path, "local", required=False)
+            )
         cls._load_layer(builtin_path, "builtin", merged, bindings, required=True)
         if local_root:
             cls._load_layer(local_path, "local", merged, bindings, required=False)
-        return cls(merged)
+        return cls(merged, case_types)
+
+    @staticmethod
+    def _load_case_type_catalogs(
+        root: Path,
+        source: str,
+        *,
+        required: bool,
+    ) -> dict[str, CaseTypePathCatalog]:
+        if not root.exists():
+            if required:
+                raise CapabilityConfigurationError(f"Capability directory does not exist: {root}")
+            return {}
+        catalogs: dict[str, CaseTypePathCatalog] = {}
+        case_types_root = root / "case-types"
+        if not case_types_root.exists():
+            return catalogs
+        for catalog_dir in sorted(path for path in case_types_root.iterdir() if path.is_dir()):
+            path = catalog_dir / "paths.json"
+            if not path.is_file():
+                raise CapabilityConfigurationError(f"Case Type catalog is missing paths.json: {catalog_dir}")
+            try:
+                payload = json.loads(path.read_text())
+            except (OSError, json.JSONDecodeError) as exc:
+                raise CapabilityConfigurationError(f"Cannot load Case Type catalog {path}: {exc}") from exc
+            if (
+                not isinstance(payload, dict)
+                or set(payload) != {"schema_version", "case_type", "title", "paths"}
+                or payload.get("schema_version") != 1
+                or not isinstance(payload.get("case_type"), str)
+                or not payload["case_type"].strip()
+                or not isinstance(payload.get("title"), str)
+                or not payload["title"].strip()
+                or not isinstance(payload.get("paths"), list)
+                or not payload["paths"]
+            ):
+                raise CapabilityConfigurationError(f"Invalid Case Type catalog contract: {path}")
+            definitions: list[PathDefinition] = []
+            for item in payload["paths"]:
+                if (
+                    not isinstance(item, dict)
+                    or set(item) != {"id", "title", "description"}
+                    or any(
+                        not isinstance(item.get(field), str) or not item[field].strip()
+                        for field in ("id", "title", "description")
+                    )
+                ):
+                    raise CapabilityConfigurationError(f"Invalid Case Type PathDefinition: {path}")
+                definitions.append(PathDefinition(**{
+                    field: item[field].strip()
+                    for field in ("id", "title", "description")
+                }))
+            if len({item.id for item in definitions}) != len(definitions):
+                raise CapabilityConfigurationError(f"Case Type Path ids must be unique: {path}")
+            case_type = payload["case_type"].strip()
+            if case_type in catalogs:
+                raise CapabilityConfigurationError(
+                    f"Duplicate Case Type catalog for {case_type!r}: {path}"
+                )
+            catalogs[case_type] = CaseTypePathCatalog(
+                case_type=case_type,
+                title=payload["title"].strip(),
+                paths=tuple(definitions),
+                source=source,
+            )
+        return catalogs
 
     @staticmethod
     def _validate_selector(selector: Any, label: str, path: Path) -> None:
@@ -239,33 +322,10 @@ class CapabilityRegistry:
         )
         selector = binding.get("selector", {}) if binding else {}
         paths_file = skill_path / "paths.json"
-        declared_paths: list[dict[str, str]] = []
-        if paths_file.is_file():
-            try:
-                paths_payload = json.loads(paths_file.read_text())
-            except (OSError, json.JSONDecodeError) as exc:
-                raise CapabilityConfigurationError(f"Cannot load Skill paths {paths_file}: {exc}") from exc
-            if (
-                not isinstance(paths_payload, dict)
-                or set(paths_payload) != {"schema_version", "paths"}
-                or paths_payload.get("schema_version") != 1
-                or not isinstance(paths_payload.get("paths"), list)
-                or not paths_payload["paths"]
-            ):
-                raise CapabilityConfigurationError(f"Invalid Skill paths contract: {paths_file}")
-            for item in paths_payload["paths"]:
-                if not isinstance(item, dict) or set(item) != {"id", "title", "description"} or not all(
-                    isinstance(item[field], str) and item[field].strip()
-                    for field in ("id", "title", "description")
-                ):
-                    raise CapabilityConfigurationError(f"Invalid Skill PathDefinition: {paths_file}")
-                declared_paths.append({field: item[field].strip() for field in ("id", "title", "description")})
-            if len({item["id"] for item in declared_paths}) != len(declared_paths):
-                raise CapabilityConfigurationError(f"Skill PathDefinition ids must be unique: {paths_file}")
-            if len(selector.get("case_type", [])) != 1 or "path_definition" in selector:
-                raise CapabilityConfigurationError(
-                    f"A Skill owning paths.json must bind exactly one case_type and not path_definition: {paths_file}"
-                )
+        if paths_file.exists():
+            raise CapabilityConfigurationError(
+                f"Skill paths.json is no longer supported; define candidate Paths in Case Type catalogs: {paths_file}"
+            )
 
         bundle_file = skill_path / "bundle.json"
         bundle_members: list[str] | None = None
@@ -288,10 +348,6 @@ class CapabilityRegistry:
                 raise CapabilityConfigurationError(f"Skill bundle members must be unique: {bundle_file}")
             if frontmatter["name"] in bundle_members:
                 raise CapabilityConfigurationError(f"Skill bundle cannot contain itself: {bundle_file}")
-            if declared_paths:
-                raise CapabilityConfigurationError(
-                    f"A Case Playbook with paths.json cannot also be a Path Bundle: {skill_path}"
-                )
 
         path_options: list[dict[str, str]] = []
         options_file = skill_path / "path-options.json"
@@ -368,7 +424,6 @@ class CapabilityRegistry:
             "version": digest_hex[:12],
             "title": display_title,
             "selector": deepcopy(selector) if selector else None,
-            "paths": deepcopy(declared_paths),
             "path_options": deepcopy(path_options),
             "tools": deepcopy(tools),
             "description": frontmatter["description"],
@@ -514,32 +569,10 @@ class CapabilityRegistry:
             },
         )
 
-    def resolve_path_candidates(self, context: dict[str, str]) -> tuple[SkillPathDefinition, ...]:
-        """Expand PathDefinitions owned by orchestration Skills matching this Case."""
-        candidates: dict[str, SkillPathDefinition] = {}
-        matched_skills = sorted(
-            (
-                asset
-                for (kind, _), asset in self._assets.items()
-                if kind == "skill" and self._asset_matches(asset, context)
-            ),
-            key=lambda asset: asset.ref.id,
-        )
-        for asset in matched_skills:
-            for definition in asset.data.get("paths", []):
-                current = candidates.get(definition["id"])
-                if current and (current.title, current.description) != (
-                    definition["title"], definition["description"]
-                ):
-                    raise CapabilityConflictError(
-                        f"Matched orchestration Skills disagree on PathDefinition {definition['id']}"
-                    )
-                candidates[definition["id"]] = SkillPathDefinition(
-                    id=definition["id"],
-                    title=definition["title"],
-                    description=definition["description"],
-                )
-        return tuple(candidates.values())
+    def resolve_path_candidates(self, context: dict[str, str]) -> tuple[PathDefinition, ...]:
+        """Return the Path catalog owned by this Case type."""
+        catalog = self._case_types.get(context.get("case_type", ""))
+        return catalog.paths if catalog else ()
 
     def describe_snapshot(self, snapshot: dict[str, Any]) -> dict[str, Any]:
         groups: dict[str, list[dict[str, Any]]] = {}
@@ -640,6 +673,18 @@ class CapabilityRegistry:
                 ("knowledge", "knowledge"),
             )
         }
+
+    def list_case_types(self) -> list[dict[str, Any]]:
+        """Return effective Case Type Path catalogs after local overrides."""
+        return [
+            {
+                "case_type": catalog.case_type,
+                "title": catalog.title,
+                "paths": [asdict(path) for path in catalog.paths],
+                "source": catalog.source,
+            }
+            for catalog in sorted(self._case_types.values(), key=lambda item: item.case_type)
+        ]
 
 
 def default_registry() -> CapabilityRegistry:

@@ -1,11 +1,6 @@
 {
   "schema_version": 1,
   "bindings": {
-    "shortage-response-planning": {
-      "selector": {
-        "case_type": ["ORDER_DELIVERY_RISK"]
-      }
-    },
     "material-substitution-analysis": {
       "selector": {
         "case_type": ["ORDER_DELIVERY_RISK"],
