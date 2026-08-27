@@ -125,8 +125,8 @@ function SkillHierarchy({ caseTypes, skills, search }: { caseTypes: CaseTypeCata
       <header><div><span className="assetLevel">CASE TYPE</span><h2>{caseType.title}</h2><p>{caseType.case_type}</p></div><span className={`assetOrigin ${caseType.source}`}>{caseType.source === "local" ? "本地覆盖" : "内置"}</span></header>
       <div className="skillPathTree">{branches.map(({ path, nodes }) => <section className="skillPathBranch" key={path.id}>
         <header><span>PATH</span><div><h3>{path.title}</h3><code>{path.id}</code><p>{path.description}</p></div></header>
-        <div className="skillPathCapabilities">{nodes.map(({ skill, members }) => <AssetCard key={skill.id} group="skills" asset={skill} level={skill.members ? "PATH BUNDLE" : "ATOMIC SKILL"}>
-          {skill.members && <div className="skillMembers"><p>Bundle 成员 · Path Agent 按需展开</p>{members.map(member => <AssetCard key={member.id} group="skills" asset={member} level="ATOMIC SKILL" />)}</div>}
+        <div className="skillPathCapabilities">{nodes.map(({ skill, members }) => <AssetCard key={skill.id} group="skills" asset={skill} level={skill.members ? "SKILL BUNDLE" : "ATOMIC SKILL"}>
+          {skill.members && <div className="skillMembers"><p>组合成员 · 执行时随 Bundle 展开</p>{members.map(member => <AssetCard key={member.id} group="skills" asset={member} level="ATOMIC SKILL" />)}</div>}
         </AssetCard>)}</div>
       </section>)}</div>
     </article>)}

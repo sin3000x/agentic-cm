@@ -55,7 +55,7 @@ Skill 复用通行的文件夹约定；只有需要被平台确定性消费的�
 ```text
 material-substitution-analysis/
 ├── SKILL.md          # 必需；YAML name/description + Markdown 指令
-├── bundle.json       # 可选；Path Bundle 直接包含的 Atomic Skill ID
+├── bundle.json       # 可选；Skill Bundle 直接包含的 Atomic Skill ID
 ├── path-options.json # 可选；由 Skill 拥有的 Path 候选，而非框架默认值
 ├── tools.json        # 可选；随 Manifest 冻结的只读模拟查询
 ├── scripts/          # 可选；确定性脚本
@@ -65,7 +65,7 @@ material-substitution-analysis/
 
 这样可以直接复用已有 Skill 文件夹，也能让不同 Agent Runtime 使用同一份能力。`SKILL.md` frontmatter 始终只包含标准的 `name` 和 `description`。
 
-平台不在 frontmatter 增加 `type`、`level` 或 `assigned_via`。Skill 层级由文件结构唯一推导：有 `bundle.json` 的 Skill 是 Path Bundle，没有 `bundle.json` 的是 Atomic Skill。Case 类型及其候选 Path 不属于 Skill，由独立的 `case-types/<name>/paths.json` 声明。`bundle.json` 只保留最小成员关系：
+平台不在 frontmatter 增加 `type`、`level` 或 `assigned_via`。Skill 层级由文件结构唯一推导：有 `bundle.json` 的 Skill 是 Skill Bundle，没有 `bundle.json` 的是 Atomic Skill。Case 类型及其候选 Path 不属于 Skill，由独立的 `case-types/<name>/paths.json` 声明。`bundle.json` 只保留最小成员关系：
 
 ```json
 {
@@ -74,7 +74,7 @@ material-substitution-analysis/
 }
 ```
 
-Bundle 成员必须存在、与 Bundle 使用相同 selector、不能再拥有 `bundle.json`，且只能属于一个 Bundle。组织资产页据此展示 `Case Type → Path → Path Bundle/独立 Skill → Atomic Skill`；Bundle 内部成员不需要暴露给 Planner，Path Agent 确认需要时再按成员关系展开。
+Bundle 成员必须存在且不能再拥有 `bundle.json`。未绑定 selector 的 Atomic Skill 可以被多个 Bundle 复用；已经绑定 selector 的成员只能加入相同 selector 的 Bundle，冲突配置会 fail closed。组织资产页据此展示 `Case Type → Path → Skill Bundle/独立 Skill → Atomic Skill`；Bundle 成员不单独暴露给 Planner，但会随所属 Bundle 一起冻结到 Path Manifest，供 Path Agent 执行。
 
 Path 与 Skill 的确定性关系单独放在 `capabilities/builtin/skill-bindings.json`。它有两种用途：
 
