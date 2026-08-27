@@ -699,6 +699,27 @@ def test_capability_library_reports_every_effective_asset(client) -> None:
     assert [path["id"] for path in body["case_types"][0]["paths"]] == [
         "MaterialSubstitution", "SupplyExpediting", "OrderSplit"
     ]
+    assert {
+        skill_id: skills[skill_id]["title"]
+        for skill_id in (
+            "material-substitution-engineering-review",
+            "material-substitution-master-planning-review",
+            "material-substitution-supply-manager-review",
+        )
+    } == {
+        "material-substitution-engineering-review": "候选料技术可行性分析",
+        "material-substitution-master-planning-review": "候选料供应覆盖与交期分析",
+        "material-substitution-supply-manager-review": "候选料客户准入与商务影响分析",
+    }
+    assert "封装、引脚、固件改动与验证状态" in skills[
+        "material-substitution-engineering-review"
+    ]["description"]
+    assert "数量覆盖、调拨周期与补量需求" in skills[
+        "material-substitution-master-planning-review"
+    ]["description"]
+    assert "客户 AVL、偏差放行、正式认证与商务影响" in skills[
+        "material-substitution-supply-manager-review"
+    ]["description"]
     assert skills["material-substitution-analysis"]["members"] == [
         "material-substitution-engineering-review",
         "material-substitution-master-planning-review",
