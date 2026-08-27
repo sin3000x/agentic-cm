@@ -3,12 +3,12 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .config import load_runtime_environment
-from .domain import CommitmentDecision, OwnerDecisionAction
+from .domain import CommitmentDecision, Manifest, OwnerDecisionAction
 from .orchestrator import OrchestrationError
 from .path_agent import PathAgentError, PathAgentExecutionError
 from .repository import CaseRepository
@@ -114,6 +114,27 @@ def get_case_manifest(case_id: str, actor: str, role: str):
     try:
         manifest = service.get_case_manifest(case_id, actor=actor, role=role)
         return manifest
+    except CaseNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Case not found") from exc
+    except InvalidTransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except AuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@app.get("/api/cases/{case_id}/manifest.yaml")
+def download_case_manifest(case_id: str, actor: str, role: str):
+    try:
+        manifest = Manifest.model_validate(
+            service.get_case_manifest(case_id, actor=actor, role=role)
+        )
+        return Response(
+            content=manifest.to_yaml(),
+            media_type="application/yaml",
+            headers={
+                "Content-Disposition": f'attachment; filename="{manifest.id}.yaml"'
+            },
+        )
     except CaseNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Case not found") from exc
     except InvalidTransitionError as exc:

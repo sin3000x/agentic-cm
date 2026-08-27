@@ -16,6 +16,7 @@ from agentic_cm.capabilities import (
 from agentic_cm.domain import (
     CaseStatus,
     CommitmentDecision,
+    Manifest,
     NodeStatus,
     OrchestrationPhase,
     OwnerDecisionAction,
@@ -24,10 +25,10 @@ from agentic_cm.domain import (
 from agentic_cm.demo import DEMO_DATASET_ID, demo_cases
 from agentic_cm.orchestrator import (
     DeterministicPlannerAdapter,
-    ManifestDraftResult,
     OpenAICompatiblePlannerAdapter,
     OrchestrationError,
-    PlannedPath,
+    PlannerOutput,
+    PlannerPath,
     PlannerOutputError,
 )
 from agentic_cm.repository import CaseRepository
@@ -37,6 +38,7 @@ from agentic_cm.path_agent import (
     PathAgentOutputError,
     PathAgentResult,
     PathAgentExecutionError,
+    PathAgentError,
     ProposedOption,
     RoleReport,
 )
@@ -115,6 +117,26 @@ def approve_and_execute_path(service: CaseService):
     ))
 
 
+def planner_context(human_proposal=None):
+    return {
+        "case_id": "CM-1", "case_version": 1, "title": "延期",
+        "description": "关键物料延期", "classification": {},
+        "business_payload": {}, "human_proposal": human_proposal,
+    }
+
+
+def planning_candidate(definition: str, title: str = "候选 Path"):
+    return {
+        "definition": definition, "title": title, "description": "desc",
+        "policy_ids": ["POL-1"], "skill_ids": ["skill-1"],
+        "knowledge_ids": [], "mandatory_commitment_ids": ["COMMITMENT-1"],
+        "skill_guidance": [{
+            "id": "skill-1", "description": "desc",
+            "instructions_markdown": "guide",
+        }],
+    }
+
+
 def test_runtime_environment_loads_repository_dotenv(tmp_path: Path, monkeypatch) -> None:
     from agentic_cm import config
 
@@ -174,7 +196,6 @@ def test_orchestrator_builds_manifest_from_open_delay_case(tmp_path: Path) -> No
 
     assert case.phase is OrchestrationPhase.MANIFEST_REVIEW
     assert case.manifest.generated_from_case_version == 1
-    assert case.manifest.planner_profile == "deterministic/v1"
     # The deterministic planner does not rank or prioritize: it returns every
     # Skill-declared candidate, in declaration order, each with a rationale.
     assert [path.definition for path in case.manifest.paths] == [
@@ -188,30 +209,199 @@ def test_orchestrator_builds_manifest_from_open_delay_case(tmp_path: Path) -> No
         "候选 A/B" not in path.rationale for path in case.manifest.paths
     )
     policy_refs = {
-        f"{asset['id']}@{asset['version']}"
-        for snapshot in case.manifest.capability_snapshots.values()
-        for asset in snapshot["asset_payloads"]["policies"]
+        f"{asset.id}@{asset.version}"
+        for path in case.manifest.paths
+        for asset in path.policies
     }
     assert policy_refs == {
         "POL-SUBSTITUTION-3@3.3.0", "POL-CUSTOMER-2@2.4.0",
         "POL-EXPEDITING-1@1.3.0", "POL-ORDER-SPLIT-1@1.3.0",
     }
-    assert {item["id"] for item in case.manifest.capability_snapshots["PATH-01"]["compiled_policy"]["commitments"]} == {
-        "SUPPLY", "TECH", "CUSTOMER"
-    }
     manifest = service.get_case_manifest(
         "CM-2026-014", actor=OWNER_ACTOR, role=OWNER_ROLE
     )
     assert set(manifest) == {
-        "id", "revision", "paths", "capability_snapshots",
-        "planner_profile", "generated_from_case_version",
+        "id", "revision", "paths", "knowledge",
+        "generated_from_case_version",
     }
-    assert all(
-        set(snapshot) == {"schema_version", "context", "compiled_policy", "asset_payloads"}
-        for snapshot in manifest["capability_snapshots"].values()
-    )
     assert manifest["id"] == "MAN-CM-2026-014-1"
-    assert manifest["planner_profile"] == "deterministic/v1"
+
+
+def test_manifest_is_path_scoped_and_round_trips_as_yaml(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+    case = orchestrate(service)
+
+    manifest = case.manifest
+    assert manifest is not None
+    assert manifest.knowledge == ()
+    assert all(path.skills and path.policies for path in manifest.paths)
+    assert [item.id for item in manifest.paths[0].knowledge] == ["KNOW-2025-041"]
+
+    payload = manifest.model_dump(mode="json")
+    assert set(payload) == {
+        "id", "revision", "generated_from_case_version",
+        "knowledge", "paths",
+    }
+    assert set(payload["paths"][0]) == {
+        "id", "definition", "rationale", "selected",
+        "skills", "policies", "knowledge",
+    }
+    for group in ("skills", "policies", "knowledge"):
+        assert all(
+            set(reference) == {"id", "version", "digest"}
+            for reference in payload["paths"][0][group]
+        )
+    assert "capability_snapshots" not in payload
+    serialized = manifest.to_yaml()
+    for forbidden in (
+        "instructions_markdown", "selector", "path_options", "tools",
+        "commitments", "planner_profile",
+    ):
+        assert forbidden not in serialized
+    assert Manifest.from_yaml(manifest.to_yaml()) == manifest
+
+
+def test_capability_registry_resolves_exact_manifest_references(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+    path = orchestrate(service).manifest.paths[0]
+
+    skills = service.capabilities.resolve_refs("skill", path.skills)
+
+    assert [item["id"] for item in skills] == [item.id for item in path.skills]
+    assert all("instructions_markdown" in item for item in skills)
+
+
+@pytest.mark.parametrize(
+    ("kind", "field", "value", "message"),
+    [
+        ("skill", "id", "missing-skill", "unknown skill"),
+        ("policy", "id", "material-substitution-analysis", "unknown policy"),
+        ("skill", "version", "changed-version", "version mismatch"),
+        ("skill", "digest", "sha256:changed", "digest mismatch"),
+    ],
+)
+def test_capability_registry_rejects_unverifiable_manifest_references(
+    tmp_path: Path,
+    kind: str,
+    field: str,
+    value: str,
+    message: str,
+) -> None:
+    service = make_service(tmp_path)
+    path = orchestrate(service).manifest.paths[0]
+    original = path.policies[0] if kind == "policy" else path.skills[0]
+    changed = original.model_copy(update={field: value})
+
+    with pytest.raises(CapabilityConfigurationError, match=message):
+        service.capabilities.resolve_refs(kind, (changed,))
+
+
+def test_manifest_approval_fails_without_mutation_when_policy_reference_changes(
+    tmp_path: Path,
+) -> None:
+    builtin = tmp_path / "builtin"
+    shutil.copytree(DEFAULT_BUILTIN_ROOT, builtin)
+    repository = CaseRepository(tmp_path / "test.db")
+    service = CaseService(
+        repository,
+        capabilities=CapabilityRegistry.from_directories(builtin, None),
+        planner=DeterministicPlannerAdapter(),
+    )
+    service.ensure_demo_data()
+    proposed = orchestrate(service)
+    before_version = proposed.version
+    before_events = repository.list_events(DEMO_CASE_ID)
+
+    policy_path = builtin / "policies" / "substitution-feasibility.json"
+    policy = json.loads(policy_path.read_text())
+    policy["title"] = f"{policy['title']}（已变更）"
+    policy_path.write_text(json.dumps(policy, ensure_ascii=False))
+    service.capabilities = CapabilityRegistry.from_directories(builtin, None)
+
+    with pytest.raises(InvalidTransitionError, match="重新生成 Manifest"):
+        service.approve_manifest(
+            DEMO_CASE_ID,
+            ["PATH-01"],
+            actor=OWNER_ACTOR,
+            role=OWNER_ROLE,
+        )
+
+    unchanged = service.get_case(DEMO_CASE_ID)
+    assert unchanged.version == before_version
+    assert unchanged.phase is OrchestrationPhase.MANIFEST_REVIEW
+    assert unchanged.path_attempts == []
+    assert unchanged.commitment_nodes == []
+    assert repository.list_events(DEMO_CASE_ID) == before_events
+
+
+def test_path_execution_fails_without_mutation_when_skill_reference_changes(
+    tmp_path: Path,
+) -> None:
+    builtin = tmp_path / "builtin"
+    shutil.copytree(DEFAULT_BUILTIN_ROOT, builtin)
+    repository = CaseRepository(tmp_path / "test.db")
+    service = CaseService(
+        repository,
+        capabilities=CapabilityRegistry.from_directories(builtin, None),
+        planner=DeterministicPlannerAdapter(),
+    )
+    service.ensure_demo_data()
+    orchestrate(service)
+    approved = service.approve_manifest(
+        DEMO_CASE_ID,
+        ["PATH-01"],
+        actor=OWNER_ACTOR,
+        role=OWNER_ROLE,
+    )
+    before_version = approved.version
+    before_events = repository.list_events(DEMO_CASE_ID)
+
+    skill_path = builtin / "skills" / "material-substitution-analysis" / "SKILL.md"
+    skill_path.write_text(f"{skill_path.read_text()}\n新增分析说明。\n")
+    service.capabilities = CapabilityRegistry.from_directories(builtin, None)
+
+    with pytest.raises(PathAgentError, match="重新生成 Manifest"):
+        asyncio.run(service.execute_path(
+            DEMO_CASE_ID,
+            "PATH-01",
+            actor=OWNER_ACTOR,
+            role=OWNER_ROLE,
+        ))
+
+    unchanged = service.get_case(DEMO_CASE_ID)
+    assert unchanged.version == before_version
+    assert unchanged.path_attempts[0].solution_revision is None
+    assert repository.list_events(DEMO_CASE_ID) == before_events
+
+
+def test_orchestrator_knowledge_is_not_duplicated_into_paths(tmp_path: Path) -> None:
+    builtin = tmp_path / "builtin"
+    shutil.copytree(DEFAULT_BUILTIN_ROOT, builtin)
+    (builtin / "knowledge" / "path-prioritization.json").write_text(json.dumps({
+        "schema_version": 1,
+        "id": "KNOW-PATH-PRIORITY-1",
+        "version": "1.0.0",
+        "title": "Path 选择与排序知识",
+        "knowledge_type": "planning_guidance",
+        "selector": {"case_type": ["ORDER_DELIVERY_RISK"]},
+        "source": {"type": "reviewed_guidance", "reviewed_by": "供应链知识管理员"},
+        "confidence": "high",
+        "content": {"summary": "选择与排序 Path 时先评估缺口覆盖和时效。", "observations": []},
+    }, ensure_ascii=False))
+    service = CaseService(
+        CaseRepository(tmp_path / "test.db"),
+        capabilities=CapabilityRegistry.from_directories(builtin, None),
+        planner=DeterministicPlannerAdapter(),
+    )
+    service.ensure_demo_data()
+
+    manifest = orchestrate(service).manifest
+
+    assert [item.id for item in manifest.knowledge] == ["KNOW-PATH-PRIORITY-1"]
+    assert all(
+        "KNOW-PATH-PRIORITY-1" not in {item.id for item in path.knowledge}
+        for path in manifest.paths
+    )
 
 
 def test_orchestration_skill_paths_are_partitioned_by_case_type(tmp_path: Path) -> None:
@@ -377,6 +567,30 @@ def test_manifest_http_endpoints_enforce_owner_boundary(client) -> None:
 
     # The same endpoints succeed for the Owner.
     assert client.get(f"/api/cases/{DEMO_CASE_ID}/manifest", params=owner).status_code == 200
+
+
+def test_owner_can_download_manifest_as_yaml(client) -> None:
+    owner = {"actor": OWNER_ACTOR, "role": OWNER_ROLE}
+    response = client.post(
+        f"/api/cases/{DEMO_CASE_ID}/orchestrate",
+        json=owner,
+    )
+    assert response.status_code == 200
+
+    yaml_response = client.get(
+        f"/api/cases/{DEMO_CASE_ID}/manifest.yaml",
+        params=owner,
+    )
+
+    assert yaml_response.status_code == 200
+    assert yaml_response.headers["content-type"].startswith("application/yaml")
+    assert "attachment;" in yaml_response.headers["content-disposition"]
+    assert Manifest.from_yaml(yaml_response.text).id == "MAN-CM-2026-014-1"
+    forbidden = client.get(
+        f"/api/cases/{DEMO_CASE_ID}/manifest.yaml",
+        params={"actor": "王淼", "role": "主计划"},
+    )
+    assert forbidden.status_code == 403
     trace = client.get(
         f"/api/cases/{DEMO_CASE_ID}/agent-runs",
         params={**owner, "agent_type": "orchestrator"},
@@ -609,28 +823,24 @@ def test_commitment_rejection_ends_path_and_invalidates_open_nodes(tmp_path: Pat
     assert service.get_case_timeline("CM-2026-014")[-1]["event_type"] == "commitment.rejected"
 
 
-def test_demo_manifest_freezes_resolved_capabilities(tmp_path: Path) -> None:
+def test_demo_manifest_freezes_verified_capability_references(tmp_path: Path) -> None:
     service = make_service(tmp_path)
     orchestrate(service)
     case = service.get_case("CM-2026-014")
-    snapshot = case.manifest.capability_snapshots["PATH-01"]
-    assert snapshot is not None
-    assert {item["id"] for item in snapshot["asset_payloads"]["policies"]} == {"POL-SUBSTITUTION-3", "POL-CUSTOMER-2"}
-    assert {item["id"] for item in snapshot["asset_payloads"]["skills"]} == {
+    path = case.manifest.paths[0]
+    assert {item.id for item in path.policies} == {"POL-SUBSTITUTION-3", "POL-CUSTOMER-2"}
+    assert {item.id for item in path.skills} == {
         "material-substitution-analysis",
         "material-substitution-engineering-review",
         "material-substitution-master-planning-review",
         "material-substitution-supply-manager-review",
-        "shortage-response-planning",
     }
-    assert [item["id"] for item in snapshot["asset_payloads"]["knowledge"]] == ["KNOW-2025-041"]
-    assert all(
-        item["resolved_ref"]["digest"].startswith("sha256:")
-        for item in snapshot["asset_payloads"]["policies"]
-    )
+    assert [item.id for item in path.knowledge] == ["KNOW-2025-041"]
+    assert all(item.digest.startswith("sha256:") for item in path.policies)
     assert "path_inputs" not in case.business_payload
+    capabilities = service.get_case_capabilities("CM-2026-014", "PATH-01")
     base_skill = next(
-        item for item in snapshot["asset_payloads"]["skills"]
+        item for item in capabilities["assets"]["skills"]
         if item["id"] == "material-substitution-analysis"
     )
     assert [item["id"] for item in base_skill["path_options"]] == ["A", "B"]
@@ -641,7 +851,7 @@ def test_demo_manifest_freezes_resolved_capabilities(tmp_path: Path) -> None:
     ]
     role_contracts = {
         item["role"]: item["review_dimension"]
-        for item in snapshot["compiled_policy"]["commitments"]
+        for item in capabilities["snapshot"]["compiled_policy"]["commitments"]
     }
     assert role_contracts == {
         "研发": "技术可行性",
@@ -867,8 +1077,8 @@ def test_reset_is_scoped_to_known_dataset(tmp_path: Path) -> None:
 class _InventingPlanner:
     async def propose(self, context, candidates, trace):
         trace("planner.response", "COMPLETED", "test response", {"invented": True})
-        return ManifestDraftResult(
-            paths=(PlannedPath("InventedByModel", "unsupported"),),
+        return PlannerOutput(
+            paths=(PlannerPath(definition="InventedByModel", rationale="不受支持"),),
             planner_profile="test/inventing",
         )
 
@@ -876,8 +1086,8 @@ class _InventingPlanner:
 class _OmittingPlanner:
     async def propose(self, context, candidates, trace):
         candidate = candidates[0]
-        return ManifestDraftResult(
-            paths=(PlannedPath(candidate.definition, "only one"),),
+        return PlannerOutput(
+            paths=(PlannerPath(definition=candidate["definition"], rationale="只返回一条"),),
             planner_profile="test/omitting",
         )
 
@@ -888,9 +1098,12 @@ class _AllMatchedSkillPathsPlanner:
 
     async def propose(self, context, candidates, trace):
         self.candidates = candidates
-        return ManifestDraftResult(
+        return PlannerOutput(
             paths=tuple(
-                PlannedPath(candidate.definition, f"reason for {candidate.definition}")
+                PlannerPath(
+                    definition=candidate["definition"],
+                    rationale=f"{candidate['definition']} 的候选能力与当前 Case 匹配",
+                )
                 for candidate in candidates
             ),
             planner_profile="test/all-matched-skill-paths",
@@ -929,15 +1142,14 @@ def test_skill_declares_three_candidates_and_manifest_supports_all_paths(tmp_pat
     case = orchestrate(service)
 
     expected_definitions = ["MaterialSubstitution", "SupplyExpediting", "OrderSplit"]
-    assert [candidate.definition for candidate in planner.candidates] == expected_definitions
+    assert [candidate["definition"] for candidate in planner.candidates] == expected_definitions
     assert [path.definition for path in case.manifest.paths] == expected_definitions
-    assert set(case.manifest.capability_snapshots) == {"PATH-01", "PATH-02", "PATH-03"}
+    assert {path.id for path in case.manifest.paths} == {"PATH-01", "PATH-02", "PATH-03"}
     assert {
-        item["id"]
-        for snapshot in case.manifest.capability_snapshots.values()
-        for item in snapshot["asset_payloads"]["skills"]
+        item.id
+        for path in case.manifest.paths
+        for item in path.skills
     } == {
-        "shortage-response-planning",
         "material-substitution-analysis",
         "material-substitution-engineering-review",
         "material-substitution-master-planning-review",
@@ -950,7 +1162,10 @@ def test_skill_declares_three_candidates_and_manifest_supports_all_paths(tmp_pat
         "CM-2026-014", actor=OWNER_ACTOR, role=OWNER_ROLE
     )
     assert [attempt.path_id for attempt in approved.path_attempts] == ["PATH-01", "PATH-02", "PATH-03"]
-    assert [path.title for path in approved.manifest.paths] == [
+    owner_view = service.get_case_view(
+        "CM-2026-014", actor=OWNER_ACTOR, role=OWNER_ROLE
+    )
+    assert [path["title"] for path in owner_view["workflow_paths"]] == [
         "物料替代", "供应提拉", "订单拆分"
     ]
     assert {node.path_id for node in approved.commitment_nodes} == {"PATH-01", "PATH-02", "PATH-03"}
@@ -961,16 +1176,16 @@ def test_skill_declares_three_candidates_and_manifest_supports_all_paths(tmp_pat
         "SPLIT-PLAN", "SPLIT-CUSTOMER"
     }
     expediting_reports = {
-        (item["role"], item["review_dimension"])
-        for item in case.manifest.capability_snapshots["PATH-02"]["compiled_policy"]["commitments"]
+        (node.role, node.review_dimension)
+        for node in approved.commitment_nodes if node.path_id == "PATH-02"
     }
     assert expediting_reports == {
         ("采购与供应协同", "供应商产能与供应日期"),
         ("物流", "运输与到货日期"),
     }
     split_reports = {
-        (item["role"], item["review_dimension"])
-        for item in case.manifest.capability_snapshots["PATH-03"]["compiled_policy"]["commitments"]
+        (node.role, node.review_dimension)
+        for node in approved.commitment_nodes if node.path_id == "PATH-03"
     }
     assert split_reports == {
         ("主计划", "可用数量与交付批次"),
@@ -996,8 +1211,7 @@ def test_multi_path_exploration_finishes_only_after_every_solution_revision(tmp_
         ))
         attempt = next(item for item in case.path_attempts if item.path_id == path_id)
         expected_roles = {
-            item["role"]
-            for item in case.manifest.capability_snapshots[path_id]["compiled_policy"]["commitments"]
+            node.role for node in case.commitment_nodes if node.path_id == path_id
         }
         assert {item["role"] for item in attempt.solution_revision["role_reports"]} == expected_roles
         assert case.phase is OrchestrationPhase.PATH_EXPLORATION
@@ -1343,7 +1557,7 @@ def test_reducing_skill_declared_paths_reduces_manifest_candidates(tmp_path: Pat
 
     case = orchestrate(service)
 
-    assert [candidate.definition for candidate in planner.candidates] == ["MaterialSubstitution"]
+    assert [candidate["definition"] for candidate in planner.candidates] == ["MaterialSubstitution"]
     assert [path.definition for path in case.manifest.paths] == ["MaterialSubstitution"]
 
 
@@ -1437,18 +1651,10 @@ def test_openai_compatible_adapter_accepts_custom_provider_configuration() -> No
                 reasoning_effort="max",
                 http_client=client,
             )
-            from agentic_cm.orchestrator import PlanningCandidate, PlanningContext
             return await adapter.propose(
-                PlanningContext("CM-1", 1, "延期", "关键物料延期", {}, {}, None),
-                (PlanningCandidate(
-                    "MaterialSubstitution", "物料替代", "desc",
-                    ("POL-1",), ("skill-1",), (), ("SUPPLY",),
-                    ({"id": "skill-1", "description": "desc", "instructions_markdown": "guide"},),
-                ), PlanningCandidate(
-                    "OrderSplit", "订单拆分", "desc",
-                    ("POL-2",), ("skill-1",), (), ("SPLIT",),
-                    ({"id": "skill-1", "description": "desc", "instructions_markdown": "guide"},),
-                )),
+                planner_context(),
+                (planning_candidate("MaterialSubstitution", "物料替代"),
+                 planning_candidate("OrderSplit", "订单拆分")),
                 lambda *args, **kwargs: trace_events.append((args, kwargs)),
             )
 
@@ -1461,15 +1667,16 @@ def test_openai_compatible_adapter_accepts_custom_provider_configuration() -> No
     assert observed["payload"]["response_format"] == {"type": "json_object"}
     assert observed["payload"]["thinking"] == {"type": "enabled"}
     assert observed["payload"]["reasoning_effort"] == "max"
-    planner_context = json.loads(observed["payload"]["messages"][1]["content"])
-    assert set(planner_context) == {"case", "candidates", "skill_guidance"}
-    assert len(planner_context["skill_guidance"]) == 1
+    parsed_planner_context = json.loads(observed["payload"]["messages"][1]["content"])
+    assert set(parsed_planner_context) == {"case", "candidates", "skill_guidance", "knowledge"}
+    assert parsed_planner_context["knowledge"] == []
+    assert len(parsed_planner_context["skill_guidance"]) == 1
     assert all(
         set(candidate) == {"definition", "title", "description"}
-        for candidate in planner_context["candidates"]
+        for candidate in parsed_planner_context["candidates"]
     )
-    assert "policy_ids" not in json.dumps(planner_context)
-    assert "mandatory_commitment_ids" not in json.dumps(planner_context)
+    assert "policy_ids" not in json.dumps(parsed_planner_context)
+    assert "mandatory_commitment_ids" not in json.dumps(parsed_planner_context)
     assert "secret-key" not in json.dumps(trace_events)
     request_trace = next(args for args, _ in trace_events if args[0] == "planner.request")
     assert request_trace[3]["authentication"] == {
@@ -1505,14 +1712,9 @@ def test_openai_compatible_adapter_repairs_pydantic_schema_failure_once() -> Non
                 base_url="https://gateway.example/v1",
                 http_client=http_client,
             )
-            from agentic_cm.orchestrator import PlanningCandidate, PlanningContext
             return await adapter.propose(
-                PlanningContext("CM-1", 1, "延期", "关键物料延期", {}, {}, None),
-                (PlanningCandidate(
-                    "MaterialSubstitution", "物料替代", "desc",
-                    ("POL-1",), ("skill-1",), (), ("SUPPLY",),
-                    ({"id": "skill-1", "description": "desc", "instructions_markdown": "guide"},),
-                ),),
+                planner_context(),
+                (planning_candidate("MaterialSubstitution", "物料替代"),),
                 lambda *args, **kwargs: trace_events.append((args, kwargs)),
             )
 
@@ -1551,17 +1753,12 @@ def test_openai_compatible_planner_retries_one_transient_connection_failure() ->
                 base_url="https://gateway.example/v1",
                 http_client=http_client,
             )
-            from agentic_cm.orchestrator import PlanningCandidate, PlanningContext
             return await adapter.propose(
-                PlanningContext(
-                    "CM-1", 2, "延期", "关键物料延期", {}, {},
-                    {"revision": 2, "author": "陈澄", "role": "订单统筹经理", "content": "探索一下提拉看看"},
-                ),
-                (PlanningCandidate(
-                    "SupplyExpediting", "供应提拉", "desc",
-                    ("POL-1",), ("skill-1",), (), ("EXPEDITE-SUPPLY",),
-                    ({"id": "skill-1", "description": "desc", "instructions_markdown": "guide"},),
-                ),),
+                planner_context({
+                    "revision": 2, "author": "陈澄", "role": "订单统筹经理",
+                    "content": "探索一下提拉看看",
+                }) | {"case_version": 2},
+                (planning_candidate("SupplyExpediting", "供应提拉"),),
                 lambda *args, **kwargs: trace_events.append((args, kwargs)),
             )
 
@@ -1576,7 +1773,7 @@ def test_openai_compatible_planner_retries_one_transient_connection_failure() ->
 
 def test_orchestrator_trace_persists_each_governed_step(tmp_path: Path) -> None:
     service = make_service(tmp_path)
-    orchestrate(service)
+    case = orchestrate(service)
 
     runs = service.get_agent_runs(
         "CM-2026-014",
@@ -1611,6 +1808,8 @@ def test_orchestrator_trace_persists_each_governed_step(tmp_path: Path) -> None:
     assert [item["definition"] for item in request_event["details"]["candidates"]] == [
         "MaterialSubstitution", "SupplyExpediting", "OrderSplit"
     ]
+    compose_event = next(event for event in run["events"] if event["step"] == "manifest.compose")
+    assert compose_event["details"]["manifest_yaml"] == case.manifest.to_yaml()
 
 
 def test_failed_orchestrator_trace_is_kept_without_business_mutation(tmp_path: Path) -> None:
@@ -1855,13 +2054,15 @@ def test_openai_compatible_path_agent_uses_manifest_assembled_context(tmp_path: 
     assert "authorized_option_ids" not in request_context
     assert "tools" not in request_context["execution_skills"][0]
     assert "path_options" not in request_context["execution_skills"][0]
-    frozen_skills = case.manifest.capability_snapshots["PATH-01"]["asset_payloads"]["skills"]
     frozen_execution_skill = next(
-        item for item in frozen_skills if item["id"] == "material-substitution-analysis"
+        item for item in case.manifest.paths[0].skills
+        if item.id == "material-substitution-analysis"
     )
-    assert frozen_execution_skill["tools"]
-    assert frozen_execution_skill["path_options"]
-    assert case.manifest.capability_snapshots["PATH-01"]["compiled_policy"]["commitments"][0]["id"] == "SUPPLY"
+    assert set(frozen_execution_skill.model_dump()) == {"id", "version", "digest"}
+    assert all(
+        set(item.model_dump()) == {"id", "version", "digest"}
+        for item in case.manifest.paths[0].policies
+    )
     assert "path-secret" not in json.dumps(observed["payload"])
 
 

@@ -63,6 +63,24 @@ export function apiGet<T>(
   return request<T>(path, { signal }, query);
 }
 
+export async function apiGetText(
+  path: string,
+  query?: Record<string, string | undefined>,
+  signal?: AbortSignal,
+): Promise<string> {
+  const response = await fetch(url(path, query), { signal });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    const detail = body && typeof body.detail === "string" ? body.detail : undefined;
+    throw new ApiError(response.status, path, detail);
+  }
+  return response.text();
+}
+
+export function apiUrl(path: string, query?: Record<string, string | undefined>): string {
+  return url(path, query);
+}
+
 export function apiPost<T>(
   path: string,
   body?: unknown,

@@ -5,7 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import AppSidebar from "../../app-sidebar";
-import { apiGet, apiPost, isAbort } from "../../lib/api";
+import { apiGet, apiGetText, apiPost, apiUrl, isAbort } from "../../lib/api";
 import { botAvatars, demoIdentities, personAvatars } from "../../lib/identities";
 import { formatQuantity, formatThreadTime } from "../../lib/format";
 import "./case-detail.css";
@@ -53,22 +53,24 @@ type CapabilityDetails = {
   };
 };
 
+type ManifestAssetRef = {
+  id: string;
+  version: string;
+  digest: string;
+};
+
 type ManifestPath = {
   id: string;
   definition: string;
   title: string;
   rationale: string;
   selected: boolean;
+  policies: ManifestAssetRef[];
+  skills: ManifestAssetRef[];
+  knowledge: ManifestAssetRef[];
 };
 
-type CapabilitySnapshot = {
-  compiled_policy: { commitments: Array<{ id: string; depends_on?: string[] }> };
-  asset_payloads: {
-    policies: CapabilityAsset[];
-    skills: CapabilityAsset[];
-    knowledge: CapabilityAsset[];
-  };
-};
+type ManifestPathPayload = Omit<ManifestPath, "title"> & { title?: string };
 
 type CommitmentNode = {
   id: string;
@@ -171,8 +173,8 @@ type CasePhase =
 type CaseManifest = {
   id?: string;
   revision?: number;
-  paths?: ManifestPath[];
-  capability_snapshots?: Record<string, CapabilitySnapshot>;
+  paths?: ManifestPathPayload[];
+  knowledge?: ManifestAssetRef[];
 };
 
 /**
@@ -301,12 +303,12 @@ const aiRunCopy: Record<AiRunKind, { eyebrow: string; title: string; steps: stri
   manifest: {
     eyebrow: "ORCHESTRATOR · LIVE",
     title: "Orchestrator Agent 正在为您组装探索清单",
-    steps: ["读取 Case 事实", "匹配 Policy 与 Skill", "评估候选 Path", "冻结能力快照"],
+    steps: ["读取 Case 事实", "匹配 Policy 与 Skill", "评估候选 Path", "固定能力引用"],
   },
   alternatives: {
     eyebrow: "PATH AGENT · LIVE",
     title: "Path Agent 正在为您推演解决方案",
-    steps: ["装载 Manifest 快照", "运行执行 Skill", "比较收益与风险", "形成角色判断报告"],
+    steps: ["校验 Manifest 引用", "运行执行 Skill", "比较收益与风险", "形成角色判断报告"],
   },
   synthesis: {
     eyebrow: "SYNTHESIS AGENT · LIVE",
@@ -424,6 +426,21 @@ function CapabilityPanel({ details }: { details: CapabilityDetails }) {
   );
 }
 
+function ManifestYamlPanel({ yaml, downloadHref, onCopy }: { yaml: string; downloadHref: string; onCopy: () => void }) {
+  return (
+    <section className="manifestYamlPanel" aria-label="完整 Manifest YAML">
+      <header>
+        <span><strong>完整 Manifest YAML</strong><small>全局 Knowledge 与所有 Path 的 Skill / Policy / Commitment / Knowledge</small></span>
+        <span>
+          <button className="linkButton" onClick={onCopy}>复制 YAML</button>
+          <a className="linkButton" href={downloadHref} download>下载 YAML</a>
+        </span>
+      </header>
+      <pre>{yaml}</pre>
+    </section>
+  );
+}
+
 function AgentTracePanel({ runs, agentType, autoExpand = false }: { runs: AgentRun[]; agentType: "orchestrator" | "path" | "synthesis"; autoExpand?: boolean }) {
   const label = agentType === "orchestrator" ? "ORCHESTRATOR" : agentType === "path" ? "PATH AGENT" : "SYNTHESIS AGENT";
   const typedRuns = runs.filter((run) => run.agent_type === agentType);
@@ -451,8 +468,12 @@ function AgentTracePanel({ runs, agentType, autoExpand = false }: { runs: AgentR
                   <p>{event.summary}</p>
                   {Object.keys(event.details).length > 0 && (
                     <details className="tracePayload">
-                      <summary>查看输入 / 输出详情</summary>
-                      <pre>{JSON.stringify(event.details, null, 2)}</pre>
+                      <summary>{typeof event.details.manifest_yaml === "string" ? "查看完整 Manifest YAML" : "查看输入 / 输出详情"}</summary>
+                      {typeof event.details.manifest_yaml === "string" ? (
+                        <pre>{event.details.manifest_yaml}</pre>
+                      ) : (
+                        <pre>{JSON.stringify(event.details, null, 2)}</pre>
+                      )}
                     </details>
                   )}
                 </div>
@@ -483,9 +504,10 @@ export default function Home() {
   const [message, setMessage] = useState("");
   const [capabilities, setCapabilities] = useState<CapabilityDetails | null>(null);
   const [showCapabilities, setShowCapabilities] = useState(false);
+  const [showManifestYaml, setShowManifestYaml] = useState(false);
+  const [manifestYaml, setManifestYaml] = useState("");
   const [manifestPaths, setManifestPaths] = useState<ManifestPath[]>([]);
   const [manifestVersion, setManifestVersion] = useState<number | null>(null);
-  const [capabilitySnapshots, setCapabilitySnapshots] = useState<Record<string, CapabilitySnapshot>>({});
   const [showApprovedManifest, setShowApprovedManifest] = useState(false);
   const [selectedPathIds, setSelectedPathIds] = useState<string[]>([]);
   const [commitmentNodes, setCommitmentNodes] = useState<CommitmentNode[]>([]);
@@ -551,11 +573,12 @@ export default function Home() {
     setCanViewManifest(false);
     setManifestPaths([]);
     setManifestVersion(null);
-    setCapabilitySnapshots({});
     setShowApprovedManifest(false);
     setSelectedPathIds([]);
     setCapabilities(null);
     setShowCapabilities(false);
+    setShowManifestYaml(false);
+    setManifestYaml("");
     setAgentRuns([]);
     setPathAgentRuns([]);
     setSynthesisAgentRuns([]);
@@ -574,10 +597,13 @@ export default function Home() {
     manifest: CaseManifest | null | undefined,
     workflowPaths: ManifestPath[] = [],
   ) {
-    const paths = manifest?.paths ?? workflowPaths;
+    const workflowById = new Map(workflowPaths.map((path) => [path.id, path]));
+    const paths = (manifest?.paths ?? workflowPaths).map((path) => ({
+      ...path,
+      title: workflowById.get(path.id)?.title ?? path.title ?? path.definition,
+    }));
     setManifestPaths(paths);
     setManifestVersion(manifest?.revision ?? null);
-    setCapabilitySnapshots(manifest?.capability_snapshots ?? {});
     const substitution = paths.find((path) => path.definition === "MaterialSubstitution");
     setSelectedPathIds(substitution ? [substitution.id] : paths.slice(0, 1).map((path) => path.id));
   }
@@ -606,7 +632,7 @@ export default function Home() {
         setCanViewManifest(data.permissions?.can_view_manifest === true);
         loadManifest(data.manifest, data.workflow_paths ?? []);
         if (["PATH_EXPLORATION", "PROFESSIONAL_COMMITMENT", "FINAL_REVIEW"].includes(data.phase)) {
-          setSelectedPathIds((data.manifest?.paths ?? []).filter((path: ManifestPath) => path.selected).map((path: ManifestPath) => path.id));
+          setSelectedPathIds((data.manifest?.paths ?? []).filter((path) => path.selected).map((path) => path.id));
         }
         if (data.permissions?.can_view_manifest === true) {
           Promise.all(["orchestrator", "path", "synthesis"].map((agentType) =>
@@ -703,6 +729,8 @@ export default function Home() {
       setPhase("MANIFEST_REVIEW");
       loadManifest(data.manifest);
       setCapabilities(null);
+      setShowManifestYaml(false);
+      setManifestYaml("");
       await refreshTimeline();
       setMessage("Orchestrator 已根据 Case 与现有能力生成 Manifest，并冻结适用 Policy。 ");
     } catch (error) {
@@ -852,9 +880,10 @@ export default function Home() {
       setPhase("INTAKE");
       setCapabilities(null);
       setShowCapabilities(false);
+      setShowManifestYaml(false);
+      setManifestYaml("");
       setManifestPaths([]);
       setManifestVersion(null);
-      setCapabilitySnapshots({});
       setShowApprovedManifest(false);
       setSelectedPathIds([]);
       setCommitmentNodes([]);
@@ -912,6 +941,37 @@ export default function Home() {
     } catch {
       setShowCapabilities(false);
       setMessage("能力快照读取失败：请确认本地 API 已启动。 ");
+    }
+  }
+
+  async function toggleManifestYaml() {
+    if (showManifestYaml) {
+      setShowManifestYaml(false);
+      return;
+    }
+    setShowManifestYaml(true);
+    if (manifestYaml) return;
+    try {
+      const requestIdentityIndex = identityIndex;
+      const yaml = await apiGetText(
+        `/api/cases/${activeCaseId}/manifest.yaml`,
+        { actor: currentIdentity.name, role: currentIdentity.role },
+      );
+      if (identityIndexRef.current !== requestIdentityIndex) return;
+      setManifestYaml(yaml);
+    } catch {
+      setShowManifestYaml(false);
+      setMessage("Manifest YAML 读取失败：请确认本地 API 已启动。 ");
+    }
+  }
+
+  async function copyManifestYaml() {
+    if (!manifestYaml) return;
+    try {
+      await navigator.clipboard.writeText(manifestYaml);
+      setMessage("完整 Manifest YAML 已复制。 ");
+    } catch {
+      setMessage("复制失败，请直接选择 YAML 文本。 ");
     }
   }
 
@@ -1281,9 +1341,7 @@ export default function Home() {
       <p className="lead">命中的缺料处理 Skill 支持以下三条 Path。Owner 可以选择本轮真正进入探索的 Path。</p>
       <div className="pathChoices">
         {manifestPaths.map((path, index) => {
-          const snapshot = capabilitySnapshots[path.id];
           const selected = selectedPathIds.includes(path.id);
-          const commitments = snapshot?.compiled_policy.commitments ?? [];
           return (
             <article className={`pathCard ${selected ? "selected" : ""}`} key={path.id}>
               <div className="pathHeading">
@@ -1294,20 +1352,25 @@ export default function Home() {
                   <span>{selected ? "本轮探索" : "暂不探索"}</span>
                 </label>
               </div>
-              <h3>{path.title} <span>{path.definition}</span></h3>
+              <h3>{path.title ?? path.definition} <span>{path.definition}</span></h3>
               <p>{path.rationale}</p>
               <div className="pathStats">
-                <span><small>责任节点</small><strong>{commitments.length}</strong></span>
-                <span><small>并行起点</small><strong>{commitments.filter((item) => !(item.depends_on?.length)).length}</strong></span>
-                <span><small>强制 Policy</small><strong>{snapshot?.asset_payloads.policies.length ?? 0}</strong></span>
-                <span><small>命中 Skill</small><strong>{snapshot?.asset_payloads.skills.length ?? 0}</strong></span>
+                <span><small>强制 Policy</small><strong>{path.policies.length}</strong></span>
+                <span><small>命中 Skill</small><strong>{path.skills.length}</strong></span>
+                <span><small>参考 Knowledge</small><strong>{path.knowledge.length}</strong></span>
               </div>
             </article>
           );
         })}
       </div>
-      <button className="linkButton capabilityToggle" onClick={toggleCapabilities}>{showCapabilities ? "收起替代 Path 能力快照 ↑" : "查看替代 Path 能力快照 →"}</button>
-      {showCapabilities && capabilities && <CapabilityPanel details={capabilities} />}
+      <button className="linkButton capabilityToggle" onClick={toggleManifestYaml}>{showManifestYaml ? "收起完整 Manifest YAML ↑" : "查看完整 Manifest YAML →"}</button>
+      {showManifestYaml && manifestYaml && (
+        <ManifestYamlPanel
+          yaml={manifestYaml}
+          onCopy={copyManifestYaml}
+          downloadHref={apiUrl(`/api/cases/${activeCaseId}/manifest.yaml`, { actor: currentIdentity.name, role: currentIdentity.role })}
+        />
+      )}
       <div className="approvalBox">
         <span><strong>批准范围 · 已选 {selectedPathIds.length} 条</strong><small>只为勾选的 Path 创建 PathAttempt，不代表批准最终业务方案。</small></span>
         <button className="primary" disabled={busy || selectedPathIds.length === 0} onClick={approveManifest}>{busy ? "处理中…" : "批准并启动所选 Path"}</button>
@@ -1457,30 +1520,34 @@ export default function Home() {
                             <p className="manifestBoundary">这是批准时冻结的 Manifest，只用于查阅与审计；后续 Path 结果和专业审批不会改写这份材料。</p>
                             <div className="approvedManifestPaths">
                               {manifestPaths.map((path, index) => {
-                                const snapshot = capabilitySnapshots[path.id];
                                 return (
                                   <article className={path.selected ? "selected" : "notSelected"} key={path.id}>
                                     <div>
                                       <span>PATH {String(index + 1).padStart(2, "0")}</span>
                                       <em>{path.selected ? "已批准" : "本轮未选"}</em>
                                     </div>
-                                    <h3>{path.title}</h3>
+                                    <h3>{path.title ?? path.definition}</h3>
                                     <small>{path.id} · {path.definition}</small>
                                     <p>{path.rationale || "Manifest 未记录额外理由。"}</p>
                                     <dl>
-                                      <div><dt>责任节点</dt><dd>{snapshot?.compiled_policy.commitments.length ?? 0}</dd></div>
-                                      <div><dt>Policy</dt><dd>{snapshot?.asset_payloads.policies.length ?? 0}</dd></div>
-                                      <div><dt>Skill</dt><dd>{snapshot?.asset_payloads.skills.length ?? 0}</dd></div>
-                                      <div><dt>Knowledge</dt><dd>{snapshot?.asset_payloads.knowledge.length ?? 0}</dd></div>
+                                      <div><dt>Policy</dt><dd>{path.policies.length}</dd></div>
+                                      <div><dt>Skill</dt><dd>{path.skills.length}</dd></div>
+                                      <div><dt>Knowledge</dt><dd>{path.knowledge.length}</dd></div>
                                     </dl>
                                   </article>
                                 );
                               })}
                             </div>
-                            <button className="linkButton capabilityToggle" onClick={toggleCapabilities}>
-                              {showCapabilities ? "收起完整能力快照 ↑" : "查看完整冻结能力快照 →"}
+                            <button className="linkButton capabilityToggle" onClick={toggleManifestYaml}>
+                              {showManifestYaml ? "收起完整 Manifest YAML ↑" : "查看完整 Manifest YAML →"}
                             </button>
-                            {showCapabilities && capabilities && <CapabilityPanel details={capabilities} />}
+                            {showManifestYaml && manifestYaml && (
+                              <ManifestYamlPanel
+                                yaml={manifestYaml}
+                                onCopy={copyManifestYaml}
+                                downloadHref={apiUrl(`/api/cases/${activeCaseId}/manifest.yaml`, { actor: currentIdentity.name, role: currentIdentity.role })}
+                              />
+                            )}
                           </div>
                         )}
                       </section>

@@ -320,7 +320,12 @@ class SynthesisAgent:
     def __init__(self, adapter: SynthesisAgentAdapter) -> None:
         self.adapter = adapter
 
-    async def run(self, case: Case, trace: AgentTraceSink) -> dict[str, Any]:
+    async def run(
+        self,
+        case: Case,
+        path_titles: dict[str, str],
+        trace: AgentTraceSink,
+    ) -> dict[str, Any]:
         trace("synthesis.eligibility", "STARTED", "检查全部已选 Path 的审批 DAG 是否终态", {
             "case_id": case.id, "case_version": case.version, "phase": case.phase.value
         })
@@ -350,7 +355,7 @@ class SynthesisAgent:
             path_results.append({
                 "path_id": path.id,
                 "definition": path.definition,
-                "title": path.title,
+                "title": path_titles.get(path.definition, path.definition),
                 "status": status,
                 "solution_revision": attempt.solution_revision,
                 "commitments": [asdict(node) for node in nodes],

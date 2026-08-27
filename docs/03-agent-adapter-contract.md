@@ -103,7 +103,7 @@ run(context, tool_provider, event_sink) -> AgentResult
 
 任务类型与返回 schema 至少包括：
 
-- `ORCHESTRATION -> ManifestDraftResult`
+- `ORCHESTRATION -> PlannerOutput`
 - `PATH_RESOLUTION -> PathAgentResult`
 - `CASE_SYNTHESIS -> CaseSynthesisResult`
 
@@ -111,9 +111,9 @@ run(context, tool_provider, event_sink) -> AgentResult
 
 ### 4.1 运行审计上下文与模型上下文分离
 
-当前 OpenAI-compatible Adapter 不再把完整运行审计对象直接序列化给模型。平台先保留可复核的 `PlanningContext + PlanningCandidate[]`、`PathAgentContext` 或 `SynthesisContext`，再在调用边界投影为专用 Prompt DTO：
+当前 OpenAI-compatible Adapter 不再把完整运行审计对象直接序列化给模型。Orchestrator 在调用边界将 Case 和已解析候选一次投影成普通请求字典；Path 与 Synthesis 仍将完整运行上下文投影成窄 Prompt DTO：
 
-- `PlannerPromptContext` 只包含 Case、Path 的 `definition/title/description`，以及跨候选去重后的编排 Skill 指令；Policy、Knowledge 和 Commitment ID 仍留在能力解析 trace 与 Manifest 快照中。
+- Planner 请求字典只包含 Case、Path 的 `definition/title/description`，以及跨候选去重后的编排 Skill 指令；Manifest 仅保存匹配能力的 `id/version/digest`，不再定义重复的 `PlanningCandidate` / `PlannerPromptContext` dataclass。
 - `PathPromptContext` 只包含当前 Case/Path、精简的执行 Skill 指令、建议性 Knowledge、授权选项、已经执行的只读 Tool 结果、角色报告契约和上一版方案；不向模型重复发送完整 Policy、compiled policy、CommitmentDAG、Skill 文件清单、Tool 全量 records 或重复 option ID 列表。
 - `SynthesisPromptContext` 只包含汇总所需的 SolutionRevision 字段、精简 Commitment 状态和授权引用；生成来源、Manifest 回链及平台内部依赖字段仍保存在权威 Artifact 中。
 
@@ -130,7 +130,7 @@ Prompt 投影只减少模型输入，不改变 Manifest 冻结内容、AgentRun 
 - `path_attempt_snapshot`
 - `commitment_dag_snapshot`
 - `capability_bundle_refs`
-- `compiled_policy_constraints`
+- `policy_commitments`
 - `experience_excerpts`
 - `previous_solution_revision`
 - `review_feedback`
@@ -144,9 +144,9 @@ Adapter 不得通过自己的模型或 Tool 绕开上下文权限范围。
 
 ## 6. PathAgentResult
 
-当前最小实现已经落地：`backend/agentic_cm/path_agent.py` 从已批准 Path 的冻结 Manifest 快照组装 `PathAgentContext`，OpenAI-compatible Adapter 通过官方 `openai-python` SDK 请求 `PathAgentResult/v1`，由 Pydantic 生成并解析结构 Schema；平台继续负责 option 引用、角色报告和 Manifest 授权范围等业务校验，全部通过后才持久化 `SolutionRevision`。模型请求失败或输出非法时只保留 `agent_type=path` 的审计 trace，不改变 Case、PathAttempt、Commitment 或业务事件。
+当前最小实现已经落地：`backend/agentic_cm/path_agent.py` 消费已批准 `ManifestPath` 的 `skills / policies / knowledge` 引用，平台先按 `id/version/digest` 精确解析目标 Path 能力，再组装 `PathAgentContext`。OpenAI-compatible Adapter 通过官方 `openai-python` SDK 请求 `PathAgentResult/v1`，由 Pydantic 生成并解析结构 Schema；平台继续负责 option 引用、角色报告和 Manifest 授权范围等业务校验，全部通过后才持久化 `SolutionRevision`。引用失配、模型请求失败或输出非法时只保留 `agent_type=path` 的审计 trace，不改变 Case、PathAttempt、Commitment 或业务事件。
 
-首版稳定外层字段为：`summary`、`options[]`、`recommendation`、`evidence_gaps`、`role_reports[]`。平台只补入 revision 和 adapter profile；Path、Manifest 与强制 Commitment 关系由父级对象和冻结快照提供，不在 SolutionRevision 重复保存。候选与只读模拟 Tool 来自冻结 Skill；角色报告契约来自冻结 Policy Commitments。框架按每条 Path 实际命中的 Policy 执行角色/维度、统一的 `{role}维度：` 句首和完整句校验，不复制 A/B 或固定角色的领域判断。
+首版稳定外层字段为：`summary`、`options[]`、`recommendation`、`evidence_gaps`、`role_reports[]`。平台只补入 revision 和 adapter profile；Path、Manifest 与强制 Commitment 关系由父级对象和已验证能力引用提供，不在 SolutionRevision 重复保存。候选与只读模拟 Tool 来自解析后的 Skill；角色报告契约来自解析后 Policy 编译出的 Commitments。框架按每条 Path 实际命中的 Policy 执行角色/维度、统一的 `{role}维度：` 句首和完整句校验，不复制 A/B 或固定角色的领域判断。
 
 建议结构：
 
@@ -259,6 +259,6 @@ Agent 输出不合法时：
 
 ## 13. 当前已实现的 Orchestrator 切片
 
-当前代码已实现 `DeterministicPlannerAdapter` 与 `OpenAICompatiblePlannerAdapter`。两者消费同一 `PlanningContext + PlanningCandidate[]`，只返回候选 Path ID 与 rationale；OpenAI-compatible 传输与错误映射集中在共享 SDK 封装，Pydantic 负责结构校验，Policy 匹配、Policy 编译、Manifest 冻结、Case 状态推进与事件持久化仍留在平台内核。详见 [Orchestrator 实现](06-orchestrator.md)。
+当前代码已实现 `DeterministicPlannerAdapter` 与 `OpenAICompatiblePlannerAdapter`。两者消费同一普通请求映射，只返回经 Pydantic 校验的候选 Path ID、rationale 与 Planner profile；OpenAI-compatible 传输与错误映射集中在共享 SDK 封装。Policy 匹配与排序校验、Path 自包含 Manifest、Case 状态推进与事件持久化仍留在平台内核。详见 [Orchestrator 实现](06-orchestrator.md)。
 
 这比概念性的通用 `run(context, tool_provider, event_sink)` 更窄，是 Orchestration 任务的首个可运行子协议。后续若用 LangGraph、Deep Agents 或其他 Runtime，只允许在该 Adapter 内实现这个协议，不得把框架状态提升为 Case 权威状态。

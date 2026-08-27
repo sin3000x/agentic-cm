@@ -265,18 +265,59 @@ class CaseRepository:
         manifest_data = data.get("manifest")
         manifest = None
         if manifest_data:
-            paths = tuple(ManifestPath(**item) for item in manifest_data["paths"])
             snapshots = manifest_data.get("capability_snapshots", {})
-            if not snapshots and manifest_data.get("capability_snapshot") and paths:
-                snapshots = {paths[0].id: manifest_data["capability_snapshot"]}
+            raw_paths = manifest_data["paths"]
+            if not snapshots and manifest_data.get("capability_snapshot") and raw_paths:
+                snapshots = {raw_paths[0]["id"]: manifest_data["capability_snapshot"]}
+            paths = []
+            for raw_path in raw_paths:
+                path_payload = dict(raw_path)
+                snapshot = snapshots.get(path_payload["id"])
+                if snapshot and "skills" not in path_payload:
+                    normalized = CaseRepository._normalize_capability_snapshot(snapshot)
+                    payloads = normalized["asset_payloads"]
+                    path_payload["skills"] = [
+                        skill for skill in payloads.get("skills", [])
+                        if path_payload["definition"]
+                        in (skill.get("selector") or {}).get("path_definition", [])
+                    ]
+                    path_payload["knowledge"] = payloads.get("knowledge", [])
+                    policies = [
+                        CaseRepository._normalize_manifest_policy(policy)
+                        for policy in payloads.get("policies", [])
+                    ]
+                    commitment_order = {
+                        item["id"]: index
+                        for index, item in enumerate(
+                            normalized.get("compiled_policy", {}).get("commitments", [])
+                        )
+                    }
+                    if commitment_order:
+                        for policy in policies:
+                            policy["commitments"].sort(
+                                key=lambda item: commitment_order[item["id"]]
+                            )
+                        policies.sort(
+                            key=lambda policy: min(
+                                commitment_order[item["id"]]
+                                for item in policy["commitments"]
+                            )
+                        )
+                    path_payload["policies"] = policies
+                path_payload.pop("title", None)
+                for group in ("skills", "policies", "knowledge"):
+                    path_payload[group] = [
+                        CaseRepository._manifest_asset_ref(item)
+                        for item in path_payload.get(group, [])
+                    ]
+                paths.append(ManifestPath.model_validate(path_payload))
             manifest = Manifest(
                 id=manifest_data["id"], revision=manifest_data["revision"],
-                paths=paths,
-                capability_snapshots={
-                    path_id: CaseRepository._normalize_capability_snapshot(snapshot)
-                    for path_id, snapshot in snapshots.items()
-                },
-                planner_profile=manifest_data.get("planner_profile", "unknown"),
+                paths=tuple(paths),
+                knowledge=tuple(
+                    CaseRepository._manifest_asset_ref(item)
+                    for item in manifest_data.get("knowledge", [])
+                ),
                 generated_from_case_version=manifest_data.get("generated_from_case_version", 0),
             )
         nodes = [
@@ -307,6 +348,20 @@ class CaseRepository:
             version=data["version"],
             created_at=data.get("created_at", data["updated_at"]), updated_at=data["updated_at"],
         )
+
+    @staticmethod
+    def _manifest_asset_ref(payload: dict[str, Any]) -> dict[str, str]:
+        resolved = payload.get("resolved_ref")
+        ref = resolved if isinstance(resolved, dict) else payload
+        return {
+            "id": str(ref.get("id") or payload.get("id") or "legacy-unverified"),
+            "version": str(
+                ref.get("version") or payload.get("version") or "legacy-unverified"
+            ),
+            "digest": str(
+                ref.get("digest") or payload.get("digest") or "legacy-unverified"
+            ),
+        }
 
     @staticmethod
     def _normalize_path_attempt(value: Any) -> PathAttempt:
@@ -363,6 +418,13 @@ class CaseRepository:
             "compiled_policy": compiled,
             "asset_payloads": payloads,
         }
+
+    @staticmethod
+    def _normalize_manifest_policy(policy: dict[str, Any]) -> dict[str, Any]:
+        normalized = json.loads(json.dumps(policy, ensure_ascii=False))
+        requirements = normalized.pop("requirements", {})
+        normalized["commitments"] = list(requirements.get("commitments", []))
+        return normalized
 
     @staticmethod
     def _normalize_owner_decision(value: Any) -> dict[str, Any] | None:

@@ -4,7 +4,11 @@ import asyncio
 from dataclasses import asdict, replace
 
 from .agent_run import agent_run
-from .capabilities import CapabilityRegistry, default_registry
+from .capabilities import (
+    CapabilityConfigurationError,
+    CapabilityRegistry,
+    default_registry,
+)
 from .config import (
     path_execution_mode_from_environment,
     path_max_concurrency_from_environment,
@@ -23,7 +27,12 @@ from .domain import (
     utc_now,
 )
 from .orchestrator import Orchestrator, PlannerAdapter, planner_from_environment
-from .path_agent import PathAgent, PathAgentAdapter, path_agent_from_environment
+from .path_agent import (
+    PathAgent,
+    PathAgentAdapter,
+    PathAgentError,
+    path_agent_from_environment,
+)
 from .repository import CaseRepository
 from .synthesis_agent import (
     SynthesisAgent,
@@ -183,6 +192,17 @@ class CaseService:
         if not self._is_case_owner(case, actor=actor, role=role):
             raise AuthorizationError("Only the Case Owner can view or approve the Manifest")
 
+    def _path_titles(self, case) -> dict[str, str]:
+        case_type = case.classification.get("case_type")
+        if not case_type:
+            return {}
+        return {
+            definition.id: definition.title
+            for definition in self.capabilities.resolve_path_candidates(
+                {"case_type": case_type}
+            )
+        }
+
     def get_case_view(
         self,
         case_id: str,
@@ -193,21 +213,25 @@ class CaseService:
         case = self.get_case(case_id)
         can_view_manifest = self._is_case_owner(case, actor=actor, role=role)
         view = case.to_dict()
+        path_titles = self._path_titles(case)
         view["workflow_paths"] = [
             {
                 "id": path.id,
                 "definition": path.definition,
-                "title": path.title,
+                "title": path_titles.get(path.definition, path.definition),
                 "selected": True,
                 "rationale": "",
             }
             for path in (
                 case.manifest.paths
-                if case.manifest and case.phase in {
-                    OrchestrationPhase.PATH_EXPLORATION,
-                    OrchestrationPhase.PROFESSIONAL_COMMITMENT,
-                    OrchestrationPhase.FINAL_REVIEW,
-                }
+                if case.manifest and (
+                    can_view_manifest
+                    or case.phase in {
+                        OrchestrationPhase.PATH_EXPLORATION,
+                        OrchestrationPhase.PROFESSIONAL_COMMITMENT,
+                        OrchestrationPhase.FINAL_REVIEW,
+                    }
+                )
                 else ()
             )
             if path.selected
@@ -298,7 +322,9 @@ class CaseService:
             started_summary="Orchestrator AgentRun 已启动",
             failed_summary="Orchestrator AgentRun 失败；Case 权威状态未修改",
         ) as run:
-            manifest = await self.orchestrator.compose_manifest(case, run.trace)
+            manifest, planner_profile = await self.orchestrator.compose_manifest(
+                case, run.trace
+            )
             case.manifest = manifest
             case.phase = OrchestrationPhase.MANIFEST_REVIEW
             case.touch()
@@ -308,7 +334,7 @@ class CaseService:
                 {
                     "manifest_id": manifest.id,
                     "revision": manifest.revision,
-                    "planner_profile": manifest.planner_profile,
+                    "planner_profile": planner_profile,
                     "path_definitions": [path.definition for path in manifest.paths],
                 },
             )
@@ -319,7 +345,7 @@ class CaseService:
                     "case_version": case.version,
                     "phase": case.phase.value,
                 },
-                adapter_profile=manifest.planner_profile,
+                adapter_profile=planner_profile,
             )
         return case
 
@@ -343,25 +369,35 @@ class CaseService:
             if unknown:
                 raise InvalidTransitionError(f"Unknown Manifest Path ids: {sorted(unknown)}")
             selected = set(selected_path_ids)
-            case.manifest = replace(
-                case.manifest,
-                paths=tuple(replace(path, selected=path.id in selected) for path in case.manifest.paths),
-            )
-        selected_paths = [path for path in case.manifest.paths if path.selected]
+        else:
+            selected = {path.id for path in case.manifest.paths if path.selected}
+        selected_paths = [path for path in case.manifest.paths if path.id in selected]
         if not selected_paths:
             raise InvalidTransitionError("At least one Path must remain selected")
 
-        snapshots = dict(case.manifest.capability_snapshots)
+        try:
+            resolutions = {
+                path.id: self.capabilities.resolve_manifest_path(
+                    path, case.classification["case_type"]
+                )
+                for path in selected_paths
+            }
+        except CapabilityConfigurationError as exc:
+            raise InvalidTransitionError(
+                f"Manifest 能力引用已失效，请重新生成 Manifest：{exc}"
+            ) from exc
         for path in selected_paths:
-            if path.id not in snapshots:
-                snapshots[path.id] = self._resolve_case_capabilities(case, path.id)
-            if not snapshots[path.id]["compiled_policy"].get("commitments"):
+            if not resolutions[path.id].compiled_policy.get("commitments"):
                 raise InvalidTransitionError(f"No mandatory commitments were compiled for Path {path.id}")
-        case.manifest = replace(
-            case.manifest,
-            capability_snapshots=snapshots,
-        )
 
+        case.manifest = case.manifest.model_copy(
+            update={
+                "paths": tuple(
+                    path.model_copy(update={"selected": path.id in selected})
+                    for path in case.manifest.paths
+                )
+            },
+        )
         case.phase = OrchestrationPhase.PATH_EXPLORATION
         attempts: list[PathAttempt] = []
         nodes: list[CommitmentNode] = []
@@ -376,7 +412,7 @@ class CaseService:
                     depends_on=tuple(item.get("depends_on", [])),
                     path_id=path.id,
                 )
-                for item in snapshots[path.id]["compiled_policy"]["commitments"]
+                for item in resolutions[path.id].compiled_policy["commitments"]
             )
         case.path_attempts = attempts
         case.commitment_nodes = nodes
@@ -462,12 +498,58 @@ class CaseService:
             failed_summary="Path AgentRun 失败；Case 与 SolutionRevision 未修改",
             started_details={"path_id": path_id},
         ) as run:
+            path = next(
+                (
+                    item for item in case_snapshot.manifest.paths
+                    if item.id == path_id and item.selected
+                ),
+                None,
+            ) if case_snapshot.manifest else None
+            if path is None:
+                raise PathAgentError(f"Unknown selected Manifest Path: {path_id}")
+            try:
+                resolution = self.capabilities.resolve_manifest_path(
+                    path, case_snapshot.classification["case_type"]
+                )
+            except CapabilityConfigurationError as exc:
+                run.trace(
+                    "capabilities.resolve",
+                    "FAILED",
+                    "Manifest 能力引用校验失败",
+                    {
+                        "path_id": path_id,
+                        "skills": [item.model_dump() for item in path.skills],
+                        "policies": [item.model_dump() for item in path.policies],
+                        "knowledge": [item.model_dump() for item in path.knowledge],
+                        "error": str(exc),
+                    },
+                )
+                raise PathAgentError(
+                    f"Manifest 能力引用已失效，请重新生成 Manifest：{exc}"
+                ) from exc
+            run.trace(
+                "capabilities.resolve",
+                "COMPLETED",
+                "目标 Path 的 Manifest 能力引用通过校验",
+                {
+                    "path_id": path_id,
+                    "skills": [item.model_dump() for item in path.skills],
+                    "policies": [item.model_dump() for item in path.policies],
+                    "knowledge": [item.model_dump() for item in path.knowledge],
+                },
+            )
             initial_attempt = next(
                 attempt for attempt in case_snapshot.path_attempts
                 if attempt.path_id == path_id
             )
             initial_solution_revision = initial_attempt.solution_revision
-            solution_revision = await self.path_agent.run(case_snapshot, path_id, run.trace)
+            solution_revision = await self.path_agent.run(
+                case_snapshot,
+                path_id,
+                self._path_titles(case_snapshot).get(path.definition, path.definition),
+                resolution,
+                run.trace,
+            )
 
             lock = self._path_commit_locks.setdefault(case_id, asyncio.Lock())
             async with lock:
@@ -532,8 +614,10 @@ class CaseService:
         for case in self.repository.list_cases():
             if case.phase is not OrchestrationPhase.PROFESSIONAL_COMMITMENT:
                 continue
+            definition_titles = self._path_titles(case)
             path_titles = {
-                path.id: path.title for path in (case.manifest.paths if case.manifest else ())
+                path.id: definition_titles.get(path.definition, path.definition)
+                for path in (case.manifest.paths if case.manifest else ())
             }
             for node in case.commitment_nodes:
                 if node.role == role and node.status is NodeStatus.PENDING:
@@ -701,7 +785,9 @@ class CaseService:
             started_summary="Synthesis AgentRun 已启动",
             failed_summary="Synthesis AgentRun 失败；CaseSynthesis 未修改",
         ) as run:
-            report = await self.synthesis_agent.run(case, run.trace)
+            report = await self.synthesis_agent.run(
+                case, self._path_titles(case), run.trace
+            )
             case.synthesis_report = report
             case.owner_decision = None
             case.touch()
@@ -804,7 +890,14 @@ class CaseService:
         target_path = target_path or (selected_paths[0] if selected_paths else None)
         snapshot = None
         if case.manifest and target_path:
-            snapshot = case.manifest.capability_snapshots.get(target_path.id)
+            try:
+                snapshot = self.capabilities.resolve_manifest_path(
+                    target_path, case.classification["case_type"]
+                ).to_snapshot()
+            except CapabilityConfigurationError as exc:
+                raise InvalidTransitionError(
+                    f"Manifest 能力引用已失效，请重新生成 Manifest：{exc}"
+                ) from exc
         snapshot_status = "frozen"
         if not snapshot:
             snapshot = self._resolve_case_capabilities(case, target_path.id if target_path else None)
