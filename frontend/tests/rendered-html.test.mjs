@@ -130,17 +130,33 @@ test("resetting the Demo reaches the automatic orchestration refresh", async () 
   assert.match(resetDemo, /setCaseRefreshKey\(\(current\) => current \+ 1\)/);
 });
 
-test("Manifest statistics use the current frozen capability snapshot contract", async () => {
+test("Manifest statistics use compact Path-owned capability references", async () => {
   const source = await readFile(
     new URL("../app/cases/[id]/page.tsx", import.meta.url),
     "utf8",
   );
 
-  assert.match(source, /asset_payloads:\s*\{[\s\S]*policies:[\s\S]*skills:[\s\S]*knowledge:/);
-  assert.match(source, /snapshot\?\.asset_payloads\.policies\.length/g);
-  assert.match(source, /snapshot\?\.asset_payloads\.skills\.length/g);
-  assert.match(source, /snapshot\?\.asset_payloads\.knowledge\.length/g);
-  assert.doesNotMatch(source, /snapshot\?\.(?:policies|skills|knowledge)\.length/);
+  assert.match(source, /policies:\s*ManifestAssetRef\[\]/);
+  assert.match(source, /skills:\s*ManifestAssetRef\[\]/);
+  assert.match(source, /knowledge:\s*ManifestAssetRef\[\]/);
+  assert.match(source, /path\.policies\.length/g);
+  assert.match(source, /path\.skills\.length/g);
+  assert.match(source, /path\.knowledge\.length/g);
+  assert.doesNotMatch(source, /capability_snapshots|compiled_policy|asset_payloads/);
+  assert.doesNotMatch(source, /policy\.commitments/);
+  assert.match(source, /查看完整 Manifest YAML/);
+  assert.match(source, /manifest\.yaml/);
+  assert.doesNotMatch(source, /查看替代 Path 能力快照/);
+});
+
+test("Orchestrator trace renders the complete Manifest YAML as YAML", async () => {
+  const source = await readFile(
+    new URL("../app/cases/[id]/page.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(source, /event\.details\.manifest_yaml/);
+  assert.match(source, /完整 Manifest YAML/);
 });
 
 test("the Case Owner keeps a persistent approved Manifest material after review", async () => {
@@ -157,7 +173,8 @@ test("the Case Owner keeps a persistent approved Manifest material after review"
   assert.match(source, /aria-label="已批准 Manifest"/);
   assert.match(source, /查看已批准 Manifest/);
   assert.match(source, /批准时冻结的 Manifest/);
-  assert.match(source, /查看完整冻结能力快照/);
+  assert.match(source, /查看完整 Manifest YAML/);
+  assert.match(source, /ManifestYamlPanel/);
 });
 
 test("each asset route renders its own kind with a search affordance", async () => {

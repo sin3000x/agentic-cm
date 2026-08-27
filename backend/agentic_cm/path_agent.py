@@ -21,6 +21,7 @@ from .config import (
     agent_adapter_from_environment,
     agent_llm_config_from_environment,
 )
+from .capabilities import CapabilityResolution
 from .domain import Case, OrchestrationPhase, PathAttemptState
 from .llm import OpenAICompatibleClient, build_openai_compatible_client
 
@@ -125,7 +126,6 @@ class PathAgentContext:
     commitment_dag_snapshot: tuple[dict[str, Any], ...]
     execution_skills: tuple[dict[str, Any], ...]
     policies: tuple[dict[str, Any], ...]
-    compiled_policy: dict[str, Any]
     knowledge: tuple[dict[str, Any], ...]
     authorized_options: tuple[dict[str, str], ...]
     authorized_option_ids: tuple[str, ...]
@@ -422,6 +422,8 @@ class PathAgent:
         self,
         case: Case,
         path_id: str,
+        path_title: str,
+        resolution: CapabilityResolution,
         trace: AgentTraceSink,
     ) -> dict[str, Any]:
         trace(
@@ -438,21 +440,14 @@ class PathAgent:
         attempt = next((item for item in case.path_attempts if item.path_id == path_id), None)
         if attempt is None:
             raise PathAgentError(f"PathAttempt does not exist for {path_id}")
-        snapshot = case.manifest.capability_snapshots.get(path_id)
-        if not snapshot:
-            raise PathAgentError(f"Frozen capability snapshot is missing for {path_id}")
-        if snapshot.get("context", {}).get("path_definition") != path.definition:
-            raise PathAgentError("Frozen capability snapshot does not belong to the selected Path")
-        trace("path.eligibility", "COMPLETED", "Path 与冻结 Manifest 快照通过执行门禁")
+        trace("path.eligibility", "COMPLETED", "Path 与冻结 Manifest 能力通过执行门禁")
 
-        payloads = snapshot.get("asset_payloads", {})
-        execution_skills = tuple(
-            item for item in payloads.get("skills", [])
-            if path.definition in (item.get("selector") or {}).get("path_definition", [])
-        )
+        execution_skills = tuple(resolution.asset_payloads["skills"])
         if not execution_skills:
             raise PathAgentError(f"Frozen Manifest has no execution Skill for {path.definition}")
-        commitments = snapshot.get("compiled_policy", {}).get("commitments", [])
+        policies = tuple(resolution.asset_payloads["policies"])
+        knowledge = tuple(resolution.asset_payloads["knowledge"])
+        commitments = list(resolution.compiled_policy.get("commitments", []))
         if not commitments:
             raise PathAgentError(f"Frozen Manifest has no mandatory Policy for {path.definition}")
         missing_report_contracts = [
@@ -506,10 +501,10 @@ class PathAgent:
                     "revision": case.manifest.revision,
                     "generated_from_case_version": case.manifest.generated_from_case_version,
                 },
-                "path": asdict(path),
+                "path": path.model_dump(mode="json"),
                 "execution_skills": [_safe_ref(item) for item in execution_skills],
-                "policies": [_safe_ref(item) for item in payloads.get("policies", [])],
-                "knowledge": [_safe_ref(item) for item in payloads.get("knowledge", [])],
+                "policies": [_safe_ref(item) for item in policies],
+                "knowledge": [_safe_ref(item) for item in knowledge],
                 "authorized_options": list(authorized_options),
                 "tool_ids": sorted(tools_by_id),
                 "required_role_reports": list(required_role_reports),
@@ -552,15 +547,14 @@ class PathAgent:
                 "revision": case.manifest.revision,
                 "generated_from_case_version": case.manifest.generated_from_case_version,
             },
-            path=asdict(path),
+            path=path.model_dump(mode="json") | {"title": path_title},
             path_attempt={"path_id": attempt.path_id, "state": attempt.state.value},
             commitment_dag_snapshot=tuple(
                 asdict(node) for node in case.commitment_nodes if node.path_id == path_id
             ),
             execution_skills=execution_skills,
-            policies=tuple(payloads.get("policies", [])),
-            compiled_policy=snapshot["compiled_policy"],
-            knowledge=tuple(payloads.get("knowledge", [])),
+            policies=policies,
+            knowledge=knowledge,
             authorized_options=authorized_options,
             authorized_option_ids=tuple(item["id"] for item in authorized_options),
             tool_results=tuple(tool_results),

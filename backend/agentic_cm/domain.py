@@ -5,6 +5,9 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Any
 
+import yaml
+from pydantic import BaseModel, ConfigDict, model_validator
+
 
 def utc_now() -> str:
     """The current UTC instant as an ISO 8601 string.
@@ -98,23 +101,72 @@ class PathAttempt:
     solution_revision: dict[str, Any] | None = None
 
 
-@dataclass(frozen=True)
-class ManifestPath:
+class ManifestAssetRef(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str
+    version: str
+    digest: str
+
+
+class ManifestPath(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
     id: str
     definition: str
-    title: str
     rationale: str
     selected: bool = True
+    skills: tuple[ManifestAssetRef, ...] = ()
+    policies: tuple[ManifestAssetRef, ...] = ()
+    knowledge: tuple[ManifestAssetRef, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_capabilities(self) -> "ManifestPath":
+        for label, assets in (
+            ("Skill", self.skills),
+            ("Policy", self.policies),
+            ("Knowledge", self.knowledge),
+        ):
+            ids = [asset.id for asset in assets]
+            if any(not asset_id.strip() for asset_id in ids):
+                raise ValueError(f"Manifest {label} ids must be non-empty strings")
+            if len(ids) != len(set(ids)):
+                raise ValueError(f"Manifest {label} ids must be unique within a Path")
+        return self
 
 
-@dataclass(frozen=True)
-class Manifest:
+class Manifest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
     id: str
     revision: int
     paths: tuple[ManifestPath, ...]
-    capability_snapshots: dict[str, dict[str, Any]]
-    planner_profile: str = "unknown"
+    knowledge: tuple[ManifestAssetRef, ...] = ()
     generated_from_case_version: int = 0
+
+    @model_validator(mode="after")
+    def validate_unique_ids(self) -> "Manifest":
+        path_ids = [path.id for path in self.paths]
+        if len(path_ids) != len(set(path_ids)):
+            raise ValueError("Manifest Path ids must be unique")
+        knowledge_ids = [item.id for item in self.knowledge]
+        if len(knowledge_ids) != len(set(knowledge_ids)):
+            raise ValueError("Manifest global Knowledge ids must be unique")
+        return self
+
+    def to_yaml(self) -> str:
+        return yaml.safe_dump(
+            self.model_dump(mode="json"),
+            allow_unicode=True,
+            sort_keys=False,
+        )
+
+    @classmethod
+    def from_yaml(cls, content: str) -> "Manifest":
+        payload = yaml.safe_load(content)
+        if not isinstance(payload, dict):
+            raise ValueError("Manifest YAML must contain an object")
+        return cls.model_validate(payload)
 
 
 @dataclass
@@ -139,7 +191,9 @@ class Case:
     updated_at: str = field(default_factory=utc_now)
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        payload["manifest"] = self.manifest.model_dump(mode="json") if self.manifest else None
+        return payload
 
     def touch(self) -> None:
         """Record a new authoritative revision of this Case.

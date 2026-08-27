@@ -29,7 +29,7 @@
 
 ### 2.1 Policy
 
-Policy 初版只包含结构化 `selector` 和 `requirements.commitments`。`selector` 只接受 `case_type` 与 `path_definition`，每个字段都必须命中；缺少字段视为不适用，不交给 LLM 猜测。每个 Commitment 只声明 `id`、`role`、`review_dimension` 与可选的 `depends_on`。这些报告契约由命中的 Policy 编译并随逐 Path Manifest 快照冻结，Path Agent 不得自行增删角色；报告句首由平台按 `{role}维度：` 统一生成和校验。
+Policy 资产初版只包含结构化 `selector` 和 `requirements.commitments`。`selector` 只接受 `case_type` 与 `path_definition`，每个字段都必须命中；缺少字段视为不适用，不交给 LLM 猜测。每个 Commitment 只声明 `id`、`role`、`review_dimension` 与可选的 `depends_on`。解析期验证依赖与顺序后，Manifest 只记录 Policy 的 `id/version/digest`；批准与执行时校验引用并确定性编译 Commitments，Path Agent 不得自行增删角色。
 
 当前 Demo 的四个实例是：
 
@@ -107,12 +107,12 @@ Case classification
   -> Planner 为 Skill 声明的全部 Path 生成 rationale 和排序
   -> 每条 Path 必须匹配 Path-level execution Skill 与强制 Policy
   -> 再解析该 Path 的全部 Skill / Policy / Knowledge
-  -> Manifest 按 Path 冻结资产正文、版本、摘要和 compiled_policy
+  -> Manifest 顶层及每条 Path 仅保存匹配能力的 id / version / digest
   -> Owner 批准 Decision Layer
-  -> CaseService 只按 frozen compiled_policy 创建 CommitmentDAG
+  -> CaseService 校验所选 Path 的 Policy 引用并编译 CommitmentDAG
 ```
 
-页面中的“查看执行层与能力快照”会以 Case Owner 身份读取 `GET /api/cases/CM-2026-014/capabilities`，展示本轮实际冻结的三类资产；该内容和 Manifest 本身对其他角色隐藏。批准 Manifest 后，主计划与研发因没有前置依赖而并行进入 `PENDING` 并投递到各自 Inbox；本人批准后才转为 `READY`。供应经理起初为 `BLOCKED`，仅在两项前置节点都 `READY` 后转为 `PENDING`。这些依赖来自两个 Policy 的编译结果，不是 UI 中的硬编码剧情。
+Manifest Review 中的“查看完整 Manifest YAML”会以 Case Owner 身份读取 `GET /api/cases/CM-2026-014/manifest.yaml`，展示全部 Path 及每条 Path 的 Skill、Policy、Knowledge 引用；资产全文按引用动态解析，不进入 Manifest。批准 Manifest 后，主计划与研发因没有前置依赖而并行进入 `PENDING` 并投递到各自 Inbox；本人批准后才转为 `READY`。供应经理起初为 `BLOCKED`，仅在两项前置节点都 `READY` 后转为 `PENDING`。这些依赖来自引用 Policy 编译出的 Commitments，不是 UI 中的硬编码剧情。
 
 ## 4. 开发者接入自己的本地能力
 
@@ -230,7 +230,7 @@ PYTHONPATH=backend .venv/bin/python -m agentic_cm.capabilities validate
 PYTHONPATH=backend .venv/bin/python -m agentic_cm.capabilities resolve
 ```
 
-输出中的本地资产应标记为 `source=local`。重启 API 并重置 Demo 后，新 Manifest 才会解析并冻结新的资产正文、版本和摘要；已经存在的 Manifest 不会因本地文件变化而被静默修改。
+输出中的本地资产应标记为 `source=local`。重启 API 并重置 Demo 后，新 Manifest 才会记录新的版本和摘要；已有 Manifest 若找不到完全一致的 `id/version/digest` 会 fail closed，绝不会静默使用同 ID 的新内容。
 
 如需把本地能力放到仓库外：
 
@@ -242,4 +242,4 @@ export AGENTIC_CM_LOCAL_CAPABILITIES_DIR=/absolute/path/to/my-capabilities
 
 ## 5. 当前边界
 
-这套底座当前完成的是资产契约、分层加载、匹配、Policy 编译、Manifest 快照、API 展示、本地扩展与可选替换。Live Model Adapter、向量检索、Knowledge 发布审核、Skill/Policy 管理后台和生产级签名不在本轮范围；后续接入时应继续消费同一份冻结快照，而不是绕开平台重新检索强制规则。
+这套底座当前完成的是资产契约、分层加载、匹配、Policy 依赖验证、Path 自包含 Manifest、API 展示、本地扩展与可选替换。Live Model Adapter、向量检索、Knowledge 发布审核、Skill/Policy 管理后台和生产级签名不在本轮范围；后续接入时应继续消费同一份冻结 Manifest Path，而不是绕开平台重新检索强制规则。

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from typing import Annotated, Any, Protocol
 
 import httpx
@@ -22,7 +22,7 @@ from .config import (
     agent_adapter_from_environment,
     agent_llm_config_from_environment,
 )
-from .domain import Case, Manifest, ManifestPath, OrchestrationPhase
+from .domain import Case, Manifest, ManifestAssetRef, ManifestPath, OrchestrationPhase
 from .llm import OpenAICompatibleClient, build_openai_compatible_client
 
 
@@ -51,7 +51,7 @@ _PLANNER_NARRATION = TraceNarration(
 )
 
 
-class _PlannedPathPayload(BaseModel):
+class PlannerPath(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     definition: NonEmptyText
@@ -61,7 +61,7 @@ class _PlannedPathPayload(BaseModel):
 class _ManifestDraftPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    paths: list[_PlannedPathPayload] = Field(min_length=1)
+    paths: list[PlannerPath] = Field(min_length=1)
 
     @model_validator(mode="after")
     def require_unique_paths(self) -> "_ManifestDraftPayload":
@@ -73,62 +73,20 @@ class _ManifestDraftPayload(BaseModel):
         return self
 
 
-@dataclass(frozen=True)
-class PlanningCandidate:
-    definition: str
-    title: str
-    description: str
-    policy_ids: tuple[str, ...]
-    skill_ids: tuple[str, ...]
-    knowledge_ids: tuple[str, ...]
-    mandatory_commitment_ids: tuple[str, ...]
-    skill_guidance: tuple[dict[str, str], ...]
+class PlannerOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
-
-@dataclass(frozen=True)
-class PlanningContext:
-    case_id: str
-    case_version: int
-    title: str
-    description: str
-    classification: dict[str, str]
-    business_payload: dict[str, Any]
-    human_proposal: dict[str, Any] | None
-
-
-@dataclass(frozen=True)
-class PlannerPromptCandidate:
-    definition: str
-    title: str
-    description: str
-
-
-@dataclass(frozen=True)
-class PlannerPromptContext:
-    case: PlanningContext
-    candidates: tuple[PlannerPromptCandidate, ...]
-    skill_guidance: tuple[dict[str, str], ...]
-
-
-@dataclass(frozen=True)
-class PlannedPath:
-    definition: str
-    rationale: str
-
-
-@dataclass(frozen=True)
-class ManifestDraftResult:
-    paths: tuple[PlannedPath, ...]
+    paths: tuple[PlannerPath, ...]
     planner_profile: str
 
 
 class PlannerAdapter(Protocol):
     async def propose(
         self,
-        context: PlanningContext,
-        candidates: tuple[PlanningCandidate, ...],
+        context: dict[str, Any],
+        candidates: tuple[dict[str, Any], ...],
         trace: AgentTraceSink,
-    ) -> ManifestDraftResult: ...
+    ) -> PlannerOutput: ...
 
 
 class DeterministicPlannerAdapter:
@@ -138,27 +96,27 @@ class DeterministicPlannerAdapter:
 
     async def propose(
         self,
-        context: PlanningContext,
-        candidates: tuple[PlanningCandidate, ...],
+        context: dict[str, Any],
+        candidates: tuple[dict[str, Any], ...],
         trace: AgentTraceSink,
-    ) -> ManifestDraftResult:
+    ) -> PlannerOutput:
         trace(
             "planner.request",
             "COMPLETED",
             "Deterministic Planner 接收候选 Path",
             {
-                "case": asdict(context),
-                "candidates": [asdict(candidate) for candidate in candidates],
+                "case": context,
+                "candidates": list(candidates),
                 "adapter": self.profile,
             },
         )
         if not candidates:
             raise OrchestrationError("No compatible PathDefinition has applicable mandatory Policy")
-        result = ManifestDraftResult(
+        result = PlannerOutput(
             paths=tuple(
-                PlannedPath(
-                    candidate.definition,
-                    f"{candidate.title}由命中的编排 Skill 声明；"
+                PlannerPath(
+                    definition=candidate["definition"],
+                    rationale=f"{candidate['title']}由命中的编排 Skill 声明；"
                     "deterministic 模式不判断当前 Case 的业务优先级。",
                 )
                 for candidate in candidates
@@ -169,7 +127,7 @@ class DeterministicPlannerAdapter:
             "planner.response",
             "COMPLETED",
             "Deterministic Planner 返回结构化建议",
-            {"paths": [asdict(path) for path in result.paths]},
+            {"paths": [path.model_dump(mode="json") for path in result.paths]},
         )
         return result
 
@@ -226,17 +184,17 @@ class OpenAICompatiblePlannerAdapter:
 
     async def propose(
         self,
-        context: PlanningContext,
-        candidates: tuple[PlanningCandidate, ...],
+        context: dict[str, Any],
+        candidates: tuple[dict[str, Any], ...],
         trace: AgentTraceSink,
-    ) -> ManifestDraftResult:
+    ) -> PlannerOutput:
         response_schema = _ManifestDraftPayload.model_json_schema()
         prompt_context = _planner_prompt_context(context, candidates)
         trace(
             "planner.context_projection",
             "COMPLETED",
             "将完整候选能力投影为去重的 Planner 模型上下文",
-            {"context": asdict(prompt_context)},
+            {"context": prompt_context},
         )
         request = {
             "model": self._model,
@@ -246,6 +204,7 @@ class OpenAICompatiblePlannerAdapter:
                     "content": (
                         "You are an enterprise exception Case planning component. Return JSON only. "
                         "Return every provided candidate definition exactly once, with a Case-specific rationale. "
+                        "Use the provided orchestration knowledge only to understand and order candidate Paths. "
                         "Write every human-facing rationale in Chinese. "
                         "You may order them by relevance. Never invent or omit ids, remove policies, "
                         "make business commitments, or claim operational actions. "
@@ -254,7 +213,7 @@ class OpenAICompatiblePlannerAdapter:
                 },
                 {
                     "role": "user",
-                    "content": json.dumps(asdict(prompt_context), ensure_ascii=False),
+                    "content": json.dumps(prompt_context, ensure_ascii=False),
                 },
             ],
             "response_format": {"type": "json_object"},
@@ -266,9 +225,8 @@ class OpenAICompatiblePlannerAdapter:
             enabled=self._thinking_enabled,
             reasoning_effort=self._reasoning_effort,
         )
-        def build_result(payload: _ManifestDraftPayload) -> ManifestDraftResult:
-            paths = tuple(PlannedPath(path.definition, path.rationale) for path in payload.paths)
-            return ManifestDraftResult(paths=paths, planner_profile=self.profile)
+        def build_result(payload: _ManifestDraftPayload) -> PlannerOutput:
+            return PlannerOutput(paths=tuple(payload.paths), planner_profile=self.profile)
 
         return await request_structured_output(
             self._endpoint,
@@ -289,26 +247,34 @@ class OpenAICompatiblePlannerAdapter:
 
 
 def _planner_prompt_context(
-    context: PlanningContext,
-    candidates: tuple[PlanningCandidate, ...],
-) -> PlannerPromptContext:
+    context: dict[str, Any],
+    candidates: tuple[dict[str, Any], ...],
+) -> dict[str, Any]:
     guidance_by_identity: dict[tuple[str, str], dict[str, str]] = {}
     for candidate in candidates:
-        for guidance in candidate.skill_guidance:
+        for guidance in candidate["skill_guidance"]:
             identity = (guidance["id"], guidance["instructions_markdown"])
             guidance_by_identity.setdefault(identity, {
                 "id": guidance["id"],
                 "description": guidance["description"],
                 "instructions_markdown": guidance["instructions_markdown"],
             })
-    return PlannerPromptContext(
-        case=context,
-        candidates=tuple(
-            PlannerPromptCandidate(item.definition, item.title, item.description)
+    return {
+        "case": {
+            key: value for key, value in context.items()
+            if key != "orchestration_knowledge"
+        },
+        "candidates": [
+            {
+                "definition": item["definition"],
+                "title": item["title"],
+                "description": item["description"],
+            }
             for item in candidates
-        ),
-        skill_guidance=tuple(guidance_by_identity.values()),
-    )
+        ],
+        "skill_guidance": list(guidance_by_identity.values()),
+        "knowledge": list(context.get("orchestration_knowledge", [])),
+    }
 
 
 class Orchestrator:
@@ -320,7 +286,9 @@ class Orchestrator:
         self.capabilities = capabilities
         self.planner = planner
 
-    async def compose_manifest(self, case: Case, trace: AgentTraceSink) -> Manifest:
+    async def compose_manifest(
+        self, case: Case, trace: AgentTraceSink
+    ) -> tuple[Manifest, str]:
         trace(
             "case.eligibility",
             "STARTED",
@@ -334,6 +302,7 @@ class Orchestrator:
         trace("case.eligibility", "COMPLETED", "Case 通过初次编排门禁")
 
         definitions = self.capabilities.resolve_path_candidates(case.classification)
+        orchestration_resolution = self.capabilities.resolve(case.classification)
         trace(
             "paths.discovery",
             "COMPLETED",
@@ -381,17 +350,17 @@ class Orchestrator:
                 f"Skill-declared Paths are not executable: {incomplete}"
             )
         candidates = tuple(
-            PlanningCandidate(
-                definition=definition.id,
-                title=definition.title,
-                description=definition.description,
-                policy_ids=tuple(ref.id for ref in resolution.policies),
-                skill_ids=tuple(ref.id for ref in resolution.skills),
-                knowledge_ids=tuple(ref.id for ref in resolution.knowledge),
-                mandatory_commitment_ids=tuple(
+            {
+                "definition": definition.id,
+                "title": definition.title,
+                "description": definition.description,
+                "policy_ids": [ref.id for ref in resolution.policies],
+                "skill_ids": [ref.id for ref in resolution.skills],
+                "knowledge_ids": [ref.id for ref in resolution.knowledge],
+                "mandatory_commitment_ids": [
                     item["id"] for item in resolution.compiled_policy["commitments"]
-                ),
-                skill_guidance=tuple(
+                ],
+                "skill_guidance": [
                     {
                         "id": payload["id"],
                         "description": payload["description"],
@@ -399,33 +368,36 @@ class Orchestrator:
                     }
                     for payload in resolution.asset_payloads["skills"]
                     if any(path["id"] == definition.id for path in payload.get("paths", []))
-                ),
-            )
+                ],
+            }
             for definition, resolution in eligible
         )
         if not candidates:
             raise OrchestrationError("No PathDefinition has both a matched Skill and applicable mandatory Policy")
-        planning_context = PlanningContext(
-            case_id=case.id,
-            case_version=case.version,
-            title=case.title,
-            description=case.description,
-            classification=dict(case.classification),
-            business_payload=dict(case.business_payload),
-            human_proposal=dict(case.human_proposal) if case.human_proposal else None,
-        )
+        planning_context = {
+            "case_id": case.id,
+            "case_version": case.version,
+            "title": case.title,
+            "description": case.description,
+            "classification": dict(case.classification),
+            "business_payload": dict(case.business_payload),
+            "human_proposal": dict(case.human_proposal) if case.human_proposal else None,
+            "orchestration_knowledge": list(
+                orchestration_resolution.asset_payloads["knowledge"]
+            ),
+        }
         trace(
             "planner.input",
             "COMPLETED",
             "构造受限 Planner 输入",
-            {"context": asdict(planning_context), "candidates": [asdict(item) for item in candidates]},
+            {"context": planning_context, "candidates": list(candidates)},
         )
         result = await self.planner.propose(
             planning_context,
             candidates,
             trace,
         )
-        allowed = {item.definition for item in candidates}
+        allowed = {item["definition"] for item in candidates}
         if not result.paths:
             raise PlannerOutputError("Planner must select at least one Path")
         selected_definitions = [path.definition for path in result.paths]
@@ -453,22 +425,41 @@ class Orchestrator:
             ManifestPath(
                 id=f"PATH-{index:02d}",
                 definition=definition.id,
-                title=definition.title,
                 rationale=planned.rationale,
+                skills=tuple(
+                    _manifest_ref(ref)
+                    for ref in resolution.skills
+                    if ref.id in {
+                        payload["id"]
+                        for payload in resolution.asset_payloads["skills"]
+                        if definition.id in (payload.get("selector") or {}).get(
+                            "path_definition", []
+                        )
+                    }
+                ),
+                policies=tuple(_manifest_ref(ref) for ref in resolution.policies),
+                knowledge=tuple(
+                    _manifest_ref(ref)
+                    for ref in resolution.knowledge
+                    if ref.id in {
+                        payload["id"]
+                        for payload in resolution.asset_payloads["knowledge"]
+                        if definition.id in (payload.get("selector") or {}).get(
+                            "path_definition", []
+                        )
+                    }
+                ),
             )
-            for index, (planned, definition, _) in enumerate(selected, start=1)
+            for index, (planned, definition, resolution) in enumerate(selected, start=1)
         )
-        capability_snapshots = {
-            path.id: resolution.to_snapshot()
-            for path, (_, _, resolution) in zip(manifest_paths, selected)
-        }
 
         manifest = Manifest(
             id=f"MAN-{case.id}-{case.version}",
             revision=1,
             paths=manifest_paths,
-            capability_snapshots=capability_snapshots,
-            planner_profile=result.planner_profile,
+            knowledge=tuple(
+                _manifest_ref(ref) for ref in orchestration_resolution.knowledge
+            ),
             generated_from_case_version=case.version,
         )
         trace(
@@ -478,12 +469,17 @@ class Orchestrator:
             {
                 "manifest_id": manifest.id,
                 "revision": manifest.revision,
-                "planner_profile": manifest.planner_profile,
-                "paths": [asdict(path) for path in manifest.paths],
-                "snapshot_path_ids": list(manifest.capability_snapshots),
+                "planner_profile": result.planner_profile,
+                "paths": [path.model_dump(mode="json") for path in manifest.paths],
+                "path_ids": [path.id for path in manifest.paths],
+                "manifest_yaml": manifest.to_yaml(),
             },
         )
-        return manifest
+        return manifest, result.planner_profile
+
+
+def _manifest_ref(ref: Any) -> ManifestAssetRef:
+    return ManifestAssetRef(id=ref.id, version=ref.version, digest=ref.digest)
 
 
 def planner_from_environment() -> PlannerAdapter:
