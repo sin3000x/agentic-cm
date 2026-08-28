@@ -1,6 +1,5 @@
 {
   "schema_version": 1,
-  "path_definition": "MaterialSubstitution",
   "options": [
     {
       "id": "A",

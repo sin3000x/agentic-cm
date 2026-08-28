@@ -37,6 +37,12 @@ class AssetRef:
 
 
 @dataclass(frozen=True)
+class SkillEntrypointResolution:
+    entrypoint: AssetRef
+    members: tuple[AssetRef, ...]
+
+
+@dataclass(frozen=True)
 class CapabilityResolution:
     context: dict[str, str]
     policies: tuple[AssetRef, ...]
@@ -82,10 +88,13 @@ class CapabilityRegistry:
         self,
         assets: dict[tuple[str, str], _LoadedAsset],
         case_types: dict[str, CaseTypePathCatalog] | None = None,
+        skill_ownership: dict[str, str] | None = None,
     ) -> None:
         self._assets = assets
         self._case_types = case_types or {}
+        self._skill_ownership = skill_ownership or {}
         self._validate_skill_bundles()
+        self._validate_skill_ownership()
 
     def _validate_skill_bundles(self) -> None:
         for (kind, skill_id), asset in self._assets.items():
@@ -101,11 +110,12 @@ class CapabilityRegistry:
                     raise CapabilityConfigurationError(
                         f"Skill bundle {skill_id!r} member {member_id!r} must be an atomic Skill"
                     )
-                member_selector = member.data.get("selector")
-                if member_selector and member_selector != asset.data.get("selector"):
-                    raise CapabilityConfigurationError(
-                        f"Skill bundle {skill_id!r} member {member_id!r} has a conflicting selector"
-                    )
+    def _validate_skill_ownership(self) -> None:
+        for skill_id in self._skill_ownership:
+            if ("skill", skill_id) not in self._assets:
+                raise CapabilityConfigurationError(
+                    f"Skill ownership references unknown Skill {skill_id!r}"
+                )
 
     @classmethod
     def from_directories(
@@ -116,18 +126,18 @@ class CapabilityRegistry:
         merged: dict[tuple[str, str], _LoadedAsset] = {}
         builtin_path = Path(builtin_root)
         local_path = Path(local_root) if local_root else None
-        bindings = cls._load_skill_bindings(builtin_path, required=True)
-        if local_path:
-            bindings.update(cls._load_skill_bindings(local_path, required=False))
         case_types = cls._load_case_type_catalogs(builtin_path, "builtin", required=True)
         if local_path:
             case_types.update(
                 cls._load_case_type_catalogs(local_path, "local", required=False)
             )
-        cls._load_layer(builtin_path, "builtin", merged, bindings, required=True)
-        if local_root:
-            cls._load_layer(local_path, "local", merged, bindings, required=False)
-        return cls(merged, case_types)
+        cls._load_layer(builtin_path, "builtin", merged, required=True)
+        if local_path:
+            cls._load_layer(local_path, "local", merged, required=False)
+        skill_ownership = cls._load_skill_ownership(builtin_path, required=True)
+        if local_path:
+            skill_ownership.update(cls._load_skill_ownership(local_path, required=False))
+        return cls(merged, case_types, skill_ownership)
 
     @staticmethod
     def _load_case_type_catalogs(
@@ -215,30 +225,40 @@ class CapabilityRegistry:
             )
 
     @staticmethod
-    def _load_skill_bindings(root: Path, *, required: bool) -> dict[str, dict[str, Any]]:
+    def _load_skill_ownership(root: Path, *, required: bool) -> dict[str, str]:
         if not root.exists():
             if required:
                 raise CapabilityConfigurationError(f"Capability directory does not exist: {root}")
             return {}
-        path = root / "skill-bindings.json"
+        path = root / "skill-ownership.json"
         if not path.exists():
             return {}
         try:
             data = json.loads(path.read_text())
         except (OSError, json.JSONDecodeError) as exc:
-            raise CapabilityConfigurationError(f"Cannot load skill bindings {path}: {exc}") from exc
-        if data.get("schema_version") != 1 or not isinstance(data.get("bindings"), dict):
-            raise CapabilityConfigurationError(f"Invalid skill bindings contract: {path}")
-        bindings: dict[str, dict[str, Any]] = {}
-        for name, binding in data["bindings"].items():
-            selector = binding.get("selector") if isinstance(binding, dict) else None
-            if not isinstance(binding, dict) or set(binding) != {"selector"}:
+            raise CapabilityConfigurationError(f"Cannot load Skill ownership {path}: {exc}") from exc
+        if (
+            not isinstance(data, dict)
+            or set(data) != {"schema_version", "ownership"}
+            or data.get("schema_version") != 1
+            or not isinstance(data.get("ownership"), dict)
+        ):
+            raise CapabilityConfigurationError(f"Invalid Skill ownership contract: {path}")
+        ownership: dict[str, str] = {}
+        for skill_id, details in data["ownership"].items():
+            if (
+                not isinstance(skill_id, str)
+                or not skill_id.strip()
+                or not isinstance(details, dict)
+                or set(details) != {"maintainer_role"}
+                or not isinstance(details.get("maintainer_role"), str)
+                or not details["maintainer_role"].strip()
+            ):
                 raise CapabilityConfigurationError(
-                    f"Skill binding {name!r} may contain only selector: {path}"
+                    f"Skill ownership {skill_id!r} requires one non-empty maintainer_role: {path}"
                 )
-            CapabilityRegistry._validate_selector(selector, f"Skill {name!r}", path)
-            bindings[name] = {"selector": selector}
-        return bindings
+            ownership[skill_id.strip()] = details["maintainer_role"].strip()
+        return ownership
 
     @classmethod
     def _load_layer(
@@ -246,7 +266,6 @@ class CapabilityRegistry:
         root: Path,
         source: str,
         target: dict[tuple[str, str], _LoadedAsset],
-        skill_bindings: dict[str, dict[str, Any]],
         *,
         required: bool,
     ) -> None:
@@ -278,14 +297,13 @@ class CapabilityRegistry:
         if not skills_root.exists():
             return
         for skill_path in sorted(path for path in skills_root.iterdir() if path.is_dir()):
-            loaded = cls._load_skill(skill_path, source, skill_bindings.get(skill_path.name))
+            loaded = cls._load_skill(skill_path, source)
             target[("skill", loaded.ref.id)] = loaded
 
     @staticmethod
     def _load_skill(
         skill_path: Path,
         source: str,
-        binding: dict[str, Any] | None,
     ) -> _LoadedAsset:
         entrypoint = skill_path / "SKILL.md"
         if not entrypoint.is_file():
@@ -314,7 +332,6 @@ class CapabilityRegistry:
             ),
             frontmatter["name"],
         )
-        selector = binding.get("selector", {}) if binding else {}
         paths_file = skill_path / "paths.json"
         if paths_file.exists():
             raise CapabilityConfigurationError(
@@ -352,18 +369,12 @@ class CapabilityRegistry:
                 raise CapabilityConfigurationError(f"Cannot load Skill options {options_file}: {exc}") from exc
             if (
                 not isinstance(options_payload, dict)
-                or set(options_payload) != {"schema_version", "path_definition", "options"}
+                or set(options_payload) != {"schema_version", "options"}
                 or options_payload.get("schema_version") != 1
-                or not isinstance(options_payload.get("path_definition"), str)
                 or not isinstance(options_payload.get("options"), list)
                 or not options_payload["options"]
             ):
                 raise CapabilityConfigurationError(f"Invalid Skill path-options contract: {options_file}")
-            bound_paths = selector.get("path_definition", [])
-            if bound_paths != [options_payload["path_definition"]]:
-                raise CapabilityConfigurationError(
-                    f"Skill path-options must match its single path_definition binding: {options_file}"
-                )
             for item in options_payload["options"]:
                 if not isinstance(item, dict) or set(item) != {"id", "material_id", "title", "description"} or any(
                     not isinstance(item[field], str) or not item[field].strip()
@@ -417,7 +428,6 @@ class CapabilityRegistry:
             "id": frontmatter["name"],
             "version": digest_hex[:12],
             "title": display_title,
-            "selector": deepcopy(selector) if selector else None,
             "path_options": deepcopy(path_options),
             "tools": deepcopy(tools),
             "description": frontmatter["description"],
@@ -493,13 +503,9 @@ class CapabilityRegistry:
                 ),
                 key=lambda asset: asset.ref.id,
             )
-            for kind in ASSET_KINDS
+            for kind in ("policy", "knowledge")
         }
-        selected_skills = {asset.ref.id: asset for asset in selected["skill"]}
-        for asset in tuple(selected["skill"]):
-            for member_id in asset.data.get("members", []):
-                selected_skills[member_id] = self._assets[("skill", member_id)]
-        selected["skill"] = sorted(selected_skills.values(), key=lambda asset: asset.ref.id)
+        selected["skill"] = []
         return CapabilityResolution(
             context=deepcopy(context),
             policies=tuple(asset.ref for asset in selected["policy"]),
@@ -660,18 +666,47 @@ class CapabilityRegistry:
 
     def list_assets(self) -> dict[str, list[dict[str, Any]]]:
         """Return the effective organization library after local overrides are applied."""
-        return {
-            group: [
-                deepcopy(asset.data) | {"resolved_ref": asdict(asset.ref)}
-                for (asset_kind, _), asset in sorted(self._assets.items())
-                if asset_kind == kind
-            ]
-            for group, kind in (
-                ("policies", "policy"),
-                ("skills", "skill"),
-                ("knowledge", "knowledge"),
-            )
+        assets: dict[str, list[dict[str, Any]]] = {"policies": [], "skills": [], "knowledge": []}
+        for (kind, _), asset in sorted(self._assets.items()):
+            payload = deepcopy(asset.data) | {"resolved_ref": asdict(asset.ref)}
+            if kind == "skill":
+                payload["kind"] = "bundle" if asset.data.get("members") else "atomic"
+                payload["maintainer_role"] = self._skill_ownership.get(asset.ref.id)
+            assets[{"policy": "policies", "skill": "skills", "knowledge": "knowledge"}[kind]].append(payload)
+        return assets
+
+    def list_orchestrator_skills(self) -> tuple[dict[str, str], ...]:
+        member_ids = {
+            member_id
+            for (kind, _), asset in self._assets.items()
+            if kind == "skill"
+            for member_id in asset.data.get("members", [])
         }
+        return tuple(
+            {
+                "id": asset.ref.id,
+                "title": asset.data["title"],
+                "description": asset.data["description"],
+                "kind": "bundle" if asset.data.get("members") else "atomic",
+            }
+            for (kind, skill_id), asset in sorted(self._assets.items())
+            if kind == "skill" and skill_id not in member_ids
+        )
+
+    def resolve_skill_entrypoint(self, skill_id: str) -> SkillEntrypointResolution:
+        asset = self._assets.get(("skill", skill_id))
+        if asset is None:
+            raise CapabilityConfigurationError(f"unknown Skill entrypoint: {skill_id}")
+        allowed = {item["id"] for item in self.list_orchestrator_skills()}
+        if skill_id not in allowed:
+            raise CapabilityConfigurationError(f"Skill is not an Orchestrator entrypoint: {skill_id}")
+        return SkillEntrypointResolution(
+            entrypoint=asset.ref,
+            members=tuple(
+                self._assets[("skill", member_id)].ref
+                for member_id in asset.data.get("members", [])
+            ),
+        )
 
     def list_case_types(self) -> list[dict[str, Any]]:
         """Return effective Case Type Path catalogs after local overrides."""

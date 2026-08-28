@@ -5,7 +5,7 @@
 - 自定义 Policy：`POL-MY-COMPANY-REGION-001`；
 - 自定义 Skill：`regional-certification-check`；
 - 自定义 Knowledge：`KNOW-MY-COMPANY-REGION-001`；
-- 一份本地 Skill 与 Path 的绑定。
+- 一份本地 Skill 的维护角色归属。
 
 复制到 Git 已忽略的本地能力目录：
 
@@ -28,5 +28,5 @@ PYTHONPATH=backend .venv/bin/python -m agentic_cm.capabilities resolve
 - Policy/Knowledge 的 JSON 文件名可以任意取，所在目录确定类型，系统以文件内容中的 `id` 识别资产；
 - 每个 Policy Commitment 必须提供 `id`、`role`、`review_dimension` 与可选的 `depends_on`；平台会将其冻结进 Manifest，并按责任角色统一约束报告句首；
 - Skill 不需要与仓库中的任何 Skill 同名，但按照标准约定，其文件夹名必须等于 `SKILL.md` frontmatter 的 `name`；
-- 新 Skill 必须在本地 `skill-bindings.json` 中绑定适用的 Case/Path 上下文，否则会被加载但不会自动加入 Manifest；
+- `skill-ownership.json` 为 Skill 声明展示用的 `maintainer_role`；它不参与 Skill digest，也不决定编排选择；
 - 只有故意使用与内置资产相同的身份时，才表示替换内置资产。

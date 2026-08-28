@@ -261,13 +261,18 @@ def test_manifest_is_path_scoped_and_round_trips_as_yaml(tmp_path: Path) -> None
     assert Manifest.from_yaml(manifest.to_yaml()) == manifest
 
 
-def test_capability_registry_resolves_exact_manifest_references(tmp_path: Path) -> None:
-    service = make_service(tmp_path)
-    path = orchestrate(service).manifest.paths[0]
+def test_capability_registry_resolves_exact_skill_entrypoint_references(tmp_path: Path) -> None:
+    registry = CapabilityRegistry.from_directories(DEFAULT_BUILTIN_ROOT, None)
+    entrypoint = registry.resolve_skill_entrypoint("material-substitution-analysis")
 
-    skills = service.capabilities.resolve_refs("skill", path.skills)
+    skills = registry.resolve_refs("skill", (entrypoint.entrypoint, *entrypoint.members))
 
-    assert [item["id"] for item in skills] == [item.id for item in path.skills]
+    assert [item["id"] for item in skills] == [
+        "material-substitution-analysis",
+        "material-substitution-engineering-review",
+        "material-substitution-master-planning-review",
+        "material-substitution-supply-manager-review",
+    ]
     assert all("instructions_markdown" in item for item in skills)
 
 
@@ -287,13 +292,19 @@ def test_capability_registry_rejects_unverifiable_manifest_references(
     value: str,
     message: str,
 ) -> None:
-    service = make_service(tmp_path)
-    path = orchestrate(service).manifest.paths[0]
-    original = path.policies[0] if kind == "policy" else path.skills[0]
-    changed = original.model_copy(update={field: value})
+    registry = CapabilityRegistry.from_directories(DEFAULT_BUILTIN_ROOT, None)
+    original = (
+        registry.resolve({
+            "case_type": "ORDER_DELIVERY_RISK",
+            "path_definition": "MaterialSubstitution",
+        }).policies[0]
+        if kind == "policy"
+        else registry.resolve_skill_entrypoint("material-substitution-analysis").entrypoint
+    )
+    changed = {**original.__dict__, field: value}
 
     with pytest.raises(CapabilityConfigurationError, match=message):
-        service.capabilities.resolve_refs(kind, (changed,))
+        registry.resolve_refs(kind, (changed,))
 
 
 def test_manifest_approval_fails_without_mutation_when_policy_reference_changes(
@@ -421,6 +432,15 @@ def _write_case_type_catalog(
     }, ensure_ascii=False))
 
 
+def _write_skill(root: Path, skill_id: str, description: str = "分析业务证据。") -> Path:
+    skill_dir = root / "skills" / skill_id
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        f"---\nname: {skill_id}\ndescription: {description}\n---\n\n# {skill_id}\n"
+    )
+    return skill_dir
+
+
 def test_case_type_catalog_paths_are_partitioned_by_case_type(tmp_path: Path) -> None:
     builtin = tmp_path / "builtin"
     for directory, case_type, case_title, path_title in (
@@ -493,11 +513,6 @@ def test_skill_paths_json_is_rejected_as_a_legacy_playbook(tmp_path: Path) -> No
         "schema_version": 1,
         "paths": [{"id": "ManualReview", "title": "人工复核", "description": "fixture"}],
     }))
-    (builtin / "skill-bindings.json").write_text(json.dumps({
-        "schema_version": 1,
-        "bindings": {"legacy-planning": {"selector": {"case_type": ["QUALITY_INCIDENT"]}}},
-    }))
-
     try:
         CapabilityRegistry.from_directories(builtin, None)
     except CapabilityConfigurationError as exc:
@@ -686,7 +701,7 @@ def test_capability_library_reports_every_effective_asset(client) -> None:
         assert body["counts"][group] > 0
     skills = {asset["id"]: asset for asset in body["assets"]["skills"]}
     assert all(
-        not ({"kind", "status", "purpose", "entrypoint"} & set(asset))
+        not ({"status", "purpose", "entrypoint"} & set(asset))
         for assets in body["assets"].values()
         for asset in assets
     )
@@ -726,6 +741,10 @@ def test_capability_library_reports_every_effective_asset(client) -> None:
         "material-substitution-supply-manager-review",
     ]
     assert all(member in skills for member in skills["material-substitution-analysis"]["members"])
+    assert skills["material-substitution-analysis"]["kind"] == "bundle"
+    assert skills["material-substitution-analysis"]["maintainer_role"] == "订单统筹经理"
+    assert all(skill["kind"] == "atomic" for skill_id, skill in skills.items() if skill_id != "material-substitution-analysis")
+    assert all("selector" not in skill for skill in skills.values())
 
 
 def test_skill_bundle_rejects_an_unknown_member(tmp_path: Path) -> None:
@@ -739,14 +758,6 @@ def test_skill_bundle_rejects_an_unknown_member(tmp_path: Path) -> None:
         "schema_version": 1,
         "members": ["missing-review"],
     }))
-    (builtin / "skill-bindings.json").write_text(json.dumps({
-        "schema_version": 1,
-        "bindings": {"review-bundle": {"selector": {
-            "case_type": ["QUALITY_INCIDENT"],
-            "path_definition": ["ManualReview"],
-        }}},
-    }))
-
     try:
         CapabilityRegistry.from_directories(builtin, None)
     except CapabilityConfigurationError as exc:
@@ -755,75 +766,93 @@ def test_skill_bundle_rejects_an_unknown_member(tmp_path: Path) -> None:
         raise AssertionError("A Skill bundle must reference existing atomic Skills")
 
 
-def test_resolving_a_bound_skill_bundle_expands_reusable_unbound_atomic_members(tmp_path: Path) -> None:
+def test_reusable_atomic_members_are_hidden_from_the_orchestrator_catalog(tmp_path: Path) -> None:
     builtin = tmp_path / "builtin"
-    for skill_id in ("complex-review", "alternate-review", "engineering-review", "supply-review"):
-        skill_dir = builtin / "skills" / skill_id
-        skill_dir.mkdir(parents=True)
-        (skill_dir / "SKILL.md").write_text(
-            f"---\nname: {skill_id}\ndescription: Review evidence.\n---\n\n# Review\n"
-        )
-    (builtin / "skills" / "complex-review" / "bundle.json").write_text(json.dumps({
+    complex_review = _write_skill(builtin, "complex-review", "组合评审输入并生成建议。")
+    alternate_review = _write_skill(builtin, "alternate-review", "提供另一组评审。")
+    _write_skill(builtin, "engineering-review", "分析技术可行性。")
+    _write_skill(builtin, "supply-review", "分析供应可行性。")
+    (complex_review / "bundle.json").write_text(json.dumps({
         "schema_version": 1,
         "members": ["engineering-review", "supply-review"],
     }))
-    (builtin / "skills" / "alternate-review" / "bundle.json").write_text(json.dumps({
+    (alternate_review / "bundle.json").write_text(json.dumps({
         "schema_version": 1,
         "members": ["engineering-review"],
     }))
-    (builtin / "skill-bindings.json").write_text(json.dumps({
-        "schema_version": 1,
-        "bindings": {
-            "complex-review": {"selector": {
-                "case_type": ["QUALITY_INCIDENT"],
-                "path_definition": ["ManualReview"],
-            }},
-            "alternate-review": {"selector": {
-                "case_type": ["QUALITY_INCIDENT"],
-                "path_definition": ["AlternateReview"],
-            }},
-        },
-    }))
 
-    resolution = CapabilityRegistry.from_directories(builtin, None).resolve({
-        "case_type": "QUALITY_INCIDENT",
-        "path_definition": "ManualReview",
-    })
+    registry = CapabilityRegistry.from_directories(builtin, None)
 
-    assert [skill.id for skill in resolution.skills] == [
-        "complex-review",
-        "engineering-review",
-        "supply-review",
+    assert registry.list_orchestrator_skills() == (
+        {"id": "alternate-review", "title": "alternate-review", "description": "提供另一组评审。", "kind": "bundle"},
+        {"id": "complex-review", "title": "complex-review", "description": "组合评审输入并生成建议。", "kind": "bundle"},
+    )
+    assert [member.id for member in registry.resolve_skill_entrypoint("complex-review").members] == [
+        "engineering-review", "supply-review",
     ]
+    with pytest.raises(CapabilityConfigurationError, match="not an Orchestrator entrypoint"):
+        registry.resolve_skill_entrypoint("engineering-review")
 
 
-def test_skill_bundle_rejects_a_member_bound_to_a_conflicting_path(tmp_path: Path) -> None:
+def test_orchestrator_skill_catalog_hides_bundle_members_and_governance_metadata(tmp_path: Path) -> None:
     builtin = tmp_path / "builtin"
-    for skill_id in ("manual-review", "alternate-review"):
-        skill_dir = builtin / "skills" / skill_id
-        skill_dir.mkdir(parents=True)
-        (skill_dir / "SKILL.md").write_text(
-            f"---\nname: {skill_id}\ndescription: Review evidence.\n---\n\n# Review\n"
-        )
-    (builtin / "skills" / "manual-review" / "bundle.json").write_text(json.dumps({
+    bundle = _write_skill(builtin, "combined-review", "组合评审输入并生成建议。")
+    _write_skill(builtin, "engineering-review", "分析技术可行性。")
+    _write_skill(builtin, "standalone-review", "独立分析风险。")
+    (bundle / "bundle.json").write_text(json.dumps({
         "schema_version": 1,
-        "members": ["alternate-review"],
+        "members": ["engineering-review"],
     }))
-    (builtin / "skill-bindings.json").write_text(json.dumps({
+    (builtin / "skill-ownership.json").write_text(json.dumps({
         "schema_version": 1,
-        "bindings": {
-            "manual-review": {"selector": {
-                "case_type": ["QUALITY_INCIDENT"],
-                "path_definition": ["ManualReview"],
-            }},
-            "alternate-review": {"selector": {
-                "case_type": ["QUALITY_INCIDENT"],
-                "path_definition": ["AlternateReview"],
-            }},
+        "ownership": {
+            "combined-review": {"maintainer_role": "订单统筹经理"},
+            "engineering-review": {"maintainer_role": "研发"},
         },
     }))
 
-    with pytest.raises(CapabilityConfigurationError, match="conflicting selector"):
+    registry = CapabilityRegistry.from_directories(builtin, None)
+
+    assert registry.list_orchestrator_skills() == (
+        {"id": "combined-review", "title": "combined-review", "description": "组合评审输入并生成建议。", "kind": "bundle"},
+        {"id": "standalone-review", "title": "standalone-review", "description": "独立分析风险。", "kind": "atomic"},
+    )
+    assert "engineering-review" not in json.dumps(registry.list_orchestrator_skills(), ensure_ascii=False)
+    assert "订单统筹经理" not in json.dumps(registry.list_orchestrator_skills(), ensure_ascii=False)
+
+
+def test_skill_ownership_is_merged_without_changing_skill_digest(tmp_path: Path) -> None:
+    builtin = tmp_path / "builtin"
+    local = tmp_path / "local"
+    _write_skill(builtin, "risk-review")
+    (builtin / "skill-ownership.json").write_text(json.dumps({
+        "schema_version": 1,
+        "ownership": {"risk-review": {"maintainer_role": "主计划"}},
+    }))
+    local.mkdir()
+    (local / "skill-ownership.json").write_text(json.dumps({
+        "schema_version": 1,
+        "ownership": {"risk-review": {"maintainer_role": "研发"}},
+    }))
+
+    builtin_registry = CapabilityRegistry.from_directories(builtin, None)
+    local_registry = CapabilityRegistry.from_directories(builtin, local)
+    builtin_skill = builtin_registry.list_assets()["skills"][0]
+    local_skill = local_registry.list_assets()["skills"][0]
+
+    assert local_skill["maintainer_role"] == "研发"
+    assert local_skill["resolved_ref"]["digest"] == builtin_skill["resolved_ref"]["digest"]
+
+
+def test_skill_ownership_rejects_unknown_skill(tmp_path: Path) -> None:
+    builtin = tmp_path / "builtin"
+    builtin.mkdir()
+    (builtin / "skill-ownership.json").write_text(json.dumps({
+        "schema_version": 1,
+        "ownership": {"missing-skill": {"maintainer_role": "研发"}},
+    }))
+
+    with pytest.raises(CapabilityConfigurationError, match="unknown Skill"):
         CapabilityRegistry.from_directories(builtin, None)
 
 
@@ -1021,25 +1050,21 @@ def test_local_asset_replaces_builtin_without_editing_builtin(tmp_path: Path) ->
     local_copy.write_text(content)
 
     registry = CapabilityRegistry.from_directories(DEFAULT_BUILTIN_ROOT, tmp_path / "local")
-    resolution = registry.resolve({
-        "case_type": "ORDER_DELIVERY_RISK",
-        "path_definition": "MaterialSubstitution",
-    })
-
-    assert resolution.skills[0].source == "local"
-    local_version = resolution.skills[0].version
-    frozen_snapshot = resolution.to_snapshot()
+    local_skill = next(
+        skill for skill in registry.list_assets()["skills"]
+        if skill["id"] == "material-substitution-analysis"
+    )
+    assert local_skill["resolved_ref"]["source"] == "local"
+    local_version = local_skill["version"]
 
     local_copy.write_text(content.replace("冻结候选集只能来自", "已评审候选集只能来自"))
     reloaded = CapabilityRegistry.from_directories(DEFAULT_BUILTIN_ROOT, tmp_path / "local")
-    assert reloaded.resolve({
-        "case_type": "ORDER_DELIVERY_RISK",
-        "path_definition": "MaterialSubstitution",
-    }).skills[0].version != local_version
-    frozen_details = reloaded.describe_snapshot(frozen_snapshot)
-    frozen_skill = frozen_details["assets"]["skills"][0]
-    assert frozen_skill["version"] == local_version
-    assert frozen_skill["resolved_ref"]["source"] == "local"
+    reloaded_skill = next(
+        skill for skill in reloaded.list_assets()["skills"]
+        if skill["id"] == "material-substitution-analysis"
+    )
+    assert reloaded_skill["version"] != local_version
+    assert reloaded_skill["resolved_ref"]["source"] == "local"
 
 
 def test_developer_can_add_new_local_assets_with_unrelated_filenames() -> None:
@@ -1052,17 +1077,21 @@ def test_developer_can_add_new_local_assets_with_unrelated_filenames() -> None:
     })
 
     assert "POL-MY-COMPANY-REGION-001" in {item.id for item in resolution.policies}
-    assert "regional-certification-check" in {item.id for item in resolution.skills}
+    assert resolution.skills == ()
     assert "KNOW-MY-COMPANY-REGION-001" in {item.id for item in resolution.knowledge}
     assert all(
-        item.source == "local"
-        for item in (*resolution.policies, *resolution.skills, *resolution.knowledge)
+        item.source == "local" for item in (*resolution.policies, *resolution.knowledge)
         if item.id in {
             "POL-MY-COMPANY-REGION-001",
-            "regional-certification-check",
             "KNOW-MY-COMPANY-REGION-001",
         }
     )
+    regional_skill = next(
+        skill for skill in registry.list_assets()["skills"]
+        if skill["id"] == "regional-certification-check"
+    )
+    assert regional_skill["resolved_ref"]["source"] == "local"
+    assert regional_skill["maintainer_role"] == "供应经理"
     assert "REGION-COMPLIANCE" in {item["id"] for item in resolution.compiled_policy["commitments"]}
 
 
