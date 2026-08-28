@@ -151,7 +151,7 @@ class DeterministicPlannerAdapter:
                     skills=[
                         PlannerSkillChoice(
                             id=selected["id"],
-                            reason=f"选择{selected['title']}分析{candidate['title']}相关证据。",
+                            reason=f"选择{selected['title']}，用于分析{candidate['title']}相关证据。",
                         )
                     ],
                 )
