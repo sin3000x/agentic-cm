@@ -2,13 +2,6 @@ from .domain import Case, CaseStatus, OrchestrationPhase
 
 
 DEMO_DATASET_ID = "supply-chain-golden-path-v1"
-LEGACY_DEMO_TITLES = {
-    "CM-2026-014": "订单预计延期",
-    "CM-2026-012": "供应商交付异常",
-    "CM-2026-015": "替代料认证缺口",
-    "CM-2026-009": "备件需求激增",
-    "CM-2026-006": "华南仓到货差异",
-}
 
 
 def demo_cases() -> list[Case]:

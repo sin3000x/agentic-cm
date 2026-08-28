@@ -1,248 +1,46 @@
-# 领域模型、状态机与 CommitmentDAG
+# 领域模型与状态机
 
-## 1. 领域关系
+权威类型在 `backend/agentic_cm/domain.py`。下面只记录运行中的形状，不是规划中的扩展。
 
-```mermaid
-erDiagram
-    CASE ||--o{ HUMAN_PROPOSAL : has
-    CASE ||--o{ MANIFEST : plans
-    CASE ||--o{ PATH_ATTEMPT : explores
-    CASE ||--o{ OWNER_DECISION : concludes
-    CASE }o--o{ CASE : relates_to
+## Case
 
-    MANIFEST ||--|{ MANIFEST_PATH : approves
-    PATH_DEFINITION ||--o{ MANIFEST_PATH : instantiates
-    MANIFEST_PATH ||--|| PATH_ATTEMPT : creates
+`Case` 是业务事实源。字段：`id`、`title`、`description`、`status`（OPEN/CLOSED）、`phase`、`owner`、`owner_role`、`business_payload`、`human_proposal`、`classification`、`manifest`、`path_attempts`、`commitment_nodes`、`synthesis_report`、`owner_decision`、`version`、时间戳。
 
-    PATH_ATTEMPT ||--o{ SOLUTION_REVISION : produces
-    PATH_ATTEMPT ||--|| COMMITMENT_DAG : governs
-    PATH_ATTEMPT ||--o| PATH_RESULT : ends_with
+没有独立的 Case Graph 表。Demo 数据集里的其他 Case 只是列表里的邻居。
 
-    COMMITMENT_DAG ||--|{ COMMITMENT_NODE : contains
-    COMMITMENT_NODE ||--o{ COMMITMENT_ATTEMPT : records
-    COMMITMENT_ATTEMPT }o--|| SOLUTION_REVISION : reviews
-    COMMITMENT_ATTEMPT }o--|| ACTOR : signed_by
-    COMMITMENT_NODE }o--|| ROLE : requires
+## 阶段
 
-    CASE ||--o{ CASE_SYNTHESIS : summarizes
-    CASE_SYNTHESIS }o--|{ PATH_RESULT : references
+```
+INTAKE
+  → Orchestrator 生成 Manifest
+MANIFEST_REVIEW
+  → Owner 勾选 Path 并批准
+PATH_EXPLORATION
+  → Path Agent 为每条已选 Path 写入 SolutionRevision
+PROFESSIONAL_COMMITMENT
+  → 角色在 Inbox 中 APPROVE / REVISE / REJECT
+FINAL_REVIEW
+  → Synthesis 汇总；Owner CLOSE / KEEP_OPEN / MODIFY
 ```
 
-## 2. 核心对象
+`MODIFY` 清空 Manifest 与 Path 状态，把指导写入新的 HumanProposal，回到 INTAKE。
 
-### 2.1 Case
+## Manifest
 
-建议字段：
+`ManifestPath` 保存：
 
-- `id`
-- `case_type`
-- `title`
-- `description`
-- `business_payload`
-- `status`
-- `orchestration_phase`
-- `owner_role_id`
-- `current_owner_actor_id`
-- `ownership_history`
-- `created_at` / `updated_at`
-- `version`
+- `definition` + `rationale`
+- `skill_selections`（入口、中文理由、Bundle 成员）
+- `policies` / `knowledge` 的 `AssetRef`
 
-一个工作项只有同时具有独立业务结果、Owner 和生命周期时，才应成为 Case。普通调查、审批和沟通属于 Case 内部节点。Agent 发现新的独立异常时，只能提出派生 Case 建议；经人确认后才能创建并写入 Case Graph。
+YAML 下载就是这份模型。展示用中文标题只加在 Case view 上，不写进冻结 YAML。
 
-Case Graph 支持的首版关系：
+## PathAttempt 与 Commitment
 
-- `derived-from`
-- `depends-on`
-- `blocked-by`
-- `related-to`
+`PathAttempt.state`：PLANNED → AWAITING_COMMITMENT → SUCCEEDED / REJECTED，或 REVISING 后重新探索。
 
-### 2.2 HumanProposal
+`CommitmentNode.status`：BLOCKED / PENDING / READY / STALE / REJECTED。依赖由 Policy `depends_on` 编译，不另存一张 DAG 表。
 
-HumanProposal 由 Case Owner 在创建或受理 Case 时提供，可为空，但一旦提交必须版本化。其他角色在后续流程中提供的内容应进入 Evidence、Review 或 Commitment，不得写入 HumanProposal。建议字段：
+## 公开时间线
 
-- `case_id`
-- `revision`
-- `author_actor_id`
-- `content`
-- `created_at`
-
-`author_actor_id` 必须是该版本提交时的 Case Owner；Owner 变更不改写已有 HumanProposal 的作者记录。
-
-Manifest 记录采用、部分采用或未采用的 HumanProposal 版本及理由。
-
-### 2.3 PathDefinition 与 PathAttempt
-
-`PathDefinition` 表达组织针对某个 `case_type` 认可的解决思路，例如 `ORDER_DELIVERY_RISK` 下的 `MaterialSubstitution`。不同 Case 类型由各自的 `case-types/<name>/paths.json` Catalog 拥有独立集合。初版定义刻意只包含：
-
-- `id`；
-- `title`；
-- `description`。
-
-本次 Case 为什么值得探索该 Path 是 Planner 产生的 Manifest `rationale`，不属于静态定义。执行方法来自 Orchestrator 为本 Path 选择并冻结进 Manifest 的 Skill，强制责任与依赖来自 Policy，均不塞入 PathDefinition。
-
-`PathAttempt` 是某个定义在具体 Case 中的一次探索。相同 PathDefinition 可以再次尝试，但必须创建新的 PathAttempt，不能覆盖前次失败记录。
-
-### 2.4 SolutionRevision
-
-首版方案固定为以下 Section：
-
-- `supply`
-- `technical`
-- `customer`
-- `overall_recommendation`
-
-每个 Section 保存稳定 ID、内容和内容哈希。SolutionRevision 不可变；修改产生新版本，并记录与前一版本的 Section diff。
-
-建议附带的结构化信息：
-
-- 方案正文；
-- Claims；
-- Evidence 引用；
-- 假设与风险；
-- 面向 Commitment 节点的材料包。
-
-首版审批人不需要手工填写复杂的假设、失效条件或补救问卷。
-
-## 3. Case 状态
-
-Case 的业务状态与系统编排阶段必须分离。
-
-### 3.1 Case status
-
-```mermaid
-stateDiagram-v2
-    [*] --> OPEN
-    OPEN --> CLOSED: Owner closes case
-    OPEN --> OPEN: Owner keeps open or modifies
-    CLOSED --> [*]
-```
-
-- `OPEN`：正在处理、等待当前编排，或 Owner 选择继续保持开启；
-- `CLOSED`：Owner 已作关闭决定。
-
-### 3.2 Orchestration phase
-
-```mermaid
-stateDiagram-v2
-    [*] --> INTAKE
-    INTAKE --> MANIFEST_REVIEW: Manifest generated
-    MANIFEST_REVIEW --> PATH_EXPLORATION: Owner approves paths
-    PATH_EXPLORATION --> PROFESSIONAL_COMMITMENT: All selected paths have SolutionRevision
-    PROFESSIONAL_COMMITMENT --> FINAL_REVIEW: All selected Path approval DAGs terminal
-    FINAL_REVIEW --> [*]: Owner closes or keeps open
-    FINAL_REVIEW --> INTAKE: Owner requests modification
-```
-
-- `INTAKE`
-- `MANIFEST_REVIEW`
-- `PATH_EXPLORATION`
-- `PROFESSIONAL_COMMITMENT`
-- `FINAL_REVIEW`
-
-Case `status` 只表达 `OPEN/CLOSED`；等待审批属于 Path 和 Commitment 层，由 `phase` 与节点状态表达。
-
-## 4. PathAttempt 生命周期
-
-PathAttempt 使用一个权威 `state`，不再维护容易不一致的 `phase + outcome` 组合。AgentRun 单独记录运行中的技术状态。
-
-```mermaid
-stateDiagram-v2
-    [*] --> PLANNED
-    PLANNED --> AWAITING_COMMITMENT: SolutionRevision ready
-    AWAITING_COMMITMENT --> REVISING: Changes requested
-    REVISING --> AWAITING_COMMITMENT: New revision ready
-    AWAITING_COMMITMENT --> SUCCEEDED: All required commitments approved
-    AWAITING_COMMITMENT --> REJECTED: A node rejects
-```
-
-State：
-
-- `PLANNED`
-- `AWAITING_COMMITMENT`
-- `REVISING`
-- `SUCCEEDED`
-- `REJECTED`
-
-阻塞信息存放在 `active_blockers[]`，不将 `BLOCKED` 设为终态。阻塞解除后恢复原 phase。无法解决的阻塞必须升级给 Coordinator 和 Owner，由 Owner 继续等待或取消 Path；系统不能自动伪装为失败。
-
-所有当前获批 PathAttempt 达到终态后，才允许生成 CaseSynthesis。
-
-## 5. CommitmentDAG
-
-### 5.1 节点类型
-
-前端可以统一称为“审批 DAG”或“审批链”，内部对象使用 `CommitmentDAG`。节点类型为：
-
-- `EVIDENCE`：提供事实或证据；
-- `REVIEW`：作出专业判断并提出修改意见；
-- `APPROVAL`：对明确 Claim 作出承诺；
-- `OWNER_DECISION`：Case Owner 的最终决定。
-
-DAG 边只表示就绪依赖：上游达到指定结果并提供所需 Artifact 后，下游才可开始。下游不需要对上游人员本身作出审批。
-
-DAG 描述稳定的责任拓扑，不用反向边表达打回循环。打回通过新的 SolutionRevision 与 CommitmentAttempt 记录。
-
-### 5.2 角色解析
-
-节点首先要求 `Organization + Role`。依赖满足后节点进入 `PENDING` 并投递到角色 Inbox；具体 Actor 在自己的 Inbox 批准后，节点才进入 `READY`。审批记录保存 Actor 在提交时拥有的角色。改派和委托必须留痕。
-
-首版可为每个角色固定一个 Actor，但仍使用认领语义。Role Switcher 只允许从全局身份区（左下角头像）进入，不在 CommitmentDAG 节点或任务卡片中提供快捷切换；它必须标记为 `Demo identity simulation`，不得声称提供生产级认证授权。
-
-Coordinator 可以查看、提醒、升级、转达、标记阻塞和建议改派，但不能代替业务角色 COMMIT，除非该 Actor 同时拥有相应角色。
-
-### 5.3 最小审批结果
-
-首版只支持：
-
-- `COMMIT`
-- `REQUEST_CHANGES`
-- `DECLINE`
-
-平台自动保存 Actor、角色、时间、SolutionRevision、Claim 与当时展示的证据。`COMMIT` 可以不填写说明；`REQUEST_CHANGES` 和 `DECLINE` 必须填写简短原因。
-
-- `REQUEST_CHANGES` 触发 Agent 生成新 SolutionRevision；
-- `DECLINE` 使当前 PathAttempt 进入 `REJECTED`；
-- 缺少信息时首版使用 `REQUEST_CHANGES`，暂不引入 `REQUEST_INFORMATION`。
-
-### 5.4 并行审批与最小责任 DAG
-
-Policy 声明最低责任要求，Orchestrator 在约束内解析最少的具体角色节点：
-
-- 同一 Actor 若同时拥有两个有效角色，可以在一次交互中分别签署两个 Commitment；
-- 没有就绪依赖的节点默认并行；
-- Agent 可以提出减少重复节点或改变 DAG 的建议；
-- 强制 Policy 节点不能被 Agent 删除；
-- 节点不适用、证据已覆盖或责任完全重复时，删减建议必须附带可审查依据。
-
-首版主要证明并行评审和局部重审，不以减少责任角色数量为主要卖点。
-
-## 6. 局部重审
-
-每个 Commitment 节点声明自己审查的 Solution Section。生成新 SolutionRevision 后，平台比较 Section 哈希：
-
-1. 审查发生变化 Section 的节点变为 `STALE`；
-2. 依赖这些节点的下游 Commitment 也变为 `STALE`；
-3. 无关并行分支的 `COMMIT` 继续有效；
-4. 只重新打开 `STALE` 节点。
-
-Agent 可以建议影响范围，但最终失效计算由平台完成。
-
-Golden Path 中，上游承诺一开始覆盖候选物料 A 和 B。客户拒绝 A、选择 B 时，`supply` 和 `technical` Section 未变化，仅 `customer` 和 `overall_recommendation` 变化，因此主计划与研发 Commitment 仍然有效。
-
-如果 Agent 引入未被上游评审的物料 C，则 `supply` 和 `technical` 必须变化并触发相应重审。
-
-`max_revision_rounds` 为可配置项，优先级为 Path/Policy override 高于平台默认值，并在 Manifest 生成时冻结。达到上限后，Path 保持 `AWAITING_COMMITMENT`，并增加 `revision_limit_reached` blocker；Owner 可以留痕追加一轮或取消 Path，不自动判定失败。
-
-## 7. OwnerDecision
-
-Owner 首版选择：
-
-- `CLOSE`
-- `KEEP_OPEN`
-- `MODIFY`
-
-平台自动将当前 CaseSynthesis、所有 PathResult、SolutionRevision 和有效 Commitments 的快照附加到 OwnerDecision。
-
-CaseSynthesis 本身也必须版本化。重新汇总会创建新版本，OwnerDecision 引用作出决定时看到的具体版本。
-
-关闭不触发外部业务系统修改。`KEEP_OPEN` 保留当前汇总与 Case 的 Open 状态；`MODIFY` 必须由 Case Owner 提供非空指导文字。平台将该文字保存为新版 Human Proposal，留存决定与上一版 Proposal 快照，清空当前活动 Manifest/Path 状态，并回到 `INTAKE`，让下一轮 Orchestrator 明确消费这次修改指导。
+Thread 只投影 `CaseEvent` 中的业务事件。启动期迁移事件已经删除；旧库无法校验时直接重种 demo。

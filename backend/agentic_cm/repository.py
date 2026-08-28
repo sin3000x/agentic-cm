@@ -6,21 +6,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .domain import (
-    Case,
-    CaseStatus,
-    CommitmentNode,
-    Manifest,
-    ManifestPath,
-    NodeStatus,
-    OrchestrationPhase,
-    PathAttempt,
-    PathAttemptState,
-)
+from pydantic import ValidationError
+
+from .domain import Case
 
 
 class CaseRepository:
-    """SQLite current state plus append-only domain events."""
+    """SQLite current-state Case payload plus append-only events and agent traces."""
 
     def __init__(self, database_path: str | Path) -> None:
         self.database_path = str(database_path)
@@ -201,12 +193,20 @@ class CaseRepository:
     def list_cases(self) -> list[Case]:
         with self._connect() as connection:
             rows = connection.execute("SELECT payload FROM cases ORDER BY id").fetchall()
-        return [self._decode(json.loads(row["payload"])) for row in rows]
+        try:
+            return [Case.model_validate(json.loads(row["payload"])) for row in rows]
+        except (ValidationError, json.JSONDecodeError, TypeError):
+            return []
 
     def get(self, case_id: str) -> Case | None:
         with self._connect() as connection:
             row = connection.execute("SELECT payload FROM cases WHERE id = ?", (case_id,)).fetchone()
-        return self._decode(json.loads(row["payload"])) if row else None
+        if row is None:
+            return None
+        try:
+            return Case.model_validate(json.loads(row["payload"]))
+        except (ValidationError, json.JSONDecodeError, TypeError):
+            return None
 
     def has_event(self, case_id: str, event_type: str) -> bool:
         with self._connect() as connection:
@@ -259,203 +259,3 @@ class CaseRepository:
                     "INSERT INTO cases (id, payload, version) VALUES (?, ?, ?)",
                     (case.id, json.dumps(case.to_dict(), ensure_ascii=False), case.version),
                 )
-
-    @staticmethod
-    def _decode(data: dict[str, Any]) -> Case:
-        manifest_data = data.get("manifest")
-        manifest = None
-        if manifest_data:
-            snapshots = manifest_data.get("capability_snapshots", {})
-            raw_paths = manifest_data["paths"]
-            if not snapshots and manifest_data.get("capability_snapshot") and raw_paths:
-                snapshots = {raw_paths[0]["id"]: manifest_data["capability_snapshot"]}
-            paths = []
-            for raw_path in raw_paths:
-                path_payload = dict(raw_path)
-                snapshot = snapshots.get(path_payload["id"])
-                if (
-                    snapshot
-                    and "skills" not in path_payload
-                    and "skill_selections" not in path_payload
-                ):
-                    normalized = CaseRepository._normalize_capability_snapshot(snapshot)
-                    payloads = normalized["asset_payloads"]
-                    path_payload["skills"] = [
-                        skill for skill in payloads.get("skills", [])
-                        if path_payload["definition"]
-                        in (skill.get("selector") or {}).get("path_definition", [])
-                    ]
-                    path_payload["knowledge"] = payloads.get("knowledge", [])
-                    policies = [
-                        CaseRepository._normalize_manifest_policy(policy)
-                        for policy in payloads.get("policies", [])
-                    ]
-                    commitment_order = {
-                        item["id"]: index
-                        for index, item in enumerate(
-                            normalized.get("compiled_policy", {}).get("commitments", [])
-                        )
-                    }
-                    if commitment_order:
-                        for policy in policies:
-                            policy["commitments"].sort(
-                                key=lambda item: commitment_order[item["id"]]
-                            )
-                        policies.sort(
-                            key=lambda policy: min(
-                                commitment_order[item["id"]]
-                                for item in policy["commitments"]
-                            )
-                        )
-                    path_payload["policies"] = policies
-                path_payload.pop("title", None)
-                if "skill_selections" in path_payload:
-                    path_payload["skill_selections"] = [
-                        {
-                            "entrypoint": CaseRepository._manifest_asset_ref(
-                                item["entrypoint"]
-                            ),
-                            "reason": item.get("reason"),
-                            "members": [
-                                CaseRepository._manifest_asset_ref(member)
-                                for member in item.get("members", [])
-                            ],
-                        }
-                        for item in path_payload.get("skill_selections", [])
-                    ]
-                    path_payload.pop("skills", None)
-                elif "skills" in path_payload:
-                    path_payload["skills"] = [
-                        CaseRepository._manifest_asset_ref(item)
-                        for item in path_payload.get("skills", [])
-                    ]
-                for group in ("policies", "knowledge"):
-                    path_payload[group] = [
-                        CaseRepository._manifest_asset_ref(item)
-                        for item in path_payload.get(group, [])
-                    ]
-                paths.append(ManifestPath.model_validate(path_payload))
-            manifest = Manifest(
-                id=manifest_data["id"], revision=manifest_data["revision"],
-                paths=tuple(paths),
-                knowledge=tuple(
-                    CaseRepository._manifest_asset_ref(item)
-                    for item in manifest_data.get("knowledge", [])
-                ),
-                generated_from_case_version=manifest_data.get("generated_from_case_version", 0),
-            )
-        nodes = [
-            CommitmentNode(
-                id=item["id"], role=item["role"],
-                review_dimension=item.get("review_dimension")
-                or item.get("role_report", {}).get("dimension")
-                or item["role"],
-                status=NodeStatus.READY if item["status"] == "COMMITTED" else NodeStatus(item["status"]),
-                depends_on=tuple(item.get("depends_on", [])),
-                path_id=item.get("path_id", ""),
-            ) for item in data.get("commitment_nodes", [])
-        ]
-        raw_legacy_attempt = data.get("path_attempt")
-        raw_attempts = data.get("path_attempts") or ([raw_legacy_attempt] if raw_legacy_attempt else [])
-        path_attempts = [CaseRepository._normalize_path_attempt(item) for item in raw_attempts]
-        raw_case_status = data["status"]
-        return Case(
-            id=data["id"], title=data["title"], description=data["description"],
-            status=CaseStatus.OPEN if raw_case_status == "PENDING" else CaseStatus(raw_case_status),
-            phase=OrchestrationPhase(data["phase"]), owner=data["owner"], owner_role=data["owner_role"],
-            business_payload=data["business_payload"], human_proposal=data.get("human_proposal"),
-            classification=data.get("classification", {}), manifest=manifest,
-            path_attempts=path_attempts,
-            commitment_nodes=nodes,
-            synthesis_report=data.get("synthesis_report"),
-            owner_decision=CaseRepository._normalize_owner_decision(data.get("owner_decision")),
-            version=data["version"],
-            created_at=data.get("created_at", data["updated_at"]), updated_at=data["updated_at"],
-        )
-
-    @staticmethod
-    def _manifest_asset_ref(payload: dict[str, Any]) -> dict[str, str]:
-        resolved = payload.get("resolved_ref")
-        ref = resolved if isinstance(resolved, dict) else payload
-        return {
-            "id": str(ref.get("id") or payload.get("id") or "legacy-unverified"),
-            "version": str(
-                ref.get("version") or payload.get("version") or "legacy-unverified"
-            ),
-            "digest": str(
-                ref.get("digest") or payload.get("digest") or "legacy-unverified"
-            ),
-        }
-
-    @staticmethod
-    def _normalize_path_attempt(value: Any) -> PathAttempt:
-        """Read legacy PathAttempt shapes into the single authoritative state field."""
-        attempt = dict(value) if isinstance(value, dict) else {}
-        revision = attempt.get("solution_revision")
-        if not isinstance(revision, dict) or not isinstance(revision.get("options"), list):
-            revision = None
-        else:
-            revision = {
-                key: item for key, item in revision.items()
-                if key not in {"path_id", "path_definition", "required_commitment_ids", "manifest_ref"}
-            }
-        raw_state = attempt.get("state")
-        if raw_state in {item.value for item in PathAttemptState}:
-            state = PathAttemptState(raw_state)
-        elif attempt.get("phase") == "DONE" and attempt.get("outcome") == "SUCCEEDED":
-            state = PathAttemptState.SUCCEEDED
-        elif attempt.get("phase") == "DONE" and attempt.get("outcome") in {"REJECTED", "FAILED"}:
-            state = PathAttemptState.REJECTED
-        elif attempt.get("phase") == "REVISING":
-            state = PathAttemptState.REVISING
-        elif revision:
-            state = PathAttemptState.AWAITING_COMMITMENT
-        else:
-            state = PathAttemptState.PLANNED
-        return PathAttempt(
-            path_id=str(attempt.get("path_id", "")),
-            state=state,
-            solution_revision=revision,
-        )
-
-    @staticmethod
-    def _normalize_capability_snapshot(value: Any) -> dict[str, Any]:
-        snapshot = dict(value) if isinstance(value, dict) else {}
-        payloads = json.loads(json.dumps(snapshot.get("asset_payloads", {}), ensure_ascii=False))
-        for group_items in payloads.values():
-            for asset in group_items:
-                for removed in ("kind", "status", "purpose", "entrypoint"):
-                    asset.pop(removed, None)
-        for policy in payloads.get("policies", []):
-            for commitment in policy.get("requirements", {}).get("commitments", []):
-                report = commitment.pop("role_report", {})
-                commitment.pop("reviews", None)
-                commitment.setdefault("review_dimension", report.get("dimension") or commitment.get("role", ""))
-        compiled = json.loads(json.dumps(snapshot.get("compiled_policy", {}), ensure_ascii=False))
-        for commitment in compiled.get("commitments", []):
-            report = commitment.pop("role_report", {})
-            commitment.pop("reviews", None)
-            commitment.setdefault("review_dimension", report.get("dimension") or commitment.get("role", ""))
-        return {
-            "schema_version": snapshot.get("schema_version", 1),
-            "context": dict(snapshot.get("context", {})),
-            "compiled_policy": compiled,
-            "asset_payloads": payloads,
-        }
-
-    @staticmethod
-    def _normalize_manifest_policy(policy: dict[str, Any]) -> dict[str, Any]:
-        normalized = json.loads(json.dumps(policy, ensure_ascii=False))
-        requirements = normalized.pop("requirements", {})
-        normalized["commitments"] = list(requirements.get("commitments", []))
-        return normalized
-
-    @staticmethod
-    def _normalize_owner_decision(value: Any) -> dict[str, Any] | None:
-        if not isinstance(value, dict):
-            return None
-        return {
-            key: value[key]
-            for key in ("action", "actor", "role", "synthesis_revision", "decided_at")
-            if key in value
-        }

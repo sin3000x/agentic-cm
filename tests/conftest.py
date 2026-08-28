@@ -13,6 +13,7 @@ Two conventions worth knowing before adding tests here:
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -20,7 +21,7 @@ from typing import Any
 import httpx
 import pytest
 
-from agentic_cm.orchestrator import DeterministicPlannerAdapter
+from agentic_cm.orchestrator import DeterministicPlannerAdapter, PlannerOutput, PlannerPath, PlannerSkillChoice
 from agentic_cm.path_agent import DeterministicPathAgentAdapter
 from agentic_cm.repository import CaseRepository
 from agentic_cm.service import CaseService
@@ -33,16 +34,34 @@ OWNER_ROLE = "订单统筹经理"
 OWNER = {"actor": OWNER_ACTOR, "role": OWNER_ROLE}
 
 
-def make_service(tmp_path: Path) -> CaseService:
+def make_service(tmp_path: Path, **overrides) -> CaseService:
     """Build a deterministic-adapter service on a fresh database."""
     service = CaseService(
         CaseRepository(tmp_path / "test.db"),
-        planner=DeterministicPlannerAdapter(),
-        path_agent=DeterministicPathAgentAdapter(),
-        synthesis_agent=DeterministicSynthesisAgentAdapter(),
+        planner=overrides.get("planner", DeterministicPlannerAdapter()),
+        path_agent=overrides.get("path_agent", DeterministicPathAgentAdapter()),
+        synthesis_agent=overrides.get("synthesis_agent", DeterministicSynthesisAgentAdapter()),
+        **{key: value for key, value in overrides.items() if key not in {"planner", "path_agent", "synthesis_agent"}},
     )
     service.ensure_demo_data()
     return service
+
+
+def orchestrate(service: CaseService, case_id: str = DEMO_CASE_ID):
+    return asyncio.run(service.orchestrate_case(case_id, actor=OWNER_ACTOR, role=OWNER_ROLE))
+
+
+def approve_and_execute(service: CaseService, path_ids: list[str] | None = None):
+    orchestrate(service)
+    service.approve_manifest(DEMO_CASE_ID, path_ids or ["PATH-01"], actor=OWNER_ACTOR, role=OWNER_ROLE)
+    target_ids = path_ids or ["PATH-01"]
+    if len(target_ids) == 1:
+        return asyncio.run(service.execute_path(
+            DEMO_CASE_ID, target_ids[0], actor=OWNER_ACTOR, role=OWNER_ROLE
+        ))
+    return asyncio.run(service.execute_paths(
+        DEMO_CASE_ID, target_ids, actor=OWNER_ACTOR, role=OWNER_ROLE
+    ))
 
 
 @pytest.fixture
@@ -60,6 +79,32 @@ def client(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(api, "service", make_service(tmp_path))
     with TestClient(api.app) as test_client:
         yield test_client
+
+
+def planner_choice_for(definition: str) -> tuple[str, str]:
+    return {
+        "MaterialSubstitution": ("material-substitution-analysis", "需要完整评估替代方案。"),
+        "SupplyExpediting": ("supply-expediting-analysis", "需要分析供应加速选项。"),
+        "OrderSplit": ("order-split-analysis", "需要分析订单拆分选项。"),
+    }.get(definition, ("review-bundle", "需要分析当前路径。"))
+
+
+class AllMatchedSkillPathsPlanner:
+    async def propose(self, context, candidates, skill_catalog, trace):
+        return PlannerOutput(
+            paths=tuple(
+                PlannerPath(
+                    definition=candidate["definition"],
+                    rationale=f"{candidate['definition']} 的候选能力与当前 Case 匹配",
+                    skills=[
+                        PlannerSkillChoice(id=skill_id, reason=reason)
+                        for skill_id, reason in [planner_choice_for(candidate["definition"])]
+                    ],
+                )
+                for candidate in candidates
+            ),
+            planner_profile="test/all-matched-skill-paths",
+        )
 
 
 def chat_completion_response(

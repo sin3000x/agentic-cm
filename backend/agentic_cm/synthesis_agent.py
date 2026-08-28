@@ -2,17 +2,18 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass
-from typing import Annotated, Any, Literal, Protocol
+from typing import Any, Protocol
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from .agent_runtime import (
+    AgentError,
+    AgentExecutionError,
+    AgentOutputError,
     AgentTraceSink,
-    ModelEndpoint,
     TraceNarration,
     configure_thinking,
+    openai_model_endpoint,
     request_structured_output,
 )
 from .config import (
@@ -20,25 +21,16 @@ from .config import (
     agent_adapter_from_environment,
     agent_llm_config_from_environment,
 )
-from .domain import Case, OrchestrationPhase, PathAttemptState
-from .llm import OpenAICompatibleClient, build_openai_compatible_client
-
-
-class SynthesisAgentError(ValueError):
-    pass
-
-
-class SynthesisAgentOutputError(SynthesisAgentError):
-    pass
-
-
-class SynthesisAgentExecutionError(SynthesisAgentError):
-    pass
-
-
-NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
-PathStatus = Literal["SUCCEEDED", "FAILED"]
-OwnerAction = Literal["CLOSE", "KEEP_OPEN", "MODIFY"]
+from .domain import (
+    Case,
+    OrchestrationPhase,
+    OwnerDecisionAction,
+    PathAssessment,
+    PathAttemptState,
+    PathOutcome,
+    SynthesisReport,
+    SynthesisResult,
+)
 
 
 _SYNTHESIS_NARRATION = TraceNarration(
@@ -51,89 +43,58 @@ _SYNTHESIS_NARRATION = TraceNarration(
 )
 
 
-class _PathAssessmentPayload(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    path_id: NonEmptyText
-    status: PathStatus
-    conclusion: NonEmptyText
-    supporting_refs: list[NonEmptyText] = Field(min_length=1)
-    risks: list[NonEmptyText]
-
-
-class _SynthesisResultPayload(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    summary: NonEmptyText
-    path_assessments: list[_PathAssessmentPayload] = Field(min_length=1)
-    cross_path_findings: list[NonEmptyText]
-    remaining_risks: list[NonEmptyText]
-    recommended_owner_action: OwnerAction
-    decision_brief: NonEmptyText
-
-
-@dataclass(frozen=True)
 class SynthesisContext:
-    case_snapshot: dict[str, Any]
-    manifest_ref: dict[str, Any]
-    path_results: tuple[dict[str, Any], ...]
+    def __init__(self, **fields: Any) -> None:
+        self.__dict__.update(fields)
 
-
-@dataclass(frozen=True)
-class SynthesisPromptContext:
-    case_snapshot: dict[str, Any]
-    manifest_ref: dict[str, Any]
-    path_results: tuple[dict[str, Any], ...]
-
-
-@dataclass(frozen=True)
-class PathAssessment:
-    path_id: str
-    status: PathStatus
-    conclusion: str
-    supporting_refs: tuple[str, ...]
-    risks: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class SynthesisResult:
-    summary: str
-    path_assessments: tuple[PathAssessment, ...]
-    cross_path_findings: tuple[str, ...]
-    remaining_risks: tuple[str, ...]
-    recommended_owner_action: OwnerAction
-    decision_brief: str
-    adapter_profile: str
+    def prompt_payload(self) -> dict[str, Any]:
+        path_results = []
+        for item in self.path_results:
+            revision = item["solution_revision"]
+            path_results.append({
+                "path_id": item["path_id"],
+                "definition": item["definition"],
+                "title": item["title"],
+                "status": item["status"],
+                "solution_revision": {
+                    key: revision[key]
+                    for key in (
+                        "revision", "summary", "options",
+                        "recommendation", "evidence_gaps", "role_reports",
+                    )
+                    if key in revision
+                },
+                "commitments": [
+                    {key: node[key] for key in ("id", "role", "review_dimension", "status") if key in node}
+                    for node in item["commitments"]
+                ],
+                "authorized_supporting_refs": item["authorized_supporting_refs"],
+            })
+        return {
+            "case_snapshot": self.case_snapshot,
+            "manifest_ref": self.manifest_ref,
+            "path_results": path_results,
+        }
 
 
 class SynthesisAgentAdapter(Protocol):
-    async def generate(
-        self,
-        context: SynthesisContext,
-        trace: AgentTraceSink,
-    ) -> SynthesisResult: ...
+    async def generate(self, context: SynthesisContext, trace: AgentTraceSink) -> SynthesisResult: ...
 
 
 class DeterministicSynthesisAgentAdapter:
-    """Keyless aggregation that only restates approved or rejected Path artifacts."""
-
     profile = "deterministic-synthesis/v1"
 
-    async def generate(
-        self,
-        context: SynthesisContext,
-        trace: AgentTraceSink,
-    ) -> SynthesisResult:
+    async def generate(self, context: SynthesisContext, trace: AgentTraceSink) -> SynthesisResult:
         trace(
             "model.request",
             "COMPLETED",
             "Deterministic Synthesis Adapter 接收全部终态 Path 结果",
-            {"context": asdict(context), "adapter": self.profile},
+            {"context": context.prompt_payload(), "adapter": self.profile},
         )
         assessments: list[PathAssessment] = []
         for item in context.path_results:
             solution = item["solution_revision"]
-            status: PathStatus = item["status"]
+            status: PathOutcome = item["status"]
             commitment_refs = [
                 f"{item['path_id']}/commitment/{node['id']}"
                 for node in item["commitments"]
@@ -147,29 +108,33 @@ class DeterministicSynthesisAgentAdapter:
                     if status == "SUCCEEDED"
                     else f"{item['title']}在专业审批中被否决，失败结果与已形成方案均保留供比较。"
                 ),
-                supporting_refs=(
+                supporting_refs=[
                     f"{item['path_id']}/solution-revision/{solution['revision']}",
                     *commitment_refs,
-                ),
-                risks=tuple(solution.get("evidence_gaps", [])),
+                ],
+                risks=list(solution.get("evidence_gaps", [])),
             ))
         successful = [item for item in assessments if item.status == "SUCCEEDED"]
         failed = [item for item in assessments if item.status == "FAILED"]
-        action: OwnerAction = "CLOSE" if successful and not failed else "KEEP_OPEN" if successful else "MODIFY"
+        if successful and not failed:
+            action = OwnerDecisionAction.CLOSE
+        elif successful:
+            action = OwnerDecisionAction.KEEP_OPEN
+        else:
+            action = OwnerDecisionAction.MODIFY
         result = SynthesisResult(
             summary=f"已汇总 {len(assessments)} 条已探索 Path：{len(successful)} 条审批通过，{len(failed)} 条审批失败。",
-            path_assessments=tuple(assessments),
-            cross_path_findings=("各 Path 结论均来自其 SolutionRevision 与人类审批节点，未补充新的业务证据。",),
-            remaining_risks=tuple(dict.fromkeys(risk for item in assessments for risk in item.risks)),
+            path_assessments=assessments,
+            cross_path_findings=["各 Path 结论均来自其 SolutionRevision 与人类审批节点，未补充新的业务证据。"],
+            remaining_risks=list(dict.fromkeys(risk for item in assessments for risk in item.risks)),
             recommended_owner_action=action,
             decision_brief="请 Case Owner 基于成功与失败 Path 的完整记录选择关闭、保持 Open 或打回 Orchestrator；本报告不替代最终决定。",
-            adapter_profile=self.profile,
         )
         trace(
             "model.response",
             "COMPLETED",
             "Deterministic Synthesis Adapter 返回结构化汇总报告",
-            {"result": _result_payload(result)},
+            {"result": result.model_dump(mode="json")},
         )
         return result
 
@@ -187,36 +152,24 @@ class OpenAICompatibleSynthesisAgentAdapter:
         max_output_tokens: int = 4000,
         thinking_enabled: bool = False,
         reasoning_effort: ReasoningEffort = "high",
-        client: OpenAICompatibleClient | None = None,
+        client=None,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
-        if not model.strip() or not base_url.strip():
-            raise SynthesisAgentError("Synthesis Agent requires a model id and base URL")
         if max_output_tokens < 1000:
-            raise SynthesisAgentError("Synthesis Agent max output tokens must be at least 1000")
-        try:
-            self._client = client or build_openai_compatible_client(
-                api_key,
-                base_url=base_url,
-                api_key_header=api_key_header,
-                api_key_prefix=api_key_prefix,
-                timeout_seconds=timeout_seconds,
-                http_client=http_client,
-            )
-        except ValueError as exc:
-            raise SynthesisAgentError(str(exc)) from exc
-        self._api_key = api_key
+            raise AgentError("Synthesis Agent max output tokens must be at least 1000")
         self._model = model
-        self._base_url = base_url.rstrip("/")
-        self._api_key_header = api_key_header
         self._max_output_tokens = max_output_tokens
         self._thinking_enabled = thinking_enabled
         self._reasoning_effort = reasoning_effort
-        self._endpoint = ModelEndpoint(
-            client=self._client,
-            base_url=self._base_url,
+        self._endpoint = openai_model_endpoint(
+            api_key,
+            model=model,
+            base_url=base_url,
             api_key_header=api_key_header,
-            api_key_present=bool(api_key),
+            api_key_prefix=api_key_prefix,
+            timeout_seconds=timeout_seconds,
+            http_client=http_client,
+            client=client,
         )
 
     @property
@@ -224,14 +177,8 @@ class OpenAICompatibleSynthesisAgentAdapter:
         return f"openai-compatible-synthesis/{self._model}"
 
     async def generate(self, context: SynthesisContext, trace: AgentTraceSink) -> SynthesisResult:
-        schema = _SynthesisResultPayload.model_json_schema()
-        prompt_context = _synthesis_prompt_context(context)
-        trace(
-            "model.context_projection",
-            "COMPLETED",
-            "将完整终态 Path 工件投影为 Synthesis 模型上下文",
-            {"context": asdict(prompt_context)},
-        )
+        prompt = context.prompt_payload()
+        trace("model.context_projection", "COMPLETED", "构造 Synthesis 模型上下文", {"context": prompt})
         request: dict[str, Any] = {
             "model": self._model,
             "messages": [
@@ -246,24 +193,22 @@ class OpenAICompatibleSynthesisAgentAdapter:
                         "Path assessment, supporting_refs must copy one or more exact strings from that "
                         "Path's authorized_supporting_refs array; do not paraphrase or create references. "
                         "Return JSON only and match this schema exactly: "
-                        f"{json.dumps(schema)}"
+                        f"{json.dumps(SynthesisResult.model_json_schema())}"
                     ),
                 },
-                {"role": "user", "content": json.dumps(asdict(prompt_context), ensure_ascii=False)},
+                {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
             ],
             "response_format": {"type": "json_object"},
             "max_tokens": self._max_output_tokens,
             "stream": False,
         }
         configure_thinking(
-            request,
-            enabled=self._thinking_enabled,
-            reasoning_effort=self._reasoning_effort,
+            request, enabled=self._thinking_enabled, reasoning_effort=self._reasoning_effort
         )
-        def build_result(payload: _SynthesisResultPayload) -> SynthesisResult:
-            result = _parse_result(payload, self.profile)
-            _validate_result(result, context)
-            return result
+
+        def build_result(payload: SynthesisResult) -> SynthesisResult:
+            _validate_result(payload, context)
+            return payload
 
         return await request_structured_output(
             self._endpoint,
@@ -272,48 +217,17 @@ class OpenAICompatibleSynthesisAgentAdapter:
             trace=trace,
             step_prefix="model",
             narration=_SYNTHESIS_NARRATION,
-            payload_model=_SynthesisResultPayload,
+            payload_model=SynthesisResult,
             build_result=build_result,
             repair_instruction=lambda exc: (
                 f"The previous output was invalid: {exc}. Return valid JSON only. "
                 "Copy supporting_refs exactly from each Path's authorized_supporting_refs. "
                 "Remember that READY Commitments are already approved by humans."
             ),
-            execution_error=SynthesisAgentExecutionError,
-            output_error=SynthesisAgentOutputError,
-            # Paraphrased supporting_refs are schema-valid but must still be repaired.
-            recoverable_output_errors=(SynthesisAgentOutputError,),
+            execution_error=AgentExecutionError,
+            output_error=AgentOutputError,
+            recoverable_output_errors=(AgentOutputError,),
         )
-
-
-def _synthesis_prompt_context(context: SynthesisContext) -> SynthesisPromptContext:
-    path_results: list[dict[str, Any]] = []
-    for item in context.path_results:
-        revision = item["solution_revision"]
-        path_results.append({
-            "path_id": item["path_id"],
-            "definition": item["definition"],
-            "title": item["title"],
-            "status": item["status"],
-            "solution_revision": {
-                key: revision[key]
-                for key in (
-                    "revision", "summary", "options", "recommendation", "evidence_gaps", "role_reports"
-                )
-                if key in revision
-            },
-            "commitments": [{
-                key: node[key]
-                for key in ("id", "role", "review_dimension", "status")
-                if key in node
-            } for node in item["commitments"]],
-            "authorized_supporting_refs": item["authorized_supporting_refs"],
-        })
-    return SynthesisPromptContext(
-        case_snapshot=context.case_snapshot,
-        manifest_ref=context.manifest_ref,
-        path_results=tuple(path_results),
-    )
 
 
 class SynthesisAgent:
@@ -325,7 +239,7 @@ class SynthesisAgent:
         case: Case,
         path_titles: dict[str, str],
         trace: AgentTraceSink,
-    ) -> dict[str, Any]:
+    ) -> SynthesisReport:
         trace("synthesis.eligibility", "STARTED", "检查全部已选 Path 的审批 DAG 是否终态", {
             "case_id": case.id, "case_version": case.version, "phase": case.phase.value
         })
@@ -334,31 +248,29 @@ class SynthesisAgent:
             or case.manifest is None
             or case.status.value == "CLOSED"
         ):
-            raise SynthesisAgentError("Case is not awaiting Synthesis in FINAL_REVIEW")
+            raise AgentError("Case is not awaiting Synthesis in FINAL_REVIEW")
         selected_paths = [path for path in case.manifest.paths if path.selected]
         path_results: list[dict[str, Any]] = []
         for path in selected_paths:
             attempt = next((item for item in case.path_attempts if item.path_id == path.id), None)
             nodes = [node for node in case.commitment_nodes if node.path_id == path.id]
-            if not attempt or not isinstance(attempt.solution_revision, dict):
-                raise SynthesisAgentError(f"Path {path.id} has no SolutionRevision")
+            if not attempt or attempt.solution_revision is None:
+                raise AgentError(f"Path {path.id} has no SolutionRevision")
             if attempt.state not in {PathAttemptState.SUCCEEDED, PathAttemptState.REJECTED}:
-                raise SynthesisAgentError(f"Path {path.id} approval DAG is not terminal")
-            status: PathStatus = "SUCCEEDED" if attempt.state is PathAttemptState.SUCCEEDED else "FAILED"
+                raise AgentError(f"Path {path.id} approval DAG is not terminal")
+            status: PathOutcome = "SUCCEEDED" if attempt.state is PathAttemptState.SUCCEEDED else "FAILED"
+            revision = attempt.solution_revision
             authorized_refs = [
-                f"{path.id}/solution-revision/{attempt.solution_revision['revision']}",
-                *(
-                    f"{path.id}/commitment/{node.id}"
-                    for node in nodes
-                ),
+                f"{path.id}/solution-revision/{revision.revision}",
+                *(f"{path.id}/commitment/{node.id}" for node in nodes),
             ]
             path_results.append({
                 "path_id": path.id,
                 "definition": path.definition,
                 "title": path_titles.get(path.definition, path.definition),
                 "status": status,
-                "solution_revision": attempt.solution_revision,
-                "commitments": [asdict(node) for node in nodes],
+                "solution_revision": revision.model_dump(mode="json"),
+                "commitments": [node.model_dump(mode="json") for node in nodes],
                 "authorized_supporting_refs": authorized_refs,
             })
         trace("synthesis.eligibility", "COMPLETED", "全部已选 Path 已终态，允许生成汇总报告", {
@@ -372,37 +284,26 @@ class SynthesisAgent:
                 "description": case.description,
                 "status": case.status.value,
                 "business_payload": dict(case.business_payload),
-                "human_proposal": dict(case.human_proposal) if case.human_proposal else None,
+                "human_proposal": (
+                    case.human_proposal.model_dump(mode="json") if case.human_proposal else None
+                ),
             },
             manifest_ref={"id": case.manifest.id, "revision": case.manifest.revision},
             path_results=tuple(path_results),
         )
-        trace("agent.input", "COMPLETED", "构造包含成功与失败 Path 的只读 SynthesisContext", {
-            "context": asdict(context)
+        trace("agent.input", "COMPLETED", "构造包含成功与失败 Path 的只读 Synthesis 上下文", {
+            "context": context.prompt_payload()
         })
         result = await self.adapter.generate(context, trace)
         _validate_result(result, context)
-        revision = int((case.synthesis_report or {}).get("revision", 0)) + 1
-        report = {
-            "schema_version": 1,
-            "revision": revision,
-            "summary": result.summary,
-            "path_assessments": [{
-                "path_id": item.path_id,
-                "status": item.status,
-                "conclusion": item.conclusion,
-                "supporting_refs": list(item.supporting_refs),
-                "risks": list(item.risks),
-            } for item in result.path_assessments],
-            "cross_path_findings": list(result.cross_path_findings),
-            "remaining_risks": list(result.remaining_risks),
-            "recommended_owner_action": result.recommended_owner_action,
-            "decision_brief": result.decision_brief,
-            "generated_by": result.adapter_profile,
-            "manifest_ref": context.manifest_ref,
-        }
+        report = SynthesisReport(
+            **result.model_dump(),
+            revision=(case.synthesis_report.revision if case.synthesis_report else 0) + 1,
+            generated_by=getattr(self.adapter, "profile", type(self.adapter).__name__),
+            manifest_ref=context.manifest_ref,
+        )
         trace("synthesis.compose", "COMPLETED", "组装受平台约束的 CaseSynthesis 报告", {
-            "report": report
+            "report": report.model_dump(mode="json")
         })
         return report
 
@@ -411,7 +312,7 @@ def _validate_result(result: SynthesisResult, context: SynthesisContext) -> None
     expected = {item["path_id"]: item["status"] for item in context.path_results}
     returned = {item.path_id: item.status for item in result.path_assessments}
     if returned != expected or len(returned) != len(result.path_assessments):
-        raise SynthesisAgentOutputError(
+        raise AgentOutputError(
             f"Synthesis must assess every supplied Path once with its platform status: expected={expected}, returned={returned}"
         )
     allowed_refs_by_path = {
@@ -419,41 +320,13 @@ def _validate_result(result: SynthesisResult, context: SynthesisContext) -> None
         for item in context.path_results
     }
     unknown = {
-        ref for assessment in result.path_assessments
+        ref
+        for assessment in result.path_assessments
         for ref in assessment.supporting_refs
         if ref not in allowed_refs_by_path[assessment.path_id]
     }
     if unknown:
-        raise SynthesisAgentOutputError(f"Synthesis references unknown artifacts: {sorted(unknown)}")
-
-
-def _result_payload(result: SynthesisResult) -> dict[str, Any]:
-    return {
-        "summary": result.summary,
-        "path_assessments": [asdict(item) for item in result.path_assessments],
-        "cross_path_findings": list(result.cross_path_findings),
-        "remaining_risks": list(result.remaining_risks),
-        "recommended_owner_action": result.recommended_owner_action,
-        "decision_brief": result.decision_brief,
-    }
-
-
-def _parse_result(payload: _SynthesisResultPayload, profile: str) -> SynthesisResult:
-    return SynthesisResult(
-        summary=payload.summary,
-        path_assessments=tuple(PathAssessment(
-            path_id=item.path_id,
-            status=item.status,
-            conclusion=item.conclusion,
-            supporting_refs=tuple(item.supporting_refs),
-            risks=tuple(item.risks),
-        ) for item in payload.path_assessments),
-        cross_path_findings=tuple(payload.cross_path_findings),
-        remaining_risks=tuple(payload.remaining_risks),
-        recommended_owner_action=payload.recommended_owner_action,
-        decision_brief=payload.decision_brief,
-        adapter_profile=profile,
-    )
+        raise AgentOutputError(f"Synthesis references unknown artifacts: {sorted(unknown)}")
 
 
 def synthesis_agent_from_environment() -> SynthesisAgentAdapter:
@@ -472,4 +345,4 @@ def synthesis_agent_from_environment() -> SynthesisAgentAdapter:
             thinking_enabled=llm.thinking_enabled,
             reasoning_effort=llm.reasoning_effort,
         )
-    raise SynthesisAgentError(f"Unknown Synthesis Agent adapter: {adapter}")
+    raise AgentError(f"Unknown Synthesis Agent adapter: {adapter}")

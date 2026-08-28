@@ -1,21 +1,19 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import StrEnum
-from typing import Any
+from typing import Annotated, Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 
 def utc_now() -> str:
-    """The current UTC instant as an ISO 8601 string.
-
-    Every persisted timestamp goes through here so stored values stay
-    timezone-aware and comparable.
-    """
     return datetime.now(timezone.utc).isoformat()
+
+
+NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+PathOutcome = Literal["SUCCEEDED", "FAILED"]
 
 
 class CaseStatus(StrEnum):
@@ -60,13 +58,6 @@ class OwnerDecisionAction(StrEnum):
 
 
 class CaseEvent(StrEnum):
-    """Append-only domain event types.
-
-    Both the write side and the public timeline projection reference these, so
-    a mistyped name is a resolution error rather than a silently dropped
-    timeline entry.
-    """
-
     MANIFEST_PROPOSED = "manifest.proposed"
     MANIFEST_APPROVED = "manifest.approved"
     SOLUTION_REVISION_PROPOSED = "solution_revision.proposed"
@@ -76,45 +67,27 @@ class CaseEvent(StrEnum):
     SYNTHESIS_PROPOSED = "synthesis.proposed"
     OWNER_DECISION = "owner.decision"
 
-    # Startup backfills of Cases persisted by earlier versions. These are
-    # deliberately absent from the public timeline.
-    CASE_DEMO_METADATA_MIGRATED = "case.demo_metadata_migrated"
-    CASE_PHASE_MIGRATED = "case.phase_migrated"
-    COMMITMENT_PENDING_MIGRATION = "commitment.pending_migration"
-    PATH_ATTEMPT_TERMINAL_MIGRATED = "path_attempt.terminal_migrated"
 
-
-@dataclass(frozen=True)
-class CommitmentNode:
-    id: str
-    role: str
-    review_dimension: str
-    status: NodeStatus
-    depends_on: tuple[str, ...] = ()
-    path_id: str = ""
-
-
-@dataclass(frozen=True)
-class PathAttempt:
-    path_id: str
-    state: PathAttemptState
-    solution_revision: dict[str, Any] | None = None
-
-
-class ManifestAssetRef(BaseModel):
+class FrozenModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class MutableModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class AssetRef(FrozenModel):
+    """Frozen Manifest pointer: id + version + content digest."""
 
     id: str
     version: str
     digest: str
 
 
-class ManifestSkillSelection(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    entrypoint: ManifestAssetRef
+class ManifestSkillSelection(FrozenModel):
+    entrypoint: AssetRef
     reason: str | None = None
-    members: tuple[ManifestAssetRef, ...] = ()
+    members: tuple[AssetRef, ...] = ()
 
     @model_validator(mode="after")
     def validate_members(self) -> "ManifestSkillSelection":
@@ -126,28 +99,14 @@ class ManifestSkillSelection(BaseModel):
         return self
 
 
-class ManifestPath(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
+class ManifestPath(FrozenModel):
     id: str
     definition: str
     rationale: str
     selected: bool = True
     skill_selections: tuple[ManifestSkillSelection, ...] = ()
-    policies: tuple[ManifestAssetRef, ...] = ()
-    knowledge: tuple[ManifestAssetRef, ...] = ()
-
-    @model_validator(mode="before")
-    @classmethod
-    def normalize_legacy_skills(cls, value: Any) -> Any:
-        if isinstance(value, dict) and "skills" in value and "skill_selections" not in value:
-            payload = dict(value)
-            payload["skill_selections"] = [
-                {"entrypoint": item, "reason": None, "members": []}
-                for item in payload.pop("skills", [])
-            ]
-            return payload
-        return value
+    policies: tuple[AssetRef, ...] = ()
+    knowledge: tuple[AssetRef, ...] = ()
 
     @model_validator(mode="after")
     def validate_capabilities(self) -> "ManifestPath":
@@ -156,21 +115,17 @@ class ManifestPath(BaseModel):
             raise ValueError("Manifest Skill ids must be non-empty strings")
         if len(entrypoint_ids) != len(set(entrypoint_ids)):
             raise ValueError("Manifest Skill ids must be unique within a Path")
-        for label, assets in (
-            ("Policy", self.policies),
-            ("Knowledge", self.knowledge),
-        ):
+        for label, assets in (("Policy", self.policies), ("Knowledge", self.knowledge)):
             ids = [asset.id for asset in assets]
             if any(not asset_id.strip() for asset_id in ids):
                 raise ValueError(f"Manifest {label} ids must be non-empty strings")
             if len(ids) != len(set(ids)):
                 raise ValueError(f"Manifest {label} ids must be unique within a Path")
-        _ = self.skills
+        self.skill_refs()
         return self
 
-    @property
-    def skills(self) -> tuple[ManifestAssetRef, ...]:
-        by_id: dict[str, ManifestAssetRef] = {}
+    def skill_refs(self) -> tuple[AssetRef, ...]:
+        by_id: dict[str, AssetRef] = {}
         for selection in self.skill_selections:
             for ref in (selection.entrypoint, *selection.members):
                 existing = by_id.get(ref.id)
@@ -180,13 +135,11 @@ class ManifestPath(BaseModel):
         return tuple(by_id.values())
 
 
-class Manifest(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
+class Manifest(FrozenModel):
     id: str
     revision: int
     paths: tuple[ManifestPath, ...]
-    knowledge: tuple[ManifestAssetRef, ...] = ()
+    knowledge: tuple[AssetRef, ...] = ()
     generated_from_case_version: int = 0
 
     @model_validator(mode="after")
@@ -200,11 +153,7 @@ class Manifest(BaseModel):
         return self
 
     def to_yaml(self) -> str:
-        return yaml.safe_dump(
-            self.model_dump(mode="json"),
-            allow_unicode=True,
-            sort_keys=False,
-        )
+        return yaml.safe_dump(self.model_dump(mode="json"), allow_unicode=True, sort_keys=False)
 
     @classmethod
     def from_yaml(cls, content: str) -> "Manifest":
@@ -214,8 +163,109 @@ class Manifest(BaseModel):
         return cls.model_validate(payload)
 
 
-@dataclass
-class Case:
+class CommitmentNode(FrozenModel):
+    id: str
+    role: str
+    review_dimension: str
+    status: NodeStatus
+    depends_on: tuple[str, ...] = ()
+    path_id: str = ""
+
+
+class ProposedOption(MutableModel):
+    id: NonEmptyText
+    title: NonEmptyText
+    description: NonEmptyText
+    benefits: list[NonEmptyText]
+    risks: list[NonEmptyText]
+    assumptions: list[NonEmptyText]
+
+
+class RoleReport(MutableModel):
+    role: NonEmptyText
+    dimension: NonEmptyText
+    report: NonEmptyText
+
+
+class Recommendation(MutableModel):
+    option_ids: list[NonEmptyText]
+    rationale: NonEmptyText
+
+
+class PathAgentResult(MutableModel):
+    """Structured Path Agent output. SolutionRevision adds platform fields."""
+
+    summary: NonEmptyText
+    options: list[ProposedOption] = Field(min_length=1)
+    recommendation: Recommendation
+    evidence_gaps: list[NonEmptyText]
+    role_reports: list[RoleReport]
+
+    @model_validator(mode="after")
+    def validate_unique_keys(self) -> "PathAgentResult":
+        option_ids = [option.id for option in self.options]
+        if len(set(option_ids)) != len(option_ids):
+            raise ValueError("Path Agent options must have unique ids")
+        role_keys = [(item.role, item.dimension) for item in self.role_reports]
+        if len(set(role_keys)) != len(role_keys):
+            raise ValueError("Path Agent role reports must be unique by role and dimension")
+        return self
+
+
+class SolutionRevision(PathAgentResult):
+    schema_version: int = 1
+    revision: int
+    generated_by: str
+
+
+class PathAttempt(FrozenModel):
+    path_id: str
+    state: PathAttemptState
+    solution_revision: SolutionRevision | None = None
+
+
+class PathAssessment(MutableModel):
+    path_id: NonEmptyText
+    status: PathOutcome
+    conclusion: NonEmptyText
+    supporting_refs: list[NonEmptyText] = Field(min_length=1)
+    risks: list[NonEmptyText]
+
+
+class SynthesisResult(MutableModel):
+    """Structured Synthesis Agent output. SynthesisReport adds platform fields."""
+
+    summary: NonEmptyText
+    path_assessments: list[PathAssessment] = Field(min_length=1)
+    cross_path_findings: list[NonEmptyText]
+    remaining_risks: list[NonEmptyText]
+    recommended_owner_action: OwnerDecisionAction
+    decision_brief: NonEmptyText
+
+
+class SynthesisReport(SynthesisResult):
+    schema_version: int = 1
+    revision: int
+    generated_by: str
+    manifest_ref: dict[str, Any] = Field(default_factory=dict)
+
+
+class HumanProposal(MutableModel):
+    revision: int
+    author: str
+    role: str
+    content: str
+
+
+class OwnerDecision(MutableModel):
+    action: OwnerDecisionAction
+    actor: str
+    role: str
+    synthesis_revision: int
+    decided_at: str
+
+
+class Case(MutableModel):
     id: str
     title: str
     description: str
@@ -224,27 +274,20 @@ class Case:
     owner: str
     owner_role: str
     business_payload: dict[str, Any]
-    human_proposal: dict[str, Any] | None
-    classification: dict[str, str] = field(default_factory=dict)
+    human_proposal: HumanProposal | None = None
+    classification: dict[str, str] = Field(default_factory=dict)
     manifest: Manifest | None = None
-    path_attempts: list[PathAttempt] = field(default_factory=list)
-    commitment_nodes: list[CommitmentNode] = field(default_factory=list)
-    synthesis_report: dict[str, Any] | None = None
-    owner_decision: dict[str, Any] | None = None
+    path_attempts: list[PathAttempt] = Field(default_factory=list)
+    commitment_nodes: list[CommitmentNode] = Field(default_factory=list)
+    synthesis_report: SynthesisReport | None = None
+    owner_decision: OwnerDecision | None = None
     version: int = 1
-    created_at: str = field(default_factory=utc_now)
-    updated_at: str = field(default_factory=utc_now)
+    created_at: str = Field(default_factory=utc_now)
+    updated_at: str = Field(default_factory=utc_now)
 
     def to_dict(self) -> dict[str, Any]:
-        payload = asdict(self)
-        payload["manifest"] = self.manifest.model_dump(mode="json") if self.manifest else None
-        return payload
+        return self.model_dump(mode="json")
 
     def touch(self) -> None:
-        """Record a new authoritative revision of this Case.
-
-        Every state change bumps the version and the timestamp together; they
-        are what the optimistic-concurrency check and the UI both read.
-        """
         self.version += 1
         self.updated_at = utc_now()

@@ -1,14 +1,4 @@
-"""Shared runtime for the Orchestrator, Path, and Synthesis Agent adapters.
-
-Each agent used to carry its own copy of the same OpenAI-compatible skeleton:
-build a request, emit a trace event, call the model, validate with Pydantic,
-and retry once on invalid structure. The copies had drifted — only the
-Orchestrator retried transient network failures — so this module owns the
-single implementation and every adapter gets the same guarantees.
-
-Agent-specific behavior stays with the agent: its prompt, its Pydantic schema,
-its result mapping, and its cross-context validation.
-"""
+"""Shared runtime for the Orchestrator, Path, and Synthesis Agent adapters."""
 
 from __future__ import annotations
 
@@ -16,10 +6,16 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol, TypeVar
 
+import httpx
 from pydantic import BaseModel, ValidationError
 
 from .config import ReasoningEffort
-from .llm import CompatibleModelClientError, OpenAICompatibleClient, create_chat_completion
+from .llm import (
+    CompatibleModelClientError,
+    OpenAICompatibleClient,
+    build_openai_compatible_client,
+    create_chat_completion,
+)
 
 
 _CHINESE_CHARACTER = re.compile(r"[一-鿿]")
@@ -28,8 +24,19 @@ TResult = TypeVar("TResult")
 TPayload = TypeVar("TPayload", bound=BaseModel)
 
 
+class AgentError(ValueError):
+    """Governed agent failure. HTTP 409 unless a more specific subclass is used."""
+
+
+class AgentOutputError(AgentError):
+    """Invalid structured output after schema or semantic checks."""
+
+
+class AgentExecutionError(AgentError):
+    """Model transport failure. HTTP 502."""
+
+
 def contains_chinese(value: str) -> bool:
-    """Whether `value` holds at least one Han character."""
     return bool(_CHINESE_CHARACTER.search(value))
 
 
@@ -81,12 +88,43 @@ def configure_thinking(
     enabled: bool,
     reasoning_effort: ReasoningEffort,
 ) -> None:
-    """Add explicit thinking controls to a Chat Completions request."""
     request["extra_body"] = {
         "thinking": {"type": "enabled" if enabled else "disabled"},
     }
     if enabled:
         request["reasoning_effort"] = reasoning_effort
+
+
+def openai_model_endpoint(
+    api_key: str | None,
+    *,
+    model: str,
+    base_url: str,
+    api_key_header: str = "Authorization",
+    api_key_prefix: str = "Bearer",
+    timeout_seconds: float = 45.0,
+    http_client: httpx.AsyncClient | None = None,
+    client: OpenAICompatibleClient | None = None,
+) -> ModelEndpoint:
+    if not model.strip() or not base_url.strip():
+        raise AgentError("A model id and base URL are required")
+    try:
+        configured = client or build_openai_compatible_client(
+            api_key,
+            base_url=base_url,
+            api_key_header=api_key_header,
+            api_key_prefix=api_key_prefix,
+            timeout_seconds=timeout_seconds,
+            http_client=http_client,
+        )
+    except ValueError as exc:
+        raise AgentError(str(exc)) from exc
+    return ModelEndpoint(
+        client=configured,
+        base_url=base_url.rstrip("/"),
+        api_key_header=api_key_header,
+        api_key_present=bool(api_key),
+    )
 
 
 async def request_structured_output(

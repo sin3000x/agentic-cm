@@ -8,12 +8,12 @@
 
 ## 设计文档
 
-- [产品目标、术语与系统架构](docs/01-product-architecture.md)
-- [领域模型、状态机与 CommitmentDAG](docs/02-domain-lifecycle.md)
+- [代码地图](docs/code-map.md)
+- [产品目标与系统架构](docs/01-product-architecture.md)
+- [领域模型与状态机](docs/02-domain-lifecycle.md)
 - [Agent Adapter 契约](docs/03-agent-adapter-contract.md)
-- [Demo 剧情与 MVP 验收标准](docs/04-demo-acceptance.md)
-- [初版能力底座：Policy、Skill 与 Knowledge](docs/05-capability-foundation.md)
-- [Orchestrator 架构、兼容模型接入与验收](docs/06-orchestrator.md)
+- [Demo 与验收](docs/04-demo-acceptance.md)
+- [能力底座](docs/05-capability-foundation.md)
 
 ## 初版实现
 
@@ -97,7 +97,7 @@ AGENTIC_CM_PATH_MAX_CONCURRENCY=4
 .venv/bin/python -m uvicorn agentic_cm.api:app --app-dir backend --reload --port 8000
 ```
 
-不要把 Key 写入仓库、Capability 文件或 Case payload。具体请求链与失败边界见 [Orchestrator 实现](docs/06-orchestrator.md)。
+不要把 Key 写入仓库、Capability 文件或 Case payload。请求链与失败边界见 [Agent Adapter 契约](docs/03-agent-adapter-contract.md)。
 
 ### 生成并检查 Manifest
 
@@ -123,9 +123,7 @@ curl -sS 'http://localhost:8000/api/cases/CM-2026-014/agent-runs?actor=陈澄&ro
   | python3 -m json.tool
 ```
 
-Path Agent trace 已实现：方案生成后可在对应 SolutionRevision 下按 Path 展开，默认折叠。Synthesis Agent trace 同样已实现，可在汇总报告处展开。详见 [Orchestrator 实现](docs/06-orchestrator.md)。
-
-当 Manifest 含多条 Path 时，每条 Path 都有独立的 `capability_snapshots[path_id]`。可以单独检查：
+Path Agent 与 Synthesis Agent 的 trace 分别挂在对应 SolutionRevision 和汇总报告下。能力快照按 Path 现算，不存在 Case 上：
 
 ```bash
 curl -sS 'http://localhost:8000/api/cases/CM-2026-014/capabilities?actor=陈澄&role=订单统筹经理&path_id=PATH-02' \

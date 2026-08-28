@@ -527,25 +527,20 @@ class CapabilityRegistry:
             raise CapabilityConfigurationError(f"Unsupported capability kind: {kind}")
         payloads: list[dict[str, Any]] = []
         for ref in refs:
-            ref_id = ref.id if hasattr(ref, "id") else ref["id"]
-            expected_version = ref.version if hasattr(ref, "version") else ref["version"]
-            expected_digest = ref.digest if hasattr(ref, "digest") else ref["digest"]
-            asset = self._assets.get((kind, ref_id))
+            asset = self._assets.get((kind, ref.id))
             if asset is None:
-                raise CapabilityConfigurationError(f"unknown {kind} reference: {ref_id}")
-            if asset.ref.version != expected_version:
+                raise CapabilityConfigurationError(f"unknown {kind} reference: {ref.id}")
+            if asset.ref.version != ref.version:
                 raise CapabilityConfigurationError(
-                    f"{kind} {ref_id} version mismatch: "
-                    f"expected {expected_version}, actual {asset.ref.version}"
+                    f"{kind} {ref.id} version mismatch: "
+                    f"expected {ref.version}, actual {asset.ref.version}"
                 )
-            if asset.ref.digest != expected_digest:
+            if asset.ref.digest != ref.digest:
                 raise CapabilityConfigurationError(
-                    f"{kind} {ref_id} digest mismatch: "
-                    f"expected {expected_digest}, actual {asset.ref.digest}"
+                    f"{kind} {ref.id} digest mismatch: "
+                    f"expected {ref.digest}, actual {asset.ref.digest}"
                 )
-            payloads.append(
-                deepcopy(asset.data) | {"resolved_ref": asdict(asset.ref)}
-            )
+            payloads.append(deepcopy(asset.data) | {"resolved_ref": asdict(asset.ref)})
         return tuple(payloads)
 
     def resolve_manifest_path(
@@ -553,19 +548,16 @@ class CapabilityRegistry:
         path: Any,
         case_type: str,
     ) -> CapabilityResolution:
+        skill_refs = path.skill_refs()
         policies = self.resolve_refs("policy", path.policies)
-        skills = self.resolve_refs("skill", path.skills)
+        skills = self.resolve_refs("skill", skill_refs)
         knowledge = self.resolve_refs("knowledge", path.knowledge)
-        loaded_policies = tuple(
-            self._assets[("policy", ref.id)] for ref in path.policies
-        )
+        loaded_policies = tuple(self._assets[("policy", ref.id)] for ref in path.policies)
         return CapabilityResolution(
             context={"case_type": case_type, "path_definition": path.definition},
             policies=tuple(asset.ref for asset in loaded_policies),
-            skills=tuple(self._assets[("skill", ref.id)].ref for ref in path.skills),
-            knowledge=tuple(
-                self._assets[("knowledge", ref.id)].ref for ref in path.knowledge
-            ),
+            skills=tuple(self._assets[("skill", ref.id)].ref for ref in skill_refs),
+            knowledge=tuple(self._assets[("knowledge", ref.id)].ref for ref in path.knowledge),
             compiled_policy=self._compile_policies(loaded_policies),
             asset_payloads={
                 "policies": list(policies),
@@ -580,32 +572,13 @@ class CapabilityRegistry:
         return catalog.paths if catalog else ()
 
     def describe_snapshot(self, snapshot: dict[str, Any]) -> dict[str, Any]:
-        groups: dict[str, list[dict[str, Any]]] = {}
         frozen_payloads = snapshot.get("asset_payloads", {})
-        for group, kind in (("policies", "policy"), ("skills", "skill"), ("knowledge", "knowledge")):
-            groups[group] = deepcopy(frozen_payloads.get(group, []))
-            if groups[group]:
-                continue
-            for ref in snapshot.get(group, []):  # Legacy snapshots stored refs separately.
-                frozen = next(
-                    (
-                        item for item in frozen_payloads.get(group, [])
-                        if item.get("resolved_ref", {}).get("id") == ref["id"]
-                        and item.get("resolved_ref", {}).get("digest") == ref["digest"]
-                    ),
-                    None,
-                )
-                if frozen:
-                    groups[group].append(deepcopy(frozen))
-                    continue
-                asset = self._assets.get((kind, ref["id"]))
-                if asset and asset.ref.digest == ref["digest"]:
-                    groups[group].append(deepcopy(asset.data) | {"resolved_ref": deepcopy(ref)})
-                else:
-                    groups[group].append({"resolved_ref": deepcopy(ref), "available": False})
         return {
             "snapshot": deepcopy(snapshot),
-            "assets": groups,
+            "assets": {
+                group: deepcopy(frozen_payloads.get(group, []))
+                for group in ("policies", "skills", "knowledge")
+            },
         }
 
     @staticmethod

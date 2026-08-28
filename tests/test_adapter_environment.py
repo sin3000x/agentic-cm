@@ -1,6 +1,10 @@
 import pytest
 
-from agentic_cm.config import agent_llm_config_from_environment
+from agentic_cm.config import (
+    agent_llm_config_from_environment,
+    path_execution_mode_from_environment,
+    path_max_concurrency_from_environment,
+)
 from agentic_cm.orchestrator import (
     DeterministicPlannerAdapter,
     OpenAICompatiblePlannerAdapter,
@@ -98,6 +102,21 @@ def test_invalid_agent_thinking_configuration_fails_closed(
 
     with pytest.raises(ValueError):
         agent_llm_config_from_environment("path")
+
+
+def test_path_execution_mode_and_concurrency_fail_closed(monkeypatch) -> None:
+    monkeypatch.delenv("AGENTIC_CM_PATH_EXECUTION_MODE", raising=False)
+    monkeypatch.delenv("AGENTIC_CM_PATH_MAX_CONCURRENCY", raising=False)
+    assert path_execution_mode_from_environment() == "parallel"
+    assert path_max_concurrency_from_environment() == 4
+    monkeypatch.setenv("AGENTIC_CM_PATH_EXECUTION_MODE", "serial")
+    assert path_execution_mode_from_environment() == "serial"
+    with pytest.raises(ValueError):
+        monkeypatch.setenv("AGENTIC_CM_PATH_EXECUTION_MODE", "unsupported")
+        path_execution_mode_from_environment()
+    with pytest.raises(ValueError):
+        monkeypatch.setenv("AGENTIC_CM_PATH_MAX_CONCURRENCY", "0")
+        path_max_concurrency_from_environment()
 
 
 def test_single_adapter_setting_selects_deterministic_for_all_agent_runtimes(

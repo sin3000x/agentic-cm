@@ -4,33 +4,14 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import AppSidebar from "../app-sidebar";
 import { apiGet, apiPost, isAbort } from "../lib/api";
+import {
+  commitmentCopy,
+  type ApprovalContext,
+  type CommitmentDecision,
+  type CommitmentNode,
+} from "../lib/case";
 import { demoIdentities } from "../lib/identities";
 import "./inbox.css";
-
-type CommitmentDecision = "APPROVE" | "REVISE" | "REJECT";
-
-type CommitmentNode = {
-  id: string;
-  role: string;
-  review_dimension: string;
-  status: "PENDING" | "BLOCKED" | "READY" | "STALE" | "REJECTED";
-  depends_on: string[];
-  path_id: string;
-};
-
-type SolutionOption = {
-  id: string;
-  title: string;
-  description: string;
-};
-
-type ApprovalContext = {
-  revision: number | null;
-  summary: string;
-  options: SolutionOption[];
-  recommendation: { option_ids?: string[]; rationale?: string };
-  role_report: { role: string; dimension: string; report: string } | null;
-};
 
 type InboxItem = {
   case_id: string;
@@ -39,16 +20,6 @@ type InboxItem = {
   path_title: string;
   node: CommitmentNode;
   approval_context: ApprovalContext;
-};
-
-const commitmentCopy: Record<string, string> = {
-  SUPPLY: "确认 Manifest 候选物料的供应可行性",
-  TECH: "确认 Manifest 候选物料的技术可行性",
-  CUSTOMER: "确认客户接受度与整体建议",
-  "EXPEDITE-SUPPLY": "确认供应商产能与最早可供应日期",
-  "EXPEDITE-DELIVERY": "确认运输提速方案与预计到货日期",
-  "SPLIT-PLAN": "确认可用数量与分批交付计划",
-  "SPLIT-CUSTOMER": "确认客户对分批交付与剩余承诺的接受度",
 };
 
 export default function InboxPage() {
