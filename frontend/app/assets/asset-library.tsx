@@ -15,6 +15,8 @@ type CapabilityAsset = {
   id: string;
   title: string;
   description?: string;
+  kind?: "atomic" | "bundle";
+  maintainer_role?: string | null;
   selector?: Record<string, string[]> | null;
   instructions_markdown?: string;
   files?: Array<{ path: string }>;
@@ -54,7 +56,7 @@ const groupCopy = {
 } as const;
 
 function Selector({ selector }: { selector?: Record<string, string[]> | null }) {
-  if (!selector) return <span className="assetSelector">未绑定场景</span>;
+  if (!selector) return null;
   return <div className="assetSelectors">{Object.entries(selector).map(([key, values]) => <span key={key}>{key}: {values.join(", ")}</span>)}</div>;
 }
 
@@ -74,9 +76,10 @@ function AssetBody({ group, asset }: { group: AssetGroup; asset: CapabilityAsset
 }
 
 function AssetCard({ group, asset, level, children }: { group: AssetGroup; asset: CapabilityAsset; level?: string; children?: ReactNode }) {
+  const skillKind = asset.kind === "bundle" || (asset.members && asset.members.length > 0) ? "SKILL BUNDLE" : "ATOMIC SKILL";
   return <article className={`assetCard${level ? ` skill-${level.toLowerCase().replace(" ", "-")}` : ""}`}>
-    <header><div className={`assetKind kind-${group}`}>{group === "skills" ? "S" : group === "policies" ? "P" : "K"}</div><div>{level && <span className="assetLevel">{level}</span>}<h2>{asset.title}</h2><p>{asset.id} · v{asset.resolved_ref.version}</p></div><span className={`assetOrigin ${asset.resolved_ref.source}`}>{asset.resolved_ref.source === "local" ? "本地覆盖" : "内置"}</span></header>
-    <Selector selector={asset.selector}/>
+    <header><div className={`assetKind kind-${group}`}>{group === "skills" ? "S" : group === "policies" ? "P" : "K"}</div><div>{group === "skills" && <span className="assetLevel">{level ?? skillKind}</span>}<h2>{asset.title}</h2><p>{asset.id} · v{asset.resolved_ref.version}</p></div><span className={`assetOrigin ${asset.resolved_ref.source}`}>{asset.resolved_ref.source === "local" ? "本地覆盖" : "内置"}</span></header>
+    {group === "skills" ? <p className="assetSelector">维护角色 · {asset.maintainer_role?.trim() || "平台公共能力"}</p> : <Selector selector={asset.selector}/>}
     <AssetBody group={group} asset={asset}/>
     {children}
     <footer><span>SHA-256</span><code>{asset.resolved_ref.digest.replace("sha256:", "").slice(0, 16)}</code></footer>
@@ -87,50 +90,49 @@ function assetMatches(asset: CapabilityAsset, keyword: string) {
   return !keyword || [asset.title, asset.id, asset.description, asset.content?.summary].some(value => value?.toLowerCase().includes(keyword));
 }
 
-function SkillHierarchy({ caseTypes, skills, search }: { caseTypes: CaseTypeCatalog[]; skills: CapabilityAsset[]; search: string }) {
+const publicRole = "平台公共能力";
+
+function skillRole(skill: CapabilityAsset) {
+  return skill.maintainer_role?.trim() || publicRole;
+}
+
+function skillMatchesSearch(skill: CapabilityAsset, keyword: string, byId: Map<string, CapabilityAsset>) {
+  if (!keyword) return true;
+  if (assetMatches(skill, keyword) || skillRole(skill).toLowerCase().includes(keyword)) return true;
+  return (skill.members ?? []).some(memberId => {
+    const member = byId.get(memberId);
+    return Boolean(member && (assetMatches(member, keyword) || skillRole(member).toLowerCase().includes(keyword)));
+  });
+}
+
+function SkillRoleLibrary({ skills, search }: { skills: CapabilityAsset[]; search: string }) {
   const keyword = search.trim().toLowerCase();
   const byId = new Map(skills.map(skill => [skill.id, skill]));
-  const memberIds = new Set(skills.flatMap(skill => skill.members ?? []));
-  const assignedTopLevel = new Set<string>();
+  const visibleSkills = skills.filter(skill => skillMatchesSearch(skill, keyword, byId));
+  const roleGroups = visibleSkills.reduce((groups, skill) => {
+    const role = skillRole(skill);
+    const current = groups.get(role) ?? [];
+    current.push(skill);
+    groups.set(role, current);
+    return groups;
+  }, new Map<string, CapabilityAsset[]>());
+  const namedRoles = [...roleGroups.keys()].filter(role => role !== publicRole).sort((left, right) => left.localeCompare(right, "zh"));
+  const orderedRoles = roleGroups.has(publicRole) ? [...namedRoles, publicRole] : namedRoles;
 
-  const trees = caseTypes.map(caseType => {
-    const caseTypeMatch = !keyword || [caseType.case_type, caseType.title].some(value => value.toLowerCase().includes(keyword));
-    const branches = caseType.paths.map(path => {
-      const pathMatch = !keyword || [path.id, path.title, path.description].some(value => value.toLowerCase().includes(keyword));
-      const nodes = skills.filter(skill =>
-        !memberIds.has(skill.id)
-        && skill.selector?.path_definition?.includes(path.id)
-        && skill.selector?.case_type?.includes(caseType.case_type)
-      ).map(skill => {
-        assignedTopLevel.add(skill.id);
-        const members = (skill.members ?? []).map(memberId => byId.get(memberId)).filter((member): member is CapabilityAsset => Boolean(member));
-        const skillMatch = assetMatches(skill, keyword);
-        const visibleMembers = caseTypeMatch || pathMatch || skillMatch ? members : members.filter(member => assetMatches(member, keyword));
-        return { skill, members: visibleMembers, visible: caseTypeMatch || pathMatch || skillMatch || visibleMembers.length > 0 };
-      }).filter(node => node.visible);
-      return { path, nodes, visible: caseTypeMatch || pathMatch || nodes.length > 0 };
-    }).filter(branch => branch.visible);
-    return { caseType, branches, visible: caseTypeMatch || branches.length > 0 };
-  }).filter(tree => tree.visible);
-
-  const standalone = skills.filter(skill =>
-    !memberIds.has(skill.id)
-    && !assignedTopLevel.has(skill.id)
-    && assetMatches(skill, keyword)
-  );
-
-  if (trees.length === 0 && standalone.length === 0) return null;
+  if (orderedRoles.length === 0) return null;
   return <>
-    {trees.map(({ caseType, branches }) => <article className="caseTypeCard" key={caseType.case_type}>
-      <header><div><span className="assetLevel">CASE TYPE</span><h2>{caseType.title}</h2><p>{caseType.case_type}</p></div><span className={`assetOrigin ${caseType.source}`}>{caseType.source === "local" ? "本地覆盖" : "内置"}</span></header>
-      <div className="skillPathTree">{branches.map(({ path, nodes }) => <section className="skillPathBranch" key={path.id}>
-        <header><span>PATH</span><div><h3>{path.title}</h3><code>{path.id}</code><p>{path.description}</p></div></header>
-        <div className="skillPathCapabilities">{nodes.map(({ skill, members }) => <AssetCard key={skill.id} group="skills" asset={skill} level={skill.members ? "SKILL BUNDLE" : "ATOMIC SKILL"}>
-          {skill.members && <div className="skillMembers"><p>组合成员 · 执行时随 Bundle 展开</p>{members.map(member => <AssetCard key={member.id} group="skills" asset={member} level="ATOMIC SKILL" />)}</div>}
-        </AssetCard>)}</div>
-      </section>)}</div>
-    </article>)}
-    {standalone.length > 0 && <section className="standaloneSkills"><header><span>STANDALONE</span><h2>独立 Skills</h2></header><div className="assetGrid">{standalone.map(skill => <AssetCard key={skill.id} group="skills" asset={skill} level="ATOMIC SKILL" />)}</div></section>}
+    {orderedRoles.map(role => {
+      const roleSkills = [...(roleGroups.get(role) ?? [])].sort((left, right) => left.title.localeCompare(right.title, "zh"));
+      return <section className="skillRoleGroup" key={role}>
+        <header className="skillRoleHeader"><div><span className="assetLevel">MAINTAINER ROLE</span><h2>{role}</h2></div><small>{roleSkills.length} 项</small></header>
+        <div className="skillRoleGrid">{roleSkills.map(skill => {
+          const members = (skill.members ?? []).map(memberId => byId.get(memberId)).filter((member): member is CapabilityAsset => Boolean(member));
+          return <AssetCard key={skill.id} group="skills" asset={skill} level={skill.kind === "bundle" || members.length > 0 ? "SKILL BUNDLE" : "ATOMIC SKILL"}>
+            {members.length > 0 && <div className="skillMemberRefs"><p>组合成员 · 仅作为 Bundle 引用</p>{members.map(member => <div className="skillMemberRef" key={member.id}><span><strong>{member.title}</strong><small>{member.id}</small></span><em>成员维护 · {skillRole(member)}</em></div>)}</div>}
+          </AssetCard>;
+        })}</div>
+      </section>;
+    })}
   </>;
 }
 
@@ -153,12 +155,11 @@ export default function AssetLibrary({ group }: { group: AssetGroup }) {
     const keyword = search.trim().toLowerCase();
     return (data?.assets[group] ?? []).filter(asset => assetMatches(asset, keyword));
   }, [data, group, search]);
-  const skillHasMatch = group === "skills" && Boolean(data) && (data?.assets.skills.some(asset =>
-    assetMatches(asset, search.trim().toLowerCase())
-  ) || data?.case_types.some(caseType =>
-    [caseType.case_type, caseType.title].some(value => value.toLowerCase().includes(search.trim().toLowerCase()))
-    || caseType.paths.some(path => [path.id, path.title, path.description].some(value => value.toLowerCase().includes(search.trim().toLowerCase())))
-  ) || !search.trim());
+  const skillById = useMemo(() => new Map((data?.assets.skills ?? []).map(skill => [skill.id, skill])), [data]);
+  const skillHasMatch = group === "skills" && Boolean(data) && (
+    !search.trim()
+    || data.assets.skills.some(asset => skillMatchesSearch(asset, search.trim().toLowerCase(), skillById))
+  );
   const isEmpty = group === "skills" ? !skillHasMatch : assets.length === 0;
 
   return <div className="appShell">
@@ -174,9 +175,9 @@ export default function AssetLibrary({ group }: { group: AssetGroup }) {
         </section>}
         {error && <div className="assetMessage error"><strong>无法读取后台资产</strong><p>请确认 Agentic CM API 已启动并可从当前页面访问。</p></div>}
         {!data && !error && <div className="assetMessage"><strong>正在读取后台资产…</strong><p>数据来自当前运行中的 CapabilityRegistry。</p></div>}
-        {data && isEmpty && <div className="assetMessage"><strong>{search ? "没有匹配的资产" : copy.empty}</strong><p>{search ? "请尝试其他名称、ID、Path 或描述关键词。" : "发布资产后刷新即可显示。"}</p></div>}
-        <section className={group === "skills" ? "skillHierarchy" : "assetGrid"} aria-live="polite">
-          {group === "skills" && data && <SkillHierarchy caseTypes={data.case_types} skills={data.assets.skills} search={search} />}
+        {data && isEmpty && <div className="assetMessage"><strong>{search ? "没有匹配的资产" : copy.empty}</strong><p>{search ? "请尝试其他名称、ID、Role 或描述关键词。" : "发布资产后刷新即可显示。"}</p></div>}
+        <section className={group === "skills" ? "skillRoleLibrary" : "assetGrid"} aria-live="polite">
+          {group === "skills" && data && <SkillRoleLibrary skills={data.assets.skills} search={search} />}
           {group !== "skills" && assets.map(asset => <AssetCard group={group} asset={asset} key={asset.resolved_ref.id} />)}
         </section>
       </div>

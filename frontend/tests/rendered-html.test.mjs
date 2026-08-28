@@ -103,6 +103,14 @@ test("the Case workspace keeps the compact Manifest boundary", async () => {
   assert.doesNotMatch(source, /查看替代 Path 能力快照/);
 });
 
+test("Manifest Review exposes the Orchestrator Skill choice and Bundle expansion", async () => {
+  const source = await readFile(new URL("../app/cases/[id]/page.tsx", import.meta.url), "utf8");
+  assert.match(source, /skill_selections/);
+  assert.match(source, /选择理由/);
+  assert.match(source, /Bundle 成员/);
+  assert.doesNotMatch(source, /命中的缺料处理 Skill 支持以下三条 Path/);
+});
+
 test("the Case workspace preserves terminal and approved-artifact governance", async () => {
   const source = await readFile(
     new URL("../app/cases/[id]/page.tsx", import.meta.url),
@@ -127,20 +135,21 @@ test("each asset route renders its own kind with a search affordance", async () 
     const html = await renderHtml(`/assets/${path}`);
     assert.match(html, new RegExp(`<h1>${heading}</h1>`));
     assert.match(html, new RegExp(`aria-label="搜索 ${heading}"`));
-    assert.match(html, new RegExp(`<section class="${path === "skills" ? "skillHierarchy" : "assetGrid"}" aria-live="polite"`));
+    assert.match(html, new RegExp(`<section class="${path === "skills" ? "skillRoleLibrary" : "assetGrid"}" aria-live="polite"`));
   }
 });
 
-test("the Skills library presents reusable Skill Bundles without calling them Path Bundles", async () => {
+test("the Skills library groups assets by maintainer Role instead of Path", async () => {
   const source = await readFile(new URL("../app/assets/asset-library.tsx", import.meta.url), "utf8");
-  assert.match(source, /data\.case_types/);
-  assert.match(source, /skill\.members \?\? \[\]/);
-  assert.match(source, /CASE TYPE/);
+  assert.match(source, /maintainer_role/);
+  assert.match(source, /平台公共能力/);
   assert.match(source, /SKILL BUNDLE/);
   assert.match(source, /ATOMIC SKILL/);
+  assert.match(source, /成员维护/);
+  assert.doesNotMatch(source, /SkillHierarchy|CASE TYPE|skillPathBranch|path_definition/);
+  assert.doesNotMatch(source, /未绑定场景/);
   assert.doesNotMatch(source, /PATH BUNDLE/);
   assert.doesNotMatch(source, /CASE PLAYBOOK|playbooks|skill\.paths/);
-  assert.doesNotMatch(source, /assigned_via|composition/);
 });
 
 test("stylesheets honour reduced motion", async () => {
