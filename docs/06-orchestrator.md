@@ -8,14 +8,12 @@
 OPEN Case (INTAKE)
   -> CapabilityRegistry 按 case_type 读取 Case Type Path Catalog
   -> 从 Catalog 读取本 case_type 的 1..N 个 PathDefinition
-  -> CapabilityRegistry 要求每条 Path 同时命中 execution Skill 与强制 Policy
-  -> 匹配 Case 级 Knowledge，供 Path 选择与排序使用
-  -> 为每个 Path 匹配自己的 Policy / Skill / Knowledge
-  -> Manifest 仅保存能力 id / version / digest 引用
-  -> PlannerAdapter 只能排序全部候选 definition 并生成 rationale
-  -> Orchestrator 重新校验候选 ID，生成精简 Path Manifest
+  -> 平台按 case_type + path_definition 确定性匹配 Policy 与 Knowledge
+  -> CapabilityRegistry 生成隐藏 Bundle 成员的轻量 Skill Catalog
+  -> PlannerAdapter 为每条 Path 选择 Skill 入口并生成中文 rationale / reason
+  -> 平台校验白名单、展开 Bundle、冻结 id / version / digest
   -> versioned Manifest (MANIFEST_REVIEW)
-  -> Owner approve
+  -> Owner 审批 Path 与本次 Skill 选择
   -> 校验 Policy 引用并确定性编译 CommitmentDAG
 ```
 
@@ -23,14 +21,14 @@ OPEN Case (INTAKE)
 
 ## 2. 主要边界
 
-- `CapabilityRegistry`：按 `case_type` 从 `case-types/<name>/paths.json` 展开可探索 Path。该 Catalog 是 Path 定义的唯一来源；本地同 `case_type` Catalog 整体覆盖内置版本。
-- `Path-level execution Skill`：定义获批 Path 如何分析以及 SolutionRevision 的输出结构。任一声明 Path 缺少 execution Skill 或强制 Policy 时，本次编排整体 fail closed。
-- `Policy`：定义强制责任节点与依赖，不负责说明 Agent 如何分析。Manifest 只保留 Policy 的 `id/version/digest`；批准时校验引用并从资产编译 Commitments。
+- `CapabilityRegistry`：按 `case_type` 从 `case-types/<name>/paths.json` 展开可探索 Path。该 Catalog 是 Path 定义的唯一来源；本地同 `case_type` Catalog 整体覆盖内置版本。它还提供隐藏 Bundle 成员的 Orchestrator Skill Catalog，以及独立的 `skill-ownership.json` 人类治理投影。
+- `Skill 入口`：Orchestrator 只能选择 Bundle 与非成员 Atomic Skill。平台展开 Bundle 后把入口、理由和成员引用冻结进 Manifest。Skill Catalog 为空或任一 Path 缺少强制 Policy 时，本次编排整体 fail closed。
+- `Policy`：定义强制责任节点与依赖，不负责说明 Agent 如何分析。Orchestrator 不能选择、删除或新增 Policy。Manifest 只保留 Policy 的 `id/version/digest`；批准时校验引用并从资产编译 Commitments。
 - `Knowledge`：只按 Case 匹配的 Knowledge 冻结在 Manifest 顶层，供 Orchestrator 选择与排序 Path；带 `path_definition` 的 Knowledge 只冻结在对应 Path 下。
-- `PlannerAdapter`：异步 `propose(context, candidates) -> PlannerOutput`。输入使用一次普通字典投影，输出使用最小 Pydantic 模型校验；为每条候选返回 rationale 并可排序，但不能省略候选。
-- `Orchestrator`：验证 Planner 输出，创建只含 Path 决策和能力引用的 `ManifestPath`；失败时不修改 Case、不写业务事件。
+- `PlannerAdapter`：异步 `propose(context, candidates, skill_catalog) -> PlannerOutput`。输入使用一次普通字典投影，输出使用最小 Pydantic 模型校验；为每条候选返回 rationale，并选择至少一个白名单 Skill 入口及中文理由，但不能省略候选 Path。
+- `Orchestrator`：验证 Planner 输出，创建含 Path 决策、`skill_selections` 和 Policy/Knowledge 引用的 `ManifestPath`；失败时不修改 Case、不写业务事件。
 - `CaseService`：成功后才保存 `manifest.proposed` 事件并将 Case 推进至 `MANIFEST_REVIEW`。
-- `AgentRun trace`：每次调用先创建独立技术运行记录，逐步写入 eligibility、Path 发现、逐 Path 能力解析、Planner 输入、模型请求/响应、白名单校验、Manifest 组装和最终状态。失败 trace 也会保留，但不写业务事件、不修改 Case。
+- `AgentRun trace`：每次调用先创建独立技术运行记录，逐步写入 eligibility、Path 发现、逐 Path Policy/Knowledge 解析、可见 Skill 入口、Planner 输入、模型请求/响应、白名单校验、Bundle 展开和最终状态。Trace 不记录 `maintainer_role`。失败 trace 也会保留，但不写业务事件、不修改 Case。
 
 当前内置的 `case-types/order-delivery-risk/paths.json` 声明三条候选：`SupplyExpediting`（提拉）、`MaterialSubstitution`（替代）、`OrderSplit`（拆分），因此 Manifest 必须包含三条。Owner 在 Manifest Review 中单选或多选本轮探索子集；批准后平台只为勾选的 Path 创建 PathAttempt 和 Commitment 节点。
 
@@ -57,7 +55,7 @@ Path ID 在同一 Catalog 内必须唯一。同一层出现两个相同 `case_ty
 
 ### Deterministic
 
-默认启用，不需要 API Key。它稳定把 Skill 声明的全部候选写入 Manifest，并明确标注“未判断当前 Case 的业务优先级”，不再使用静态 `default_rationale` 冒充 Case-specific 判断。前端 Demo 默认只勾选“替代”，但允许 Owner 多选。
+默认启用，不需要 API Key。它稳定把 Case Type Catalog 声明的全部候选写入 Manifest，用词法匹配为每条 Path 选择一个 Orchestrator 可见 Skill 入口，并明确标注“未判断当前 Case 的业务优先级”。前端 Demo 默认只勾选“替代”，但允许 Owner 多选。
 
 ```bash
 export AGENTIC_CM_ADAPTER=deterministic

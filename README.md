@@ -24,7 +24,7 @@
 - `frontend`：React + TypeScript 工作台，使用 Vite 驱动的 vinext 构建；
 - `tests`：Manifest 能力快照、Policy 编译、并行节点、本地资产覆盖和安全 Reset 的领域测试。
 
-首个可运行切片覆盖：从 `INTAKE` 的订单延期 Case 触发 Orchestrator、由命中的 `ORDER_DELIVERY_RISK` 编排 Skill 提供提拉/替代/拆分三条 Path、逐 Path 匹配执行 Skill 与 Policy 并冻结能力快照，以及由 Owner 在前端单选或多选本轮探索子集。不同 `case_type` 命中各自拥有 `paths.json` 的编排 Skill。Demo 默认只勾选“替代”，批准后平台只为获批 Path 创建 PathAttempt 与 Commitment 节点；后续审批、修订、局部重审和最终关闭仍按验收文档逐步补齐。
+首个可运行切片覆盖：从 `INTAKE` 的订单延期 Case 触发 Orchestrator、按 Case Type Catalog 展开提拉/替代/拆分三条 Path、按 `case_type + path_definition` 确定性匹配 Policy，并由 Orchestrator 从轻量 Skill Catalog 自主选择入口后冻结 Bundle 展开结果。Owner 在前端单选或多选本轮探索子集。Skill 不再绑定 Case Type 或 Path；组织资产页按维护 Role 分组。Demo 默认只勾选“替代”，批准后平台只为获批 Path 创建 PathAttempt 与 Commitment 节点。
 
 ### 本地启动
 

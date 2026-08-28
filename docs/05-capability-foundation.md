@@ -63,7 +63,7 @@ material-substitution-analysis/
 └── assets/           # 可选；模板或输出资源
 ```
 
-这样可以直接复用已有 Skill 文件夹，也能让不同 Agent Runtime 使用同一份能力。`SKILL.md` frontmatter 始终只包含标准的 `name` 和 `description`。
+这样可以直接复用已有 Skill 文件夹，也能让不同 Agent Runtime 使用同一份能力。`SKILL.md` frontmatter 始终只包含标准的 `name` 和 `description`。Skill 不绑定 Case Type 或 Path；适用性写在描述和指令里，由 Orchestrator 结合 Case 上下文选择。
 
 平台不在 frontmatter 增加 `type`、`level` 或 `assigned_via`。Skill 层级由文件结构唯一推导：有 `bundle.json` 的 Skill 是 Skill Bundle，没有 `bundle.json` 的是 Atomic Skill。Case 类型及其候选 Path 不属于 Skill，由独立的 `case-types/<name>/paths.json` 声明。`bundle.json` 只保留最小成员关系：
 
@@ -74,17 +74,35 @@ material-substitution-analysis/
 }
 ```
 
-Bundle 成员必须存在且不能再拥有 `bundle.json`。未绑定 selector 的 Atomic Skill 可以被多个 Bundle 复用；已经绑定 selector 的成员只能加入相同 selector 的 Bundle，冲突配置会 fail closed。组织资产页据此展示 `Case Type → Path → Skill Bundle/独立 Skill → Atomic Skill`；Bundle 成员不单独暴露给 Planner，但会随所属 Bundle 一起冻结到 Path Manifest，供 Path Agent 执行。
+Bundle 成员必须存在且不能再拥有 `bundle.json`。同一 Atomic Skill 可以被多个 Bundle 复用。Orchestrator 只能看见 Bundle 与不属于任何 Bundle 的 Atomic Skill；Bundle 成员对 Planner 不可见，但会随所属 Bundle 一起冻结到 Path Manifest，供 Path Agent 执行。
 
-Path 与 Skill 的确定性关系单独放在 `capabilities/builtin/skill-bindings.json`。它有两种用途：
+Skill 维护归属单独放在 `capabilities/builtin/skill-ownership.json`。它只服务组织资产治理和前台分组，不进入 Skill digest、Manifest、Agent Prompt 或选择算法：
 
-- 读取标准 `SKILL.md` 的 `name` 和 `description`；
-- Path-level execution Skill 用同时包含 `case_type` 与 `path_definition` 的 selector 注入某一条 Path；
-- 对整个 Skill 文件夹计算 SHA-256，任一脚本、参考资料或资产变化都会产生新版本摘要；
-- 冻结 `SKILL.md` 正文和文件清单，供审计与 Adapter 消费。
-- 若存在 `path-options.json` 或 `tools.json`，CapabilityRegistry 会校验其契约并把内容随 Skill payload 一起冻结；Path Agent 不从框架或 Demo Case 复制一份候选定义。
+```json
+{
+  "schema_version": 1,
+  "ownership": {
+    "material-substitution-analysis": {"maintainer_role": "订单统筹经理"}
+  }
+}
+```
 
-Demo 的 `case-types/order-delivery-risk/paths.json` 是提拉、替代、拆分三条定义的唯一来源。遍历全部候选、生成 rationale、不得遗漏或发明 Path 是 Orchestrator 的统一规则。`material-substitution-analysis/path-options.json` 是 A（MCU-X7A）和 B（MCU-X7B）的唯一机器可读来源；同包 `tools.json` 提供物料主数据、供应快照和客户接受度的只读模拟查询。角色 Skill 定义分析方法；Policy 的 Commitment 是报告角色、维度、句首、人类责任与依赖的唯一结构化来源。
+每项 Skill 或 Bundle 只允许一个非空 `maintainer_role`。ownership 引用未知 Skill 时 fail closed；未出现在 ownership 中的 Skill 归入“平台公共能力”。本地 `.agentic-cm/capabilities/skill-ownership.json` 按 Skill ID 覆盖 built-in 项。
+
+Skill loader 读取标准 `SKILL.md` 的 `name` 和 `description`，对整个 Skill 文件夹计算 SHA-256，并冻结正文和文件清单。`path-options.json` 只声明该 Skill 能处理的结构化候选，不再保存 `path_definition`：
+
+```json
+{
+  "schema_version": 1,
+  "options": [
+    {"id": "A", "material_id": "MCU-X7A", "title": "同系列替代料 A", "description": "..."}
+  ]
+}
+```
+
+若存在 `tools.json`，CapabilityRegistry 会校验其契约并把内容随 Skill payload 一起冻结；Path Agent 不从框架或 Demo Case 复制一份候选定义。
+
+Demo 的 `case-types/order-delivery-risk/paths.json` 是提拉、替代、拆分三条定义的唯一来源。遍历全部候选、生成 rationale、不得遗漏或发明 Path 是 Orchestrator 的统一规则。`material-substitution-analysis` 作为 Bundle 入口对 Orchestrator 可见，其三个成员继续隐藏。`supply-expediting-analysis` 与 `order-split-analysis` 作为独立 Atomic Skill 可见。角色 Skill 定义分析方法；Policy 的 Commitment 是报告角色、维度、句首、人类责任与依赖的唯一结构化来源。
 
 ### 2.3 Knowledge
 
@@ -101,17 +119,17 @@ Demo 的 `KNOW-2025-041` 来自已关闭 Case，提示“地区认证可能导�
 
 ```text
 Case classification
-  -> CapabilityRegistry 合并 builtin 与 local 层
-  -> 按 case_type 读取唯一的 Case Type Path Catalog
-  -> Planner 为 Catalog 声明的全部 Path 生成 rationale 和排序
-  -> 每条 Path 必须匹配 Path-level execution Skill 与强制 Policy
-  -> 再解析该 Path 的全部 Skill / Policy / Knowledge
-  -> Manifest 顶层及每条 Path 仅保存匹配能力的 id / version / digest
-  -> Owner 批准 Decision Layer
-  -> CaseService 校验所选 Path 的 Policy 引用并编译 CommitmentDAG
+  -> 平台按 case_type 读取候选 Path Catalog
+  -> 平台按 case_type + path_definition 确定性匹配 Policy
+  -> CapabilityRegistry 生成隐藏 Bundle 成员的轻量 Skill Catalog
+  -> Orchestrator 为每条 Path 选择 Skill 入口并说明理由
+  -> 平台校验白名单、展开 Bundle、固定 version/digest
+  -> 生成 Manifest，Owner 审批 Path 与 Skill 选择
+  -> Path Agent 只加载获批 Path 已冻结的完整 Skill
+  -> Policy 编译出的业务角色分别评审和承诺
 ```
 
-Manifest Review 中的“查看完整 Manifest YAML”会以 Case Owner 身份读取 `GET /api/cases/CM-2026-014/manifest.yaml`，展示全部 Path 及每条 Path 的 Skill、Policy、Knowledge 引用；资产全文按引用动态解析，不进入 Manifest。批准 Manifest 后，主计划与研发因没有前置依赖而并行进入 `PENDING` 并投递到各自 Inbox；本人批准后才转为 `READY`。供应经理起初为 `BLOCKED`，仅在两项前置节点都 `READY` 后转为 `PENDING`。这些依赖来自引用 Policy 编译出的 Commitments，不是 UI 中的硬编码剧情。
+Manifest Review 中的“查看完整 Manifest YAML”会以 Case Owner 身份读取 `GET /api/cases/CM-2026-014/manifest.yaml`，展示全部 Path、每条 Path 的 Skill 选择理由、Bundle 展开成员以及 Policy、Knowledge 引用；资产全文按引用动态解析，不进入 Manifest。批准 Manifest 后，主计划与研发因没有前置依赖而并行进入 `PENDING` 并投递到各自 Inbox；本人批准后才转为 `READY`。供应经理起初为 `BLOCKED`，仅在两项前置节点都 `READY` 后转为 `PENDING`。这些依赖来自引用 Policy 编译出的 Commitments，不是 UI 中的硬编码剧情。组织资产页按单一维护 Role 分组 Skill，不再展示 `Case Type → Path` 树。
 
 ## 4. 开发者接入自己的本地能力
 
@@ -124,7 +142,7 @@ Manifest Review 中的“查看完整 Manifest YAML”会以 Case Owner 身份�
 ├── case-types/
 │   └── my-case-type/
 │       └── paths.json
-├── skill-bindings.json
+├── skill-ownership.json
 ├── skills/
 │   └── regional-certification-check/
 │       ├── SKILL.md
@@ -153,7 +171,7 @@ cp -R examples/local-capabilities/. .agentic-cm/capabilities/
 3. `SKILL.md` 至少包含字符串类型的 `name` 和 `description`；
 4. 可原样保留已有的 `scripts/`、`references/`、`assets/`、`agents/` 等资源。
 
-平台不会仅根据 Skill 正文自然语言猜测业务 Path。新增或本地覆盖 Case 类型时，应在 `case-types/<name>/paths.json` 中声明完整候选集：
+Skill 不需要绑定 Case Type 或 Path。新增或本地覆盖 Case 类型时，应在 `case-types/<name>/paths.json` 中声明完整候选集：
 
 ```json
 {
@@ -170,17 +188,14 @@ cp -R examples/local-capabilities/. .agentic-cm/capabilities/
 }
 ```
 
-`skill-bindings.json` 只负责把具体执行 Skill 绑定到 Case 类型与 Path：
+`skill-ownership.json` 只声明展示用的维护 Role，不决定 Orchestrator 能否看见或选择该 Skill：
 
 ```json
 {
   "schema_version": 1,
-  "bindings": {
+  "ownership": {
     "my-expediting-analysis": {
-      "selector": {
-        "case_type": ["ORDER_DELIVERY_RISK"],
-        "path_definition": ["SupplyExpediting"]
-      }
+      "maintainer_role": "供应经理"
     }
   }
 }
@@ -188,7 +203,7 @@ cp -R examples/local-capabilities/. .agentic-cm/capabilities/
 
 每个 Catalog 显式声明一个 `case_type`。本地同 `case_type` Catalog 会整体覆盖内置 Catalog，不逐 Path 合并；`paths.json` 写一条，Manifest 就只有一条，写三条则 Manifest 必须包含三条。真正进入探索的子集由 Owner 在 Manifest Review 中单选或多选。
 
-每条声明的 Path 还必须命中至少一个 Path-level execution Skill 和至少一个能编译出 Commitment 的 Policy；任意一条缺失都会让本次编排整体 fail closed，避免 Skill 声明三条但 Manifest 静默缩水。Path-level Skill、Policy 和 Knowledge 引用 Path 时都必须同时声明 `case_type` 与 `path_definition`，避免不同 Case 类型的同名 Path 串用能力。
+Orchestrator 必须为每条 Catalog Path 选择至少一个白名单 Skill 入口，并提供非空中文理由；每条 Path 还必须命中至少一个能编译出 Commitment 的 Policy。Skill Catalog 为空或任一 Path 缺少强制 Policy 时，本次编排整体 fail closed。Policy 和 Knowledge 引用 Path 时必须同时声明 `case_type` 与 `path_definition`，避免不同 Case 类型的同名 Path 串用治理资产。Skill 不再使用 selector。
 
 ### 4.2 接入自己的 Policy
 

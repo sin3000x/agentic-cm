@@ -162,7 +162,7 @@ flowchart TB
 
 不保留 Workflow 一级概念。跨角色、可等待、可恢复、需审计的过程统一由 CommitmentDAG 表达。
 
-Manifest 生成时固定 Bundle 和关键能力要求；Path 运行时由 Adapter 解析底层 Skill/Tool，并记录实际版本与调用。
+Manifest 生成时冻结 Orchestrator 选择的 Skill 入口、平台展开的 Bundle 成员和 Policy 引用；Path 运行时由 Adapter 只解析已批准 Manifest 中的 Skill/Tool，并记录实际版本与调用。Skill 维护 Role 只用于组织资产展示，不进入选择或执行。
 
 ### 5.2 Policy Registry
 
