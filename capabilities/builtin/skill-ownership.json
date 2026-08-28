@@ -6,6 +6,6 @@
     "material-substitution-master-planning-review": {"maintainer_role": "主计划"},
     "material-substitution-supply-manager-review": {"maintainer_role": "供应经理"},
     "order-split-analysis": {"maintainer_role": "主计划"},
-    "supply-expediting-analysis": {"maintainer_role": "供应经理"}
+    "supply-expediting-analysis": {"maintainer_role": "主计划"}
   }
 }
