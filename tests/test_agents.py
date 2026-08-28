@@ -1,5 +1,6 @@
 import asyncio
 from pathlib import Path
+from time import perf_counter
 
 import httpx
 import pytest
@@ -7,15 +8,20 @@ import pytest
 from agentic_cm.agent_runtime import AgentError, AgentOutputError
 from agentic_cm.domain import PathAgentResult, ProposedOption, Recommendation, RoleReport
 from agentic_cm.orchestrator import (
+    planner_from_environment,
     OpenAICompatiblePlannerAdapter,
     PlannerOutput,
     PlannerPath,
     PlannerSkillChoice,
 )
 from agentic_cm.path_agent import DeterministicPathAgentAdapter
+from agentic_cm.path_agent import path_agent_from_environment
 from agentic_cm.repository import CaseRepository
 from agentic_cm.service import CaseService
-from agentic_cm.synthesis_agent import OpenAICompatibleSynthesisAgentAdapter
+from agentic_cm.synthesis_agent import (
+    OpenAICompatibleSynthesisAgentAdapter,
+    synthesis_agent_from_environment,
+)
 from conftest import (
     DEMO_CASE_ID,
     OWNER_ACTOR,
@@ -74,6 +80,62 @@ class _InventingPathAgent:
                 for item in context.required_role_reports
             ],
         )
+
+
+def test_deterministic_mode_delays_every_agent_stage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AGENTIC_CM_ADAPTER", "deterministic")
+    monkeypatch.setenv("AGENTIC_CM_DETERMINISTIC_DELAY_SECONDS", "0.03")
+    service = CaseService(
+        CaseRepository(tmp_path / "test.db"),
+        planner=planner_from_environment(),
+        path_agent=path_agent_from_environment(),
+        synthesis_agent=synthesis_agent_from_environment(),
+    )
+    service.ensure_demo_data()
+
+    async def scenario() -> tuple[float, float, float]:
+        started = perf_counter()
+        await service.orchestrate_case(
+            DEMO_CASE_ID, actor=OWNER_ACTOR, role=OWNER_ROLE
+        )
+        orchestrator_elapsed = perf_counter() - started
+
+        service.approve_manifest(
+            DEMO_CASE_ID,
+            ["PATH-01"],
+            actor=OWNER_ACTOR,
+            role=OWNER_ROLE,
+        )
+        started = perf_counter()
+        await service.execute_path(
+            DEMO_CASE_ID, "PATH-01", actor=OWNER_ACTOR, role=OWNER_ROLE
+        )
+        path_elapsed = perf_counter() - started
+
+        for node_id, actor, role in (
+            ("SUPPLY", "王淼", "主计划"),
+            ("TECH", "林乔", "研发"),
+            ("CUSTOMER", "赵宁", "供应经理"),
+        ):
+            service.approve_commitment(
+                DEMO_CASE_ID,
+                "PATH-01",
+                node_id,
+                actor=actor,
+                role=role,
+            )
+        started = perf_counter()
+        await service.synthesize_case(
+            DEMO_CASE_ID, actor=OWNER_ACTOR, role=OWNER_ROLE
+        )
+        synthesis_elapsed = perf_counter() - started
+        return orchestrator_elapsed, path_elapsed, synthesis_elapsed
+
+    elapsed = asyncio.run(scenario())
+
+    assert all(duration >= 0.025 for duration in elapsed)
 
 
 def test_planner_cannot_invent_or_omit_catalog_paths(tmp_path: Path) -> None:

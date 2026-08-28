@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from typing import Any, Protocol
@@ -20,6 +21,7 @@ from .config import (
     ReasoningEffort,
     agent_adapter_from_environment,
     agent_llm_config_from_environment,
+    deterministic_delay_seconds_from_environment,
 )
 from .domain import (
     Case,
@@ -84,6 +86,9 @@ class SynthesisAgentAdapter(Protocol):
 class DeterministicSynthesisAgentAdapter:
     profile = "deterministic-synthesis/v1"
 
+    def __init__(self, delay_seconds: float = 0.0) -> None:
+        self._delay_seconds = delay_seconds
+
     async def generate(self, context: SynthesisContext, trace: AgentTraceSink) -> SynthesisResult:
         trace(
             "model.request",
@@ -91,6 +96,7 @@ class DeterministicSynthesisAgentAdapter:
             "Deterministic Synthesis Adapter 接收全部终态 Path 结果",
             {"context": context.prompt_payload(), "adapter": self.profile},
         )
+        await asyncio.sleep(self._delay_seconds)
         assessments: list[PathAssessment] = []
         for item in context.path_results:
             solution = item["solution_revision"]
@@ -332,7 +338,9 @@ def _validate_result(result: SynthesisResult, context: SynthesisContext) -> None
 def synthesis_agent_from_environment() -> SynthesisAgentAdapter:
     adapter = agent_adapter_from_environment()
     if adapter == "deterministic":
-        return DeterministicSynthesisAgentAdapter()
+        return DeterministicSynthesisAgentAdapter(
+            delay_seconds=deterministic_delay_seconds_from_environment()
+        )
     if adapter == "openai-compatible":
         llm = agent_llm_config_from_environment("synthesis")
         return OpenAICompatibleSynthesisAgentAdapter(

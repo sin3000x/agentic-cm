@@ -129,3 +129,14 @@ def test_single_adapter_setting_selects_deterministic_for_all_agent_runtimes(
     assert isinstance(
         synthesis_agent_from_environment(), DeterministicSynthesisAgentAdapter
     )
+
+
+@pytest.mark.parametrize("value", ["-1", "not-a-number", "nan", "inf"])
+def test_invalid_deterministic_delay_fails_closed(
+    monkeypatch, value: str
+) -> None:
+    monkeypatch.setenv("AGENTIC_CM_ADAPTER", "deterministic")
+    monkeypatch.setenv("AGENTIC_CM_DETERMINISTIC_DELAY_SECONDS", value)
+
+    with pytest.raises(ValueError):
+        planner_from_environment()

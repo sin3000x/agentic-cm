@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -24,6 +25,7 @@ from .config import (
     ReasoningEffort,
     agent_adapter_from_environment,
     agent_llm_config_from_environment,
+    deterministic_delay_seconds_from_environment,
 )
 from .domain import (
     AssetRef,
@@ -106,6 +108,9 @@ class PlannerAdapter(Protocol):
 class DeterministicPlannerAdapter:
     profile = "deterministic/v1"
 
+    def __init__(self, delay_seconds: float = 0.0) -> None:
+        self._delay_seconds = delay_seconds
+
     async def propose(
         self,
         context: dict[str, Any],
@@ -124,6 +129,7 @@ class DeterministicPlannerAdapter:
                 "adapter": self.profile,
             },
         )
+        await asyncio.sleep(self._delay_seconds)
         if not candidates:
             raise AgentError("No compatible PathDefinition has applicable mandatory Policy")
         result = PlannerOutput(
@@ -497,7 +503,9 @@ class Orchestrator:
 def planner_from_environment() -> PlannerAdapter:
     adapter = agent_adapter_from_environment()
     if adapter == "deterministic":
-        return DeterministicPlannerAdapter()
+        return DeterministicPlannerAdapter(
+            delay_seconds=deterministic_delay_seconds_from_environment()
+        )
     if adapter == "openai-compatible":
         llm = agent_llm_config_from_environment("orchestrator")
         return OpenAICompatiblePlannerAdapter(

@@ -68,7 +68,17 @@ PYTHONPATH=backend .venv/bin/python -m agentic_cm.capabilities validate
 cp .env.example .env
 ```
 
-不配置模型时使用可复现的 deterministic Planner。需要使用模型时，在 `.env` 中填写：
+不配置模型时使用可复现的 deterministic Adapter。
+
+deterministic 模式下，Orchestrator、每个 Path Agent 和 Synthesis Agent 默认都会异步等待 3 秒，以便在演示中呈现 Agent 工作过程。可在 `.env` 中调整，设为 `0` 可关闭模拟延迟：
+
+```dotenv
+AGENTIC_CM_DETERMINISTIC_DELAY_SECONDS=3
+```
+
+该设置不影响 `openai-compatible` 模式；并行 Path 的等待也会并行发生。
+
+需要使用模型时，在 `.env` 中填写：
 
 ```dotenv
 AGENTIC_CM_ADAPTER=openai-compatible

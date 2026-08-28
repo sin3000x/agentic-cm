@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from typing import Any, Protocol
@@ -22,6 +23,7 @@ from .config import (
     ReasoningEffort,
     agent_adapter_from_environment,
     agent_llm_config_from_environment,
+    deterministic_delay_seconds_from_environment,
 )
 from .domain import (
     Case,
@@ -94,6 +96,9 @@ class PathAgentAdapter(Protocol):
 class DeterministicPathAgentAdapter:
     profile = "deterministic-path/v1"
 
+    def __init__(self, delay_seconds: float = 0.0) -> None:
+        self._delay_seconds = delay_seconds
+
     async def generate(self, context: PathAgentContext, trace: AgentTraceSink) -> PathAgentResult:
         trace(
             "model.request",
@@ -101,6 +106,7 @@ class DeterministicPathAgentAdapter:
             "Deterministic Path Adapter 接收 Manifest 组装上下文",
             {"context": context.prompt_payload(), "adapter": self.profile},
         )
+        await asyncio.sleep(self._delay_seconds)
         options = tuple(
             ProposedOption(
                 id=str(item["id"]),
@@ -462,7 +468,9 @@ def _validate_result_against_context(result: PathAgentResult, context: PathAgent
 def path_agent_from_environment() -> PathAgentAdapter:
     adapter = agent_adapter_from_environment()
     if adapter == "deterministic":
-        return DeterministicPathAgentAdapter()
+        return DeterministicPathAgentAdapter(
+            delay_seconds=deterministic_delay_seconds_from_environment()
+        )
     if adapter == "openai-compatible":
         llm = agent_llm_config_from_environment("path")
         return OpenAICompatiblePathAgentAdapter(

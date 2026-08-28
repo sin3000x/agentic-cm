@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from math import isfinite
 from pathlib import Path
 from typing import Literal, cast
 
@@ -32,6 +33,23 @@ def agent_adapter_from_environment() -> str:
     """Return the adapter family shared by every Agent runtime."""
     load_runtime_environment()
     return os.getenv("AGENTIC_CM_ADAPTER", "deterministic")
+
+
+def deterministic_delay_seconds_from_environment() -> float:
+    """Return the simulated thinking delay used only by deterministic adapters."""
+    load_runtime_environment()
+    raw_value = os.getenv("AGENTIC_CM_DETERMINISTIC_DELAY_SECONDS", "3").strip()
+    try:
+        value = float(raw_value)
+    except ValueError as exc:
+        raise ValueError(
+            "AGENTIC_CM_DETERMINISTIC_DELAY_SECONDS must be a non-negative finite number"
+        ) from exc
+    if value < 0 or not isfinite(value):
+        raise ValueError(
+            "AGENTIC_CM_DETERMINISTIC_DELAY_SECONDS must be a non-negative finite number"
+        )
+    return value
 
 
 def agent_llm_config_from_environment(agent_type: AgentType) -> AgentLLMConfig:
