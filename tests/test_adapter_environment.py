@@ -1,5 +1,6 @@
 import pytest
 
+import agentic_cm.config as config_module
 from agentic_cm.config import (
     agent_llm_config_from_environment,
     path_execution_mode_from_environment,
@@ -60,6 +61,64 @@ def test_agent_specific_models_and_thinking_settings_are_independent(monkeypatch
     assert (planner_config.thinking_enabled, planner_config.reasoning_effort) == (True, "max")
     assert path_config.thinking_enabled is False
     assert (synthesis_config.thinking_enabled, synthesis_config.reasoning_effort) == (True, "low")
+
+
+def test_llm_timeout_setting_applies_to_every_openai_compatible_agent(monkeypatch) -> None:
+    monkeypatch.setenv("AGENTIC_CM_ADAPTER", "openai-compatible")
+    monkeypatch.setenv("AGENTIC_CM_LLM_BASE_URL", "https://model.example/v1")
+    monkeypatch.setenv("AGENTIC_CM_LLM_MODEL", "test-model")
+    monkeypatch.setenv("AGENTIC_CM_LLM_TIMEOUT_SECONDS", "12.5")
+
+    adapters = (
+        planner_from_environment(),
+        path_agent_from_environment(),
+        synthesis_agent_from_environment(),
+    )
+
+    assert [adapter._endpoint.client.sdk.timeout for adapter in adapters] == [
+        12.5,
+        12.5,
+        12.5,
+    ]
+
+
+def test_llm_timeout_defaults_to_45_seconds(monkeypatch) -> None:
+    monkeypatch.setattr(config_module, "load_runtime_environment", lambda: None)
+    monkeypatch.setenv("AGENTIC_CM_ADAPTER", "openai-compatible")
+    monkeypatch.setenv("AGENTIC_CM_LLM_BASE_URL", "https://model.example/v1")
+    monkeypatch.setenv("AGENTIC_CM_LLM_MODEL", "test-model")
+    monkeypatch.delenv("AGENTIC_CM_LLM_TIMEOUT_SECONDS", raising=False)
+
+    adapters = (
+        planner_from_environment(),
+        path_agent_from_environment(),
+        synthesis_agent_from_environment(),
+    )
+
+    assert [adapter._endpoint.client.sdk.timeout for adapter in adapters] == [
+        45.0,
+        45.0,
+        45.0,
+    ]
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        planner_from_environment,
+        path_agent_from_environment,
+        synthesis_agent_from_environment,
+    ],
+)
+@pytest.mark.parametrize("value", ["0", "-1", "not-a-number", "nan", "inf"])
+def test_invalid_llm_timeout_fails_closed(monkeypatch, factory, value: str) -> None:
+    monkeypatch.setenv("AGENTIC_CM_ADAPTER", "openai-compatible")
+    monkeypatch.setenv("AGENTIC_CM_LLM_BASE_URL", "https://model.example/v1")
+    monkeypatch.setenv("AGENTIC_CM_LLM_MODEL", "test-model")
+    monkeypatch.setenv("AGENTIC_CM_LLM_TIMEOUT_SECONDS", value)
+
+    with pytest.raises(ValueError):
+        factory()
 
 
 def test_thinking_defaults_to_disabled_and_model_uses_global_fallback(monkeypatch) -> None:

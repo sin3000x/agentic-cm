@@ -52,6 +52,23 @@ def deterministic_delay_seconds_from_environment() -> float:
     return value
 
 
+def llm_timeout_seconds_from_environment() -> float:
+    """Return the request timeout shared by OpenAI-compatible Agent runtimes."""
+    load_runtime_environment()
+    raw_value = os.getenv("AGENTIC_CM_LLM_TIMEOUT_SECONDS", "45").strip()
+    try:
+        value = float(raw_value)
+    except ValueError as exc:
+        raise ValueError(
+            "AGENTIC_CM_LLM_TIMEOUT_SECONDS must be a positive finite number"
+        ) from exc
+    if value <= 0 or not isfinite(value):
+        raise ValueError(
+            "AGENTIC_CM_LLM_TIMEOUT_SECONDS must be a positive finite number"
+        )
+    return value
+
+
 def agent_llm_config_from_environment(agent_type: AgentType) -> AgentLLMConfig:
     """Resolve one Agent's model and thinking settings."""
     load_runtime_environment()

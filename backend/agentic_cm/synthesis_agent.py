@@ -22,6 +22,7 @@ from .config import (
     agent_adapter_from_environment,
     agent_llm_config_from_environment,
     deterministic_delay_seconds_from_environment,
+    llm_timeout_seconds_from_environment,
 )
 from .domain import (
     Case,
@@ -349,6 +350,7 @@ def synthesis_agent_from_environment() -> SynthesisAgentAdapter:
             base_url=os.getenv("AGENTIC_CM_LLM_BASE_URL", ""),
             api_key_header=os.getenv("AGENTIC_CM_LLM_API_KEY_HEADER", "Authorization"),
             api_key_prefix=os.getenv("AGENTIC_CM_LLM_API_KEY_PREFIX", "Bearer"),
+            timeout_seconds=llm_timeout_seconds_from_environment(),
             max_output_tokens=int(os.getenv("AGENTIC_CM_SYNTHESIS_MAX_OUTPUT_TOKENS", "4000")),
             thinking_enabled=llm.thinking_enabled,
             reasoning_effort=llm.reasoning_effort,

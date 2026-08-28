@@ -26,6 +26,7 @@ from .config import (
     agent_adapter_from_environment,
     agent_llm_config_from_environment,
     deterministic_delay_seconds_from_environment,
+    llm_timeout_seconds_from_environment,
 )
 from .domain import (
     AssetRef,
@@ -514,6 +515,7 @@ def planner_from_environment() -> PlannerAdapter:
             base_url=os.getenv("AGENTIC_CM_LLM_BASE_URL", ""),
             api_key_header=os.getenv("AGENTIC_CM_LLM_API_KEY_HEADER", "Authorization"),
             api_key_prefix=os.getenv("AGENTIC_CM_LLM_API_KEY_PREFIX", "Bearer"),
+            timeout_seconds=llm_timeout_seconds_from_environment(),
             thinking_enabled=llm.thinking_enabled,
             reasoning_effort=llm.reasoning_effort,
         )
