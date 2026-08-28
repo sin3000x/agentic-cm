@@ -54,6 +54,22 @@ capabilities/builtin/
 
 删除 `skill-bindings.json`。Skill 加载器不再读取或生成 `selector`，CapabilityRegistry 也不再通过 Case 上下文筛选 Skill。
 
+Skill 包内的 `path-options.json` 同样不再保存 `path_definition`。它只声明该 Skill 能处理的结构化候选；候选属于所选 Skill 的执行资源，不反向声明该 Skill 属于哪条 Path：
+
+```json
+{
+  "schema_version": 1,
+  "options": [
+    {
+      "id": "A",
+      "material_id": "MCU-X7A",
+      "title": "同系列替代料 A",
+      "description": "..."
+    }
+  ]
+}
+```
+
 本地目录可以用 `.agentic-cm/capabilities/skill-ownership.json` 覆盖维护归属。built-in 与 local ownership 按 Skill ID 合并；local 同 ID 项覆盖 built-in 项，不要求复制整份 built-in 文件。
 
 ## Skill 维护归属契约
@@ -262,14 +278,15 @@ AgentRun trace 记录提供给 Planner 的可见 Skill 入口引用、模型返�
 
 1. 删除 built-in 与示例目录中的 `skill-bindings.json`；
 2. Skill loader 删除 binding/selector 注入逻辑；
-3. CapabilityRegistry 将全部合法 Skill 纳入组织资产库，并单独生成 Orchestrator 可见入口；
-4. 当前 `material-substitution-analysis` 作为 Bundle 入口可见，其三个成员继续隐藏；
-5. 当前 `supply-expediting-analysis` 与 `order-split-analysis` 作为独立 Atomic Skill 可见；
-6. 新增 `skill-ownership.json`，为 Demo 的 Bundle 和 Atomic Skill配置单一维护 Role；
-7. Planner 输出和 ManifestPath 迁移到 `skill_selections`；
-8. Repository 继续读取已有 Manifest 的平铺 `skills` 引用，但旧 Manifest 不生成选择理由；旧引用通过 version/digest 校验后仍可执行；
-9. 旧持久化快照内已经冻结的 selector 只用于兼容读取，不参与新 Manifest 生成；
-10. 文档和前端删除 Skill “已绑定场景”“Case Type/Path 层级”等表述。
+3. `path-options.json` 删除 `path_definition`，Skill loader 只校验候选契约，不再校验 Path 一致性；
+4. CapabilityRegistry 将全部合法 Skill 纳入组织资产库，并单独生成 Orchestrator 可见入口；
+5. 当前 `material-substitution-analysis` 作为 Bundle 入口可见，其三个成员继续隐藏；
+6. 当前 `supply-expediting-analysis` 与 `order-split-analysis` 作为独立 Atomic Skill 可见；
+7. 新增 `skill-ownership.json`，为 Demo 的 Bundle 和 Atomic Skill 配置单一维护 Role；
+8. Planner 输出和 ManifestPath 迁移到 `skill_selections`；
+9. Repository 继续读取已有 Manifest 的平铺 `skills` 引用，但旧 Manifest 不生成选择理由；旧引用通过 version/digest 校验后仍可执行；
+10. 旧持久化快照内已经冻结的 selector 只用于兼容读取，不参与新 Manifest 生成；
+11. 文档和前端删除 Skill “已绑定场景”“Case Type/Path 层级”等表述。
 
 不在本次设计中引入能力标签、向量检索或 Role-based Skill filtering。Skill 数量增长到轻量目录明显影响上下文或选择质量时，再在 Orchestrator 之前增加检索层；检索结果仍必须遵守同一白名单、冻结和审批契约。
 
@@ -278,6 +295,7 @@ AgentRun trace 记录提供给 Planner 的可见 Skill 入口引用、模型返�
 后端测试覆盖：
 
 - Skill 不再包含 selector，删除 `skill-bindings.json` 后能力校验通过；
+- `path-options.json` 不包含 `path_definition`，候选仍随所选 Skill 正确冻结和执行；
 - Policy 仍按 `case_type + path_definition` 确定性匹配并编译相同 Commitment；
 - Orchestrator Catalog 只包含 Bundle 和非成员 Atomic Skill；
 - Bundle 成员及 `maintainer_role` 不出现在 Planner Prompt；
