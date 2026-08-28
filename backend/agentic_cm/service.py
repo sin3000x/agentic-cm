@@ -204,6 +204,40 @@ class CaseService:
             )
         }
 
+    def _asset_titles(self, group: str) -> dict[str, str]:
+        return {
+            item["id"]: item["title"]
+            for item in self.capabilities.list_assets().get(group, [])
+            if isinstance(item.get("id"), str) and isinstance(item.get("title"), str)
+        }
+
+    def _decorate_manifest_view(self, manifest: dict | None, case) -> dict | None:
+        """Attach catalog display titles to a Manifest view payload.
+
+        Frozen Manifest YAML stays id/version/digest only. The Case view adds
+        Chinese titles so humans review business names, not Path definition ids.
+        """
+        if not manifest:
+            return manifest
+        path_titles = self._path_titles(case)
+        skill_titles = self._asset_titles("skills")
+        for path in manifest.get("paths", []):
+            definition = path.get("definition")
+            if isinstance(definition, str):
+                path["title"] = path_titles.get(definition, definition)
+            for selection in path.get("skill_selections", []):
+                entrypoint = selection.get("entrypoint") or {}
+                entrypoint_id = entrypoint.get("id")
+                if isinstance(entrypoint_id, str):
+                    title = skill_titles.get(entrypoint_id, entrypoint_id)
+                    entrypoint["title"] = title
+                    selection["title"] = title
+                for member in selection.get("members", []):
+                    member_id = member.get("id")
+                    if isinstance(member_id, str):
+                        member["title"] = skill_titles.get(member_id, member_id)
+        return manifest
+
     def get_case_view(
         self,
         case_id: str,
@@ -214,6 +248,7 @@ class CaseService:
         case = self.get_case(case_id)
         can_view_manifest = self._is_case_owner(case, actor=actor, role=role)
         view = case.to_dict()
+        view["manifest"] = self._decorate_manifest_view(view.get("manifest"), case)
         path_titles = self._path_titles(case)
         view["workflow_paths"] = [
             {

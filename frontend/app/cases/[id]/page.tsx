@@ -57,12 +57,14 @@ type ManifestAssetRef = {
   id: string;
   version: string;
   digest: string;
+  title?: string;
 };
 
 type ManifestSkillSelection = {
   entrypoint: ManifestAssetRef;
   reason: string | null;
   members: ManifestAssetRef[];
+  title?: string;
 };
 
 type ManifestPath = {
@@ -76,6 +78,14 @@ type ManifestPath = {
   skill_selections: ManifestSkillSelection[];
   knowledge: ManifestAssetRef[];
 };
+
+function pathLabel(path: Pick<ManifestPath, "title" | "definition">) {
+  return path.title || path.definition;
+}
+
+function skillLabel(asset: ManifestAssetRef, fallback?: string | null) {
+  return asset.title || fallback || asset.id;
+}
 
 type ManifestPathPayload = Omit<ManifestPath, "title" | "skill_selections"> & {
   title?: string;
@@ -738,7 +748,7 @@ export default function Home() {
     try {
       const data = await apiPost<CaseDetails>(`/api/cases/${activeCaseId}/orchestrate`, { actor: currentIdentity.name, role: currentIdentity.role });
       setPhase("MANIFEST_REVIEW");
-      loadManifest(data.manifest);
+      loadManifest(data.manifest, data.workflow_paths ?? []);
       setCapabilities(null);
       setShowManifestYaml(false);
       setManifestYaml("");
@@ -763,7 +773,8 @@ export default function Home() {
         actor: currentIdentity.name,
         role: currentIdentity.role,
       });
-      setManifestPaths(data.manifest?.paths ?? []);
+      loadManifest(data.manifest, data.workflow_paths ?? []);
+      setSelectedPathIds((data.manifest?.paths ?? []).filter((path) => path.selected).map((path) => path.id));
       setCommitmentNodes(data.commitment_nodes ?? []);
       setPathAttempts(data.path_attempts ?? []);
       setApproved(true);
@@ -866,7 +877,7 @@ export default function Home() {
       setSynthesisReport(data.synthesis_report ?? null);
       setCommitmentNodes(data.commitment_nodes ?? []);
       setPathAttempts(data.path_attempts ?? []);
-      loadManifest(data.manifest);
+      loadManifest(data.manifest, data.workflow_paths ?? []);
       await refreshTimeline();
       if (action === "MODIFY") {
         setShowModifyGuidance(false);
@@ -1183,7 +1194,7 @@ export default function Home() {
           return (
             <section className="pathApprovalGroup" aria-label={`${path.title} 审批 DAG`} key={path.id}>
               <header className="pathApprovalHeader">
-                <span><small>{path.id} · {path.definition}</small><strong>{path.title}</strong></span>
+                <span><strong>{pathLabel(path)}</strong></span>
                 <em>{completedNodes} / {nodes.length} 已通过</em>
               </header>
               {revision ? (
@@ -1363,7 +1374,7 @@ export default function Home() {
                   <span>{selected ? "本轮探索" : "暂不探索"}</span>
                 </label>
               </div>
-              <h3>{path.title ?? path.definition} <span>{path.definition}</span></h3>
+              <h3>{pathLabel(path)}</h3>
               <p>{path.rationale}</p>
               <div className="pathStats">
                 <span><small>强制 Policy</small><strong>{path.policies.length}</strong></span>
@@ -1374,14 +1385,14 @@ export default function Home() {
                 {path.skill_selections.map((selection) => (
                   <details className="manifestSkillChoice" key={selection.entrypoint.id}>
                     <summary>
-                      <strong>{selection.entrypoint.id}</strong>
+                      <strong>{skillLabel(selection.entrypoint, selection.title)}</strong>
                       <span>{selection.members.length ? "SKILL BUNDLE" : "ATOMIC SKILL"}</span>
                     </summary>
                     <p><b>选择理由</b>{selection.reason ?? "历史 Manifest 未记录选择理由"}</p>
                     {selection.members.length > 0 && (
                       <div>
                         <b>Bundle 成员</b>
-                        {selection.members.map((member) => <code key={member.id}>{member.id}</code>)}
+                        {selection.members.map((member) => <code key={member.id}>{skillLabel(member)}</code>)}
                       </div>
                     )}
                   </details>
@@ -1554,8 +1565,7 @@ export default function Home() {
                                       <span>PATH {String(index + 1).padStart(2, "0")}</span>
                                       <em>{path.selected ? "已批准" : "本轮未选"}</em>
                                     </div>
-                                    <h3>{path.title ?? path.definition}</h3>
-                                    <small>{path.id} · {path.definition}</small>
+                                    <h3>{pathLabel(path)}</h3>
                                     <p>{path.rationale || "Manifest 未记录额外理由。"}</p>
                                     <dl>
                                       <div><dt>Policy</dt><dd>{path.policies.length}</dd></div>

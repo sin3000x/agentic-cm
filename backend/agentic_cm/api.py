@@ -176,11 +176,12 @@ def get_case_agent_runs(
 @app.post("/api/cases/{case_id}/orchestrate")
 async def orchestrate_case(case_id: str, request: OwnerActionRequest):
     try:
-        return (await service.orchestrate_case(
+        await service.orchestrate_case(
             case_id,
             actor=request.actor,
             role=request.role,
-        )).to_dict()
+        )
+        return service.get_case_view(case_id, actor=request.actor, role=request.role)
     except CaseNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Case not found") from exc
     except OrchestrationError as exc:
@@ -192,12 +193,13 @@ async def orchestrate_case(case_id: str, request: OwnerActionRequest):
 @app.post("/api/cases/{case_id}/manifest/approve")
 def approve_manifest(case_id: str, request: ManifestApprovalRequest):
     try:
-        return service.approve_manifest(
+        service.approve_manifest(
             case_id,
             request.selected_path_ids,
             actor=request.actor,
             role=request.role,
-        ).to_dict()
+        )
+        return service.get_case_view(case_id, actor=request.actor, role=request.role)
     except CaseNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Case not found") from exc
     except InvalidTransitionError as exc:
@@ -273,13 +275,14 @@ async def synthesize_case(case_id: str, request: OwnerActionRequest):
 @app.post("/api/cases/{case_id}/owner-decision")
 def decide_case(case_id: str, request: OwnerDecisionRequest):
     try:
-        return service.decide_case(
+        service.decide_case(
             case_id,
             action=request.action,
             actor=request.actor,
             role=request.role,
             guidance=request.guidance,
-        ).to_dict()
+        )
+        return service.get_case_view(case_id, actor=request.actor, role=request.role)
     except CaseNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Case not found") from exc
     except InvalidTransitionError as exc:

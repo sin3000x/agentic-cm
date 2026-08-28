@@ -727,6 +727,19 @@ def test_manifest_is_visible_and_actionable_only_by_case_owner(tmp_path: Path) -
     anonymous_view = service.get_case_view("CM-2026-014")
 
     assert owner_view["manifest"] is not None
+    assert [path["title"] for path in owner_view["manifest"]["paths"]] == [
+        "物料替代", "供应提拉", "订单拆分"
+    ]
+    substitution = next(
+        path for path in owner_view["manifest"]["paths"]
+        if path["definition"] == "MaterialSubstitution"
+    )
+    assert substitution["skill_selections"][0]["title"] == "物料替代分析"
+    assert substitution["skill_selections"][0]["entrypoint"]["title"] == "物料替代分析"
+    frozen = service.get_case_manifest(
+        "CM-2026-014", actor=OWNER_ACTOR, role=OWNER_ROLE
+    )
+    assert "title" not in frozen["paths"][0]
     assert owner_view["permissions"]["can_approve_manifest"] is True
     assert other_role_view["manifest"] is None
     assert other_role_view["workflow_paths"] == []
@@ -801,6 +814,9 @@ def test_owner_can_download_manifest_as_yaml(client) -> None:
         json=owner,
     )
     assert response.status_code == 200
+    assert [path["title"] for path in response.json()["manifest"]["paths"]] == [
+        "物料替代", "供应提拉", "订单拆分"
+    ]
 
     yaml_response = client.get(
         f"/api/cases/{DEMO_CASE_ID}/manifest.yaml",
@@ -810,7 +826,9 @@ def test_owner_can_download_manifest_as_yaml(client) -> None:
     assert yaml_response.status_code == 200
     assert yaml_response.headers["content-type"].startswith("application/yaml")
     assert "attachment;" in yaml_response.headers["content-disposition"]
-    assert Manifest.from_yaml(yaml_response.text).id == "MAN-CM-2026-014-1"
+    frozen_manifest = Manifest.from_yaml(yaml_response.text)
+    assert frozen_manifest.id == "MAN-CM-2026-014-1"
+    assert all("title" not in path.model_dump() for path in frozen_manifest.paths)
     forbidden = client.get(
         f"/api/cases/{DEMO_CASE_ID}/manifest.yaml",
         params={"actor": "王淼", "role": "主计划"},

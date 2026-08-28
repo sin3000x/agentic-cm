@@ -108,6 +108,10 @@ test("Manifest Review exposes the Orchestrator Skill choice and Bundle expansion
   assert.match(source, /skill_selections/);
   assert.match(source, /选择理由/);
   assert.match(source, /Bundle 成员/);
+  assert.match(source, /function pathLabel/);
+  assert.match(source, /<h3>\{pathLabel\(path\)\}<\/h3>/);
+  assert.match(source, /skillLabel\(selection\.entrypoint, selection\.title\)/);
+  assert.doesNotMatch(source, /<span>\{path\.definition\}<\/span>/);
   assert.doesNotMatch(source, /命中的缺料处理 Skill 支持以下三条 Path/);
 });
 
