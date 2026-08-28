@@ -17,6 +17,9 @@ from agentic_cm.domain import (
     CaseStatus,
     CommitmentDecision,
     Manifest,
+    ManifestAssetRef,
+    ManifestPath,
+    ManifestSkillSelection,
     NodeStatus,
     OrchestrationPhase,
     OwnerDecisionAction,
@@ -30,6 +33,7 @@ from agentic_cm.orchestrator import (
     PlannerOutput,
     PlannerPath,
     PlannerOutputError,
+    PlannerSkillChoice,
 )
 from agentic_cm.repository import CaseRepository
 from agentic_cm.path_agent import (
@@ -127,14 +131,25 @@ def planner_context(human_proposal=None):
 
 def planning_candidate(definition: str, title: str = "候选 Path"):
     return {
-        "definition": definition, "title": title, "description": "desc",
-        "policy_ids": ["POL-1"], "skill_ids": ["skill-1"],
-        "knowledge_ids": [], "mandatory_commitment_ids": ["COMMITMENT-1"],
-        "skill_guidance": [{
-            "id": "skill-1", "description": "desc",
-            "instructions_markdown": "guide",
-        }],
+        "definition": definition,
+        "title": title,
+        "description": "desc",
+        "policy_ids": ["POL-1"],
+        "knowledge_ids": [],
+        "mandatory_commitment_ids": ["COMMITMENT-1"],
+        "required_review_dimensions": ["技术可行性"],
     }
+
+
+def planner_skill_catalog():
+    return (
+        {"id": "review-bundle", "title": "组合评审", "description": "组合评审当前方案。", "kind": "bundle"},
+        {"id": "standalone-review", "title": "独立评审", "description": "独立检查风险。", "kind": "atomic"},
+    )
+
+
+def planner_skill_payload(skill_id: str = "review-bundle", reason: str = "需要组合分析技术与供应证据。"):
+    return {"id": skill_id, "reason": reason}
 
 
 def test_runtime_environment_loads_repository_dotenv(tmp_path: Path, monkeypatch) -> None:
@@ -244,13 +259,18 @@ def test_manifest_is_path_scoped_and_round_trips_as_yaml(tmp_path: Path) -> None
     }
     assert set(payload["paths"][0]) == {
         "id", "definition", "rationale", "selected",
-        "skills", "policies", "knowledge",
+        "skill_selections", "policies", "knowledge",
     }
-    for group in ("skills", "policies", "knowledge"):
+    assert "skills" not in payload["paths"][0]
+    for group in ("policies", "knowledge"):
         assert all(
             set(reference) == {"id", "version", "digest"}
             for reference in payload["paths"][0][group]
         )
+    selection = payload["paths"][0]["skill_selections"][0]
+    assert set(selection) == {"entrypoint", "reason", "members"}
+    assert set(selection["entrypoint"]) == {"id", "version", "digest"}
+    assert all(set(member) == {"id", "version", "digest"} for member in selection["members"])
     assert "capability_snapshots" not in payload
     serialized = manifest.to_yaml()
     for forbidden in (
@@ -259,6 +279,58 @@ def test_manifest_is_path_scoped_and_round_trips_as_yaml(tmp_path: Path) -> None
     ):
         assert forbidden not in serialized
     assert Manifest.from_yaml(manifest.to_yaml()) == manifest
+
+
+def test_manifest_skill_selections_round_trip_entrypoint_reason_and_members() -> None:
+    manifest = Manifest(
+        id="MAN-1",
+        revision=1,
+        generated_from_case_version=1,
+        paths=(ManifestPath(
+            id="PATH-01",
+            definition="MaterialSubstitution",
+            rationale="建议评估物料替代。",
+            skill_selections=(ManifestSkillSelection(
+                entrypoint=ManifestAssetRef(
+                    id="review-bundle", version="1", digest="sha256:bundle"
+                ),
+                reason="需要组合技术与供应评审。",
+                members=(
+                    ManifestAssetRef(
+                        id="engineering-review", version="1", digest="sha256:eng"
+                    ),
+                    ManifestAssetRef(
+                        id="supply-review", version="1", digest="sha256:supply"
+                    ),
+                ),
+            ),),
+        ),),
+    )
+
+    payload = manifest.model_dump(mode="json")
+    assert "skills" not in payload["paths"][0]
+    assert payload["paths"][0]["skill_selections"][0]["reason"] == "需要组合技术与供应评审。"
+    assert [item.id for item in manifest.paths[0].skills] == [
+        "review-bundle", "engineering-review", "supply-review",
+    ]
+    assert Manifest.from_yaml(manifest.to_yaml()) == manifest
+
+
+def test_manifest_path_reads_legacy_flat_skill_refs() -> None:
+    path = ManifestPath.model_validate({
+        "id": "PATH-01",
+        "definition": "MaterialSubstitution",
+        "rationale": "历史方案",
+        "selected": True,
+        "skills": [
+            {"id": "legacy-skill", "version": "1", "digest": "sha256:legacy"},
+        ],
+        "policies": [],
+        "knowledge": [],
+    })
+
+    assert path.skill_selections[0].reason is None
+    assert path.skills[0].id == "legacy-skill"
 
 
 def test_capability_registry_resolves_exact_skill_entrypoint_references(tmp_path: Path) -> None:
@@ -383,6 +455,86 @@ def test_path_execution_fails_without_mutation_when_skill_reference_changes(
     assert unchanged.version == before_version
     assert unchanged.path_attempts[0].solution_revision is None
     assert repository.list_events(DEMO_CASE_ID) == before_events
+
+
+def test_path_execution_fails_when_bundle_member_reference_changes(tmp_path: Path) -> None:
+    builtin = tmp_path / "builtin"
+    shutil.copytree(DEFAULT_BUILTIN_ROOT, builtin)
+    repository = CaseRepository(tmp_path / "test.db")
+    service = CaseService(
+        repository,
+        capabilities=CapabilityRegistry.from_directories(builtin, None),
+        planner=DeterministicPlannerAdapter(),
+    )
+    service.ensure_demo_data()
+    orchestrate(service)
+    approved = service.approve_manifest(
+        DEMO_CASE_ID,
+        ["PATH-01"],
+        actor=OWNER_ACTOR,
+        role=OWNER_ROLE,
+    )
+    before_version = approved.version
+    before_events = repository.list_events(DEMO_CASE_ID)
+
+    member_path = (
+        builtin / "skills" / "material-substitution-engineering-review" / "SKILL.md"
+    )
+    member_path.write_text(f"{member_path.read_text()}\n成员分析说明已变更。\n")
+    service.capabilities = CapabilityRegistry.from_directories(builtin, None)
+
+    with pytest.raises(PathAgentError, match="重新生成 Manifest"):
+        asyncio.run(service.execute_path(
+            DEMO_CASE_ID,
+            "PATH-01",
+            actor=OWNER_ACTOR,
+            role=OWNER_ROLE,
+        ))
+
+    unchanged = service.get_case(DEMO_CASE_ID)
+    assert unchanged.version == before_version
+    assert unchanged.path_attempts[0].solution_revision is None
+    assert repository.list_events(DEMO_CASE_ID) == before_events
+
+
+def test_path_agent_ignores_unrelated_skill_installed_after_manifest(tmp_path: Path) -> None:
+    builtin = tmp_path / "builtin"
+    shutil.copytree(DEFAULT_BUILTIN_ROOT, builtin)
+    local = tmp_path / "local"
+    local.mkdir()
+    repository = CaseRepository(tmp_path / "test.db")
+    service = CaseService(
+        repository,
+        capabilities=CapabilityRegistry.from_directories(builtin, local),
+        planner=DeterministicPlannerAdapter(),
+        path_agent=DeterministicPathAgentAdapter(),
+    )
+    service.ensure_demo_data()
+    orchestrate(service)
+    service.approve_manifest(
+        DEMO_CASE_ID,
+        ["PATH-01"],
+        actor=OWNER_ACTOR,
+        role=OWNER_ROLE,
+    )
+    _write_skill(local, "late-installed-review", "安装于 Manifest 之后的无关分析。")
+    service.capabilities = CapabilityRegistry.from_directories(builtin, local)
+
+    case = asyncio.run(service.execute_path(
+        DEMO_CASE_ID,
+        "PATH-01",
+        actor=OWNER_ACTOR,
+        role=OWNER_ROLE,
+    ))
+
+    runs = service.get_agent_runs(
+        DEMO_CASE_ID, actor=OWNER_ACTOR, role=OWNER_ROLE, agent_type="path"
+    )
+    assembly = next(event for event in runs[0]["events"] if event["step"] == "agent.assemble")
+    skill_ids = {item["id"] for item in assembly["details"]["execution_skills"]}
+    assert "late-installed-review" not in skill_ids
+    assert "material-substitution-analysis" in skill_ids
+    assert case.path_attempts[0].solution_revision is not None
 
 
 def test_orchestrator_knowledge_is_not_duplicated_into_paths(tmp_path: Path) -> None:
@@ -1015,6 +1167,13 @@ def test_demo_manifest_freezes_verified_capability_references(tmp_path: Path) ->
     case = service.get_case("CM-2026-014")
     path = case.manifest.paths[0]
     assert {item.id for item in path.policies} == {"POL-SUBSTITUTION-3", "POL-CUSTOMER-2"}
+    assert path.skill_selections[0].entrypoint.id == "material-substitution-analysis"
+    assert path.skill_selections[0].reason
+    assert {item.id for item in path.skill_selections[0].members} == {
+        "material-substitution-engineering-review",
+        "material-substitution-master-planning-review",
+        "material-substitution-supply-manager-review",
+    }
     assert "material-substitution-analysis" in {item.id for item in path.skills}
     assert [item.id for item in path.knowledge] == ["KNOW-2025-041"]
     assert all(item.digest.startswith("sha256:") for item in path.policies)
@@ -1255,20 +1414,37 @@ def test_reset_is_scoped_to_known_dataset(tmp_path: Path) -> None:
         raise AssertionError("unbounded reset must fail")
 
 
+def _planner_choice_for(definition: str) -> tuple[str, str]:
+    return {
+        "MaterialSubstitution": ("material-substitution-analysis", "需要完整评估替代方案。"),
+        "SupplyExpediting": ("supply-expediting-analysis", "需要分析供应加速选项。"),
+        "OrderSplit": ("order-split-analysis", "需要分析订单拆分选项。"),
+    }.get(definition, ("review-bundle", "需要分析当前路径。"))
+
+
 class _InventingPlanner:
-    async def propose(self, context, candidates, trace):
+    async def propose(self, context, candidates, skill_catalog, trace):
         trace("planner.response", "COMPLETED", "test response", {"invented": True})
         return PlannerOutput(
-            paths=(PlannerPath(definition="InventedByModel", rationale="不受支持"),),
+            paths=(PlannerPath(
+                definition="InventedByModel",
+                rationale="不受支持",
+                skills=[PlannerSkillChoice(id="invented-skill", reason="发明了未知技能。")],
+            ),),
             planner_profile="test/inventing",
         )
 
 
 class _OmittingPlanner:
-    async def propose(self, context, candidates, trace):
+    async def propose(self, context, candidates, skill_catalog, trace):
         candidate = candidates[0]
+        skill_id, reason = _planner_choice_for(candidate["definition"])
         return PlannerOutput(
-            paths=(PlannerPath(definition=candidate["definition"], rationale="只返回一条"),),
+            paths=(PlannerPath(
+                definition=candidate["definition"],
+                rationale="只返回一条",
+                skills=[PlannerSkillChoice(id=skill_id, reason=reason)],
+            ),),
             planner_profile="test/omitting",
         )
 
@@ -1276,19 +1452,69 @@ class _OmittingPlanner:
 class _AllMatchedSkillPathsPlanner:
     def __init__(self) -> None:
         self.candidates = ()
+        self.skill_catalog = ()
 
-    async def propose(self, context, candidates, trace):
+    async def propose(self, context, candidates, skill_catalog, trace):
         self.candidates = candidates
+        self.skill_catalog = skill_catalog
         return PlannerOutput(
             paths=tuple(
                 PlannerPath(
                     definition=candidate["definition"],
                     rationale=f"{candidate['definition']} 的候选能力与当前 Case 匹配",
+                    skills=[
+                        PlannerSkillChoice(id=skill_id, reason=reason)
+                        for skill_id, reason in [_planner_choice_for(candidate["definition"])]
+                    ],
                 )
                 for candidate in candidates
             ),
             planner_profile="test/all-matched-skill-paths",
         )
+
+
+class FixedSkillPlanner:
+    profile = "fixed-skill/v1"
+
+    def __init__(
+        self,
+        choices: dict[str, list[tuple[str, str]]],
+        *,
+        construct: bool = False,
+    ) -> None:
+        self.choices = choices
+        self.construct = construct
+
+    async def propose(self, context, candidates, skill_catalog, trace):
+        factory = PlannerPath.model_construct if self.construct else PlannerPath
+        output_factory = PlannerOutput.model_construct if self.construct else PlannerOutput
+        return output_factory(
+            paths=tuple(
+                factory(
+                    definition=item["definition"],
+                    rationale=f"{item['title']}适合当前 Case。",
+                    skills=[
+                        PlannerSkillChoice.model_construct(id=skill_id, reason=reason)
+                        if self.construct
+                        else PlannerSkillChoice(id=skill_id, reason=reason)
+                        for skill_id, reason in self.choices[item["definition"]]
+                    ],
+                )
+                for item in candidates
+            ),
+            planner_profile=self.profile,
+        )
+
+
+def make_service_with_planner(tmp_path: Path, planner) -> CaseService:
+    service = CaseService(
+        CaseRepository(tmp_path / "test.db"),
+        planner=planner,
+        path_agent=DeterministicPathAgentAdapter(),
+        synthesis_agent=DeterministicSynthesisAgentAdapter(),
+    )
+    service.ensure_demo_data()
+    return service
 
 
 class _InventingPathAgent:
@@ -1372,35 +1598,133 @@ def test_skill_declares_three_candidates_and_manifest_supports_all_paths(tmp_pat
     }
     split_capabilities = service.get_case_capabilities("CM-2026-014", "PATH-03")
     assert {item["id"] for item in split_capabilities["assets"]["policies"]} == {"POL-ORDER-SPLIT-1"}
+    assert [path.skill_selections[0].entrypoint.id for path in case.manifest.paths] == [
+        "material-substitution-analysis",
+        "supply-expediting-analysis",
+        "order-split-analysis",
+    ]
 
 
-def test_case_scoped_skill_is_not_frozen_into_each_manifest_path(tmp_path: Path) -> None:
+def test_orchestrator_freezes_agent_selected_bundle_and_hidden_members(tmp_path: Path) -> None:
+    service = make_service_with_planner(tmp_path, FixedSkillPlanner({
+        "MaterialSubstitution": [("material-substitution-analysis", "需要完整评估替代方案。")],
+        "SupplyExpediting": [("supply-expediting-analysis", "需要分析供应加速选项。")],
+        "OrderSplit": [("order-split-analysis", "需要分析订单拆分选项。")],
+    }))
+
+    manifest = orchestrate(service).manifest
+    selection = manifest.paths[0].skill_selections[0]
+    assert selection.entrypoint.id == "material-substitution-analysis"
+    assert selection.reason == "需要完整评估替代方案。"
+    assert {item.id for item in selection.members} == {
+        "material-substitution-engineering-review",
+        "material-substitution-master-planning-review",
+        "material-substitution-supply-manager-review",
+    }
+
+
+@pytest.mark.parametrize(
+    ("choices", "construct", "match"),
+    [
+        pytest.param(
+            {
+                "MaterialSubstitution": [("unknown-skill", "选择了未知技能。")],
+                "SupplyExpediting": [("supply-expediting-analysis", "需要分析供应加速选项。")],
+                "OrderSplit": [("order-split-analysis", "需要分析订单拆分选项。")],
+            },
+            False,
+            "unknown Skill",
+            id="unknown_skill_choice",
+        ),
+        pytest.param(
+            {
+                "MaterialSubstitution": [(
+                    "material-substitution-engineering-review",
+                    "猜测了隐藏的 Bundle 成员。",
+                )],
+                "SupplyExpediting": [("supply-expediting-analysis", "需要分析供应加速选项。")],
+                "OrderSplit": [("order-split-analysis", "需要分析订单拆分选项。")],
+            },
+            False,
+            "unknown Skill",
+            id="hidden_member_choice",
+        ),
+        pytest.param(
+            {
+                "MaterialSubstitution": [
+                    ("material-substitution-analysis", "第一次选择。"),
+                    ("material-substitution-analysis", "第二次选择。"),
+                ],
+                "SupplyExpediting": [("supply-expediting-analysis", "需要分析供应加速选项。")],
+                "OrderSplit": [("order-split-analysis", "需要分析订单拆分选项。")],
+            },
+            True,
+            "duplicate Skills",
+            id="duplicate_skill_choice",
+        ),
+        pytest.param(
+            {
+                "MaterialSubstitution": [],
+                "SupplyExpediting": [("supply-expediting-analysis", "需要分析供应加速选项。")],
+                "OrderSplit": [("order-split-analysis", "需要分析订单拆分选项。")],
+            },
+            True,
+            "no Skills",
+            id="empty_skill_choice",
+        ),
+    ],
+)
+def test_orchestrator_rejects_invalid_skill_choices_without_business_mutation(
+    tmp_path: Path,
+    choices: dict[str, list[tuple[str, str]]],
+    construct: bool,
+    match: str,
+) -> None:
+    repository = CaseRepository(tmp_path / "test.db")
+    service = CaseService(
+        repository,
+        planner=FixedSkillPlanner(choices, construct=construct),
+        path_agent=DeterministicPathAgentAdapter(),
+    )
+    service.ensure_demo_data()
+
+    with pytest.raises(PlannerOutputError, match=match):
+        orchestrate(service)
+
+    unchanged = service.get_case("CM-2026-014")
+    assert unchanged.phase is OrchestrationPhase.INTAKE
+    assert unchanged.manifest is None
+    with repository._connect() as connection:
+        assert connection.execute("SELECT count(*) FROM domain_events").fetchone()[0] == 0
+
+
+def test_unrelated_installed_skill_is_not_selected_by_deterministic_planner(tmp_path: Path) -> None:
     builtin = tmp_path / "builtin"
     shutil.copytree(DEFAULT_BUILTIN_ROOT, builtin)
-    skill_dir = builtin / "skills" / "case-context-guidance"
-    skill_dir.mkdir()
-    (skill_dir / "SKILL.md").write_text(
-        "---\nname: case-context-guidance\ndescription: Guide Case classification.\n---\n\n# Guide\n"
-    )
-    bindings_path = builtin / "skill-bindings.json"
-    bindings = json.loads(bindings_path.read_text())
-    bindings["bindings"]["case-context-guidance"] = {
-        "selector": {"case_type": ["ORDER_DELIVERY_RISK"]}
-    }
-    bindings_path.write_text(json.dumps(bindings))
+    _write_skill(builtin, "case-context-guidance", "Guide Case classification.")
     service = CaseService(
         CaseRepository(tmp_path / "test.db"),
         capabilities=CapabilityRegistry.from_directories(builtin, None),
-        planner=_AllMatchedSkillPathsPlanner(),
+        planner=DeterministicPlannerAdapter(),
     )
     service.ensure_demo_data()
 
     case = orchestrate(service)
 
+    catalog_ids = {
+        item["id"]
+        for item in service.capabilities.list_orchestrator_skills()
+    }
+    assert "case-context-guidance" in catalog_ids
     assert all(
         "case-context-guidance" not in {skill.id for skill in path.skills}
         for path in case.manifest.paths
     )
+    assert [path.skill_selections[0].entrypoint.id for path in case.manifest.paths] == [
+        "material-substitution-analysis",
+        "supply-expediting-analysis",
+        "order-split-analysis",
+    ]
 
 
 def test_multi_path_exploration_finishes_only_after_every_solution_revision(tmp_path: Path) -> None:
@@ -1769,25 +2093,32 @@ def test_reducing_catalog_declared_paths_reduces_manifest_candidates(tmp_path: P
     assert [path.definition for path in case.manifest.paths] == ["MaterialSubstitution"]
 
 
-def test_catalog_declared_path_without_execution_skill_fails_closed(tmp_path: Path) -> None:
+def test_empty_orchestrator_skill_catalog_fails_before_planner(tmp_path: Path) -> None:
     builtin = tmp_path / "builtin"
     shutil.copytree(DEFAULT_BUILTIN_ROOT, builtin)
-    bindings_file = builtin / "skill-bindings.json"
-    payload = json.loads(bindings_file.read_text())
-    del payload["bindings"]["order-split-analysis"]
-    bindings_file.write_text(json.dumps(payload))
+    shutil.rmtree(builtin / "skills")
+    (builtin / "skills").mkdir()
+    (builtin / "skill-ownership.json").write_text(json.dumps({
+        "schema_version": 1,
+        "ownership": {},
+    }))
+    planner = _AllMatchedSkillPathsPlanner()
     registry = CapabilityRegistry.from_directories(builtin, None)
-    service = CaseService(CaseRepository(tmp_path / "test.db"), capabilities=registry)
+    service = CaseService(
+        CaseRepository(tmp_path / "test.db"),
+        capabilities=registry,
+        planner=planner,
+    )
     service.ensure_demo_data()
 
     try:
         orchestrate(service)
     except OrchestrationError as exc:
-        assert "OrderSplit" in str(exc)
-        assert "execution Skill" in str(exc)
+        assert "No Orchestrator-visible Skill entrypoints" in str(exc)
     else:
-        raise AssertionError("Every Catalog-declared Path must have an execution Skill")
+        raise AssertionError("Orchestration must fail before the Planner when no Skill entrypoints exist")
 
+    assert planner.candidates == ()
     case = service.get_case("CM-2026-014")
     assert case.phase is OrchestrationPhase.INTAKE
     assert case.manifest is None
@@ -1840,8 +2171,16 @@ def test_openai_compatible_adapter_accepts_custom_provider_configuration() -> No
         return chat_completion_response(
             {
                 "paths": [
-                    {"definition": "MaterialSubstitution", "rationale": "物料缺口与候选能力匹配"},
-                    {"definition": "OrderSplit", "rationale": "可用数量支持分批交付探索"}
+                    {
+                        "definition": "MaterialSubstitution",
+                        "rationale": "物料缺口与候选能力匹配",
+                        "skills": [planner_skill_payload()],
+                    },
+                    {
+                        "definition": "OrderSplit",
+                        "rationale": "可用数量支持分批交付探索",
+                        "skills": [planner_skill_payload("standalone-review", "需要独立检查拆分风险。")],
+                    },
                 ]
             },
             response_id="response-planner-1",
@@ -1863,6 +2202,7 @@ def test_openai_compatible_adapter_accepts_custom_provider_configuration() -> No
                 planner_context(),
                 (planning_candidate("MaterialSubstitution", "物料替代"),
                  planning_candidate("OrderSplit", "订单拆分")),
+                planner_skill_catalog(),
                 lambda *args, **kwargs: trace_events.append((args, kwargs)),
             )
 
@@ -1876,15 +2216,24 @@ def test_openai_compatible_adapter_accepts_custom_provider_configuration() -> No
     assert observed["payload"]["thinking"] == {"type": "enabled"}
     assert observed["payload"]["reasoning_effort"] == "max"
     parsed_planner_context = json.loads(observed["payload"]["messages"][1]["content"])
-    assert set(parsed_planner_context) == {"case", "candidates", "skill_guidance", "knowledge"}
+    assert set(parsed_planner_context) == {"case", "candidates", "skill_catalog", "knowledge"}
     assert parsed_planner_context["knowledge"] == []
-    assert len(parsed_planner_context["skill_guidance"]) == 1
+    assert parsed_planner_context["skill_catalog"] == list(planner_skill_catalog())
     assert all(
-        set(candidate) == {"definition", "title", "description"}
+        set(skill) == {"id", "title", "description", "kind"}
+        for skill in parsed_planner_context["skill_catalog"]
+    )
+    assert all(
+        set(candidate) == {"definition", "title", "description", "required_review_dimensions"}
         for candidate in parsed_planner_context["candidates"]
     )
-    assert "policy_ids" not in json.dumps(parsed_planner_context)
-    assert "mandatory_commitment_ids" not in json.dumps(parsed_planner_context)
+    prompt_text = json.dumps(parsed_planner_context, ensure_ascii=False)
+    assert "members" not in prompt_text
+    assert "maintainer_role" not in prompt_text
+    assert "instructions_markdown" not in prompt_text
+    assert "selector" not in prompt_text
+    assert "policy_ids" not in prompt_text
+    assert "mandatory_commitment_ids" not in prompt_text
     assert "secret-key" not in json.dumps(trace_events)
     request_trace = next(args for args, _ in trace_events if args[0] == "planner.request")
     assert request_trace[3]["authentication"] == {
@@ -1902,7 +2251,11 @@ def test_openai_compatible_adapter_repairs_pydantic_schema_failure_once() -> Non
         nonlocal attempts
         attempts += 1
         content = {
-            "paths": [{"definition": "MaterialSubstitution", "rationale": "候选能力匹配"}],
+            "paths": [{
+                "definition": "MaterialSubstitution",
+                "rationale": "候选能力匹配",
+                "skills": [planner_skill_payload()],
+            }],
         }
         if attempts == 1:
             content["unexpected"] = True
@@ -1923,6 +2276,7 @@ def test_openai_compatible_adapter_repairs_pydantic_schema_failure_once() -> Non
             return await adapter.propose(
                 planner_context(),
                 (planning_candidate("MaterialSubstitution", "物料替代"),),
+                planner_skill_catalog(),
                 lambda *args, **kwargs: trace_events.append((args, kwargs)),
             )
 
@@ -1947,6 +2301,7 @@ def test_openai_compatible_planner_retries_one_transient_connection_failure() ->
                 "paths": [{
                     "definition": "SupplyExpediting",
                     "rationale": "Owner 要求重点探索供应提拉，当前缺料风险与该路径相关。",
+                    "skills": [planner_skill_payload("standalone-review", "需要独立检查供应提拉风险。")],
                 }],
             },
             response_id="response-after-retry",
@@ -1967,6 +2322,7 @@ def test_openai_compatible_planner_retries_one_transient_connection_failure() ->
                     "content": "探索一下提拉看看",
                 }) | {"case_version": 2},
                 (planning_candidate("SupplyExpediting", "供应提拉"),),
+                planner_skill_catalog(),
                 lambda *args, **kwargs: trace_events.append((args, kwargs)),
             )
 
@@ -2248,6 +2604,14 @@ def test_openai_compatible_path_agent_uses_manifest_assembled_context(tmp_path: 
     request_context = json.loads(observed["payload"]["messages"][1]["content"])
     assert request_context["manifest_ref"]["id"] == "MAN-CM-2026-014-1"
     assert request_context["execution_skills"][0]["id"] == "material-substitution-analysis"
+    assert {item["id"] for item in request_context["execution_skills"]} == {
+        "material-substitution-analysis",
+        "material-substitution-engineering-review",
+        "material-substitution-master-planning-review",
+        "material-substitution-supply-manager-review",
+    }
+    assert "supply-expediting-analysis" not in json.dumps(request_context, ensure_ascii=False)
+    assert "maintainer_role" not in json.dumps(request_context, ensure_ascii=False)
     assert set(request_context["execution_skills"][0]) == {
         "id", "version", "description", "instructions_markdown"
     }

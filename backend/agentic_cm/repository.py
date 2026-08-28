@@ -273,7 +273,11 @@ class CaseRepository:
             for raw_path in raw_paths:
                 path_payload = dict(raw_path)
                 snapshot = snapshots.get(path_payload["id"])
-                if snapshot and "skills" not in path_payload:
+                if (
+                    snapshot
+                    and "skills" not in path_payload
+                    and "skill_selections" not in path_payload
+                ):
                     normalized = CaseRepository._normalize_capability_snapshot(snapshot)
                     payloads = normalized["asset_payloads"]
                     path_payload["skills"] = [
@@ -305,7 +309,27 @@ class CaseRepository:
                         )
                     path_payload["policies"] = policies
                 path_payload.pop("title", None)
-                for group in ("skills", "policies", "knowledge"):
+                if "skill_selections" in path_payload:
+                    path_payload["skill_selections"] = [
+                        {
+                            "entrypoint": CaseRepository._manifest_asset_ref(
+                                item["entrypoint"]
+                            ),
+                            "reason": item.get("reason"),
+                            "members": [
+                                CaseRepository._manifest_asset_ref(member)
+                                for member in item.get("members", [])
+                            ],
+                        }
+                        for item in path_payload.get("skill_selections", [])
+                    ]
+                    path_payload.pop("skills", None)
+                elif "skills" in path_payload:
+                    path_payload["skills"] = [
+                        CaseRepository._manifest_asset_ref(item)
+                        for item in path_payload.get("skills", [])
+                    ]
+                for group in ("policies", "knowledge"):
                     path_payload[group] = [
                         CaseRepository._manifest_asset_ref(item)
                         for item in path_payload.get(group, [])

@@ -109,6 +109,23 @@ class ManifestAssetRef(BaseModel):
     digest: str
 
 
+class ManifestSkillSelection(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    entrypoint: ManifestAssetRef
+    reason: str | None = None
+    members: tuple[ManifestAssetRef, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_members(self) -> "ManifestSkillSelection":
+        member_ids = [item.id for item in self.members]
+        if self.entrypoint.id in member_ids:
+            raise ValueError("Manifest Skill entrypoint cannot also be a member")
+        if len(member_ids) != len(set(member_ids)):
+            raise ValueError("Manifest Skill member ids must be unique")
+        return self
+
+
 class ManifestPath(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -116,14 +133,30 @@ class ManifestPath(BaseModel):
     definition: str
     rationale: str
     selected: bool = True
-    skills: tuple[ManifestAssetRef, ...] = ()
+    skill_selections: tuple[ManifestSkillSelection, ...] = ()
     policies: tuple[ManifestAssetRef, ...] = ()
     knowledge: tuple[ManifestAssetRef, ...] = ()
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_skills(cls, value: Any) -> Any:
+        if isinstance(value, dict) and "skills" in value and "skill_selections" not in value:
+            payload = dict(value)
+            payload["skill_selections"] = [
+                {"entrypoint": item, "reason": None, "members": []}
+                for item in payload.pop("skills", [])
+            ]
+            return payload
+        return value
+
     @model_validator(mode="after")
     def validate_capabilities(self) -> "ManifestPath":
+        entrypoint_ids = [selection.entrypoint.id for selection in self.skill_selections]
+        if any(not asset_id.strip() for asset_id in entrypoint_ids):
+            raise ValueError("Manifest Skill ids must be non-empty strings")
+        if len(entrypoint_ids) != len(set(entrypoint_ids)):
+            raise ValueError("Manifest Skill ids must be unique within a Path")
         for label, assets in (
-            ("Skill", self.skills),
             ("Policy", self.policies),
             ("Knowledge", self.knowledge),
         ):
@@ -132,7 +165,19 @@ class ManifestPath(BaseModel):
                 raise ValueError(f"Manifest {label} ids must be non-empty strings")
             if len(ids) != len(set(ids)):
                 raise ValueError(f"Manifest {label} ids must be unique within a Path")
+        _ = self.skills
         return self
+
+    @property
+    def skills(self) -> tuple[ManifestAssetRef, ...]:
+        by_id: dict[str, ManifestAssetRef] = {}
+        for selection in self.skill_selections:
+            for ref in (selection.entrypoint, *selection.members):
+                existing = by_id.get(ref.id)
+                if existing is not None and existing != ref:
+                    raise ValueError(f"Manifest Skill {ref.id!r} has conflicting references")
+                by_id.setdefault(ref.id, ref)
+        return tuple(by_id.values())
 
 
 class Manifest(BaseModel):

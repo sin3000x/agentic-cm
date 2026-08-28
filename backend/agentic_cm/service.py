@@ -519,6 +519,9 @@ class CaseService:
                     "Manifest 能力引用校验失败",
                     {
                         "path_id": path_id,
+                        "skill_selections": [
+                            item.model_dump(mode="json") for item in path.skill_selections
+                        ],
                         "skills": [item.model_dump() for item in path.skills],
                         "policies": [item.model_dump() for item in path.policies],
                         "knowledge": [item.model_dump() for item in path.knowledge],
@@ -534,6 +537,9 @@ class CaseService:
                 "目标 Path 的 Manifest 能力引用通过校验",
                 {
                     "path_id": path_id,
+                    "skill_selections": [
+                        item.model_dump(mode="json") for item in path.skill_selections
+                    ],
                     "skills": [item.model_dump() for item in path.skills],
                     "policies": [item.model_dump() for item in path.policies],
                     "knowledge": [item.model_dump() for item in path.knowledge],
@@ -901,8 +907,11 @@ class CaseService:
                 ) from exc
         snapshot_status = "frozen"
         if not snapshot:
-            snapshot = self._resolve_case_capabilities(case, target_path.id if target_path else None)
+            if target_path is None:
+                raise InvalidTransitionError("Case has no selected Path for capability resolution")
+            snapshot = self._resolve_case_capabilities(case, target_path.id)
             snapshot_status = "preview"
+            snapshot["asset_payloads"]["skills"] = []
         return {
             "snapshot_status": snapshot_status,
             "path_id": target_path.id if target_path else None,

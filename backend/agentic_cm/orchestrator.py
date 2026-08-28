@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import asdict
 from typing import Annotated, Any, Protocol
 
@@ -22,7 +23,14 @@ from .config import (
     agent_adapter_from_environment,
     agent_llm_config_from_environment,
 )
-from .domain import Case, Manifest, ManifestAssetRef, ManifestPath, OrchestrationPhase
+from .domain import (
+    Case,
+    Manifest,
+    ManifestAssetRef,
+    ManifestPath,
+    ManifestSkillSelection,
+    OrchestrationPhase,
+)
 from .llm import OpenAICompatibleClient, build_openai_compatible_client
 
 
@@ -51,11 +59,28 @@ _PLANNER_NARRATION = TraceNarration(
 )
 
 
+class PlannerSkillChoice(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: NonEmptyText
+    reason: NonEmptyText
+
+
 class PlannerPath(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     definition: NonEmptyText
     rationale: NonEmptyText
+    skills: list[PlannerSkillChoice] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_skill_choices(self) -> "PlannerPath":
+        ids = [item.id for item in self.skills]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Planner selected the same Skill more than once for one Path")
+        if any(not _contains_chinese(item.reason) for item in self.skills):
+            raise ValueError("Planner 的 Skill 选择理由必须使用中文")
+        return self
 
 
 class _ManifestDraftPayload(BaseModel):
@@ -85,6 +110,7 @@ class PlannerAdapter(Protocol):
         self,
         context: dict[str, Any],
         candidates: tuple[dict[str, Any], ...],
+        skill_catalog: tuple[dict[str, str], ...],
         trace: AgentTraceSink,
     ) -> PlannerOutput: ...
 
@@ -98,6 +124,7 @@ class DeterministicPlannerAdapter:
         self,
         context: dict[str, Any],
         candidates: tuple[dict[str, Any], ...],
+        skill_catalog: tuple[dict[str, str], ...],
         trace: AgentTraceSink,
     ) -> PlannerOutput:
         trace(
@@ -107,6 +134,7 @@ class DeterministicPlannerAdapter:
             {
                 "case": context,
                 "candidates": list(candidates),
+                "skill_catalog": list(skill_catalog),
                 "adapter": self.profile,
             },
         )
@@ -116,10 +144,19 @@ class DeterministicPlannerAdapter:
             paths=tuple(
                 PlannerPath(
                     definition=candidate["definition"],
-                    rationale=f"{candidate['title']}由命中的编排 Skill 声明；"
-                    "deterministic 模式不判断当前 Case 的业务优先级。",
+                    rationale=(
+                        f"{candidate['title']}由 Case Type Catalog 声明；"
+                        "deterministic 模式不判断当前 Case 的业务优先级。"
+                    ),
+                    skills=[
+                        PlannerSkillChoice(
+                            id=selected["id"],
+                            reason=f"选择{selected['title']}分析{candidate['title']}相关证据。",
+                        )
+                    ],
                 )
                 for candidate in candidates
+                for selected in (_deterministic_skill(candidate, skill_catalog),)
             ),
             planner_profile=self.profile,
         )
@@ -186,10 +223,11 @@ class OpenAICompatiblePlannerAdapter:
         self,
         context: dict[str, Any],
         candidates: tuple[dict[str, Any], ...],
+        skill_catalog: tuple[dict[str, str], ...],
         trace: AgentTraceSink,
     ) -> PlannerOutput:
         response_schema = _ManifestDraftPayload.model_json_schema()
-        prompt_context = _planner_prompt_context(context, candidates)
+        prompt_context = _planner_prompt_context(context, candidates, skill_catalog)
         trace(
             "planner.context_projection",
             "COMPLETED",
@@ -204,6 +242,8 @@ class OpenAICompatiblePlannerAdapter:
                     "content": (
                         "You are an enterprise exception Case planning component. Return JSON only. "
                         "Return every provided candidate definition exactly once, with a Case-specific rationale. "
+                        "For every Path, select at least one Skill id from the provided skill_catalog "
+                        "and give a Chinese reason. Never invent Skill ids. Bundle members are not selectable. "
                         "Use the provided orchestration knowledge only to understand and order candidate Paths. "
                         "Write every human-facing rationale in Chinese. "
                         "You may order them by relevance. Never invent or omit ids, remove policies, "
@@ -225,7 +265,11 @@ class OpenAICompatiblePlannerAdapter:
             enabled=self._thinking_enabled,
             reasoning_effort=self._reasoning_effort,
         )
+        allowed_path_ids = {item["definition"] for item in candidates}
+        allowed_skill_ids = {item["id"] for item in skill_catalog}
+
         def build_result(payload: _ManifestDraftPayload) -> PlannerOutput:
+            _validate_planner_choices(payload.paths, allowed_path_ids, allowed_skill_ids)
             return PlannerOutput(paths=tuple(payload.paths), planner_profile=self.profile)
 
         return await request_structured_output(
@@ -239,26 +283,19 @@ class OpenAICompatiblePlannerAdapter:
             build_result=build_result,
             repair_instruction=lambda exc: (
                 "The previous output was invalid. Return one non-empty JSON object "
-                "matching the exact schema."
+                "matching the exact schema. Select only Skill ids from skill_catalog."
             ),
             execution_error=PlannerExecutionError,
             output_error=PlannerOutputError,
+            recoverable_output_errors=(PlannerOutputError,),
         )
 
 
 def _planner_prompt_context(
     context: dict[str, Any],
     candidates: tuple[dict[str, Any], ...],
+    skill_catalog: tuple[dict[str, str], ...],
 ) -> dict[str, Any]:
-    guidance_by_identity: dict[tuple[str, str], dict[str, str]] = {}
-    for candidate in candidates:
-        for guidance in candidate["skill_guidance"]:
-            identity = (guidance["id"], guidance["instructions_markdown"])
-            guidance_by_identity.setdefault(identity, {
-                "id": guidance["id"],
-                "description": guidance["description"],
-                "instructions_markdown": guidance["instructions_markdown"],
-            })
     return {
         "case": {
             key: value for key, value in context.items()
@@ -269,12 +306,61 @@ def _planner_prompt_context(
                 "definition": item["definition"],
                 "title": item["title"],
                 "description": item["description"],
+                "required_review_dimensions": item["required_review_dimensions"],
             }
             for item in candidates
         ],
-        "skill_guidance": list(guidance_by_identity.values()),
+        "skill_catalog": [dict(item) for item in skill_catalog],
         "knowledge": list(context.get("orchestration_knowledge", [])),
     }
+
+
+def _identifier_terms(value: str) -> set[str]:
+    expanded = re.sub(r"([a-z0-9])([A-Z])", r"\1-\2", value)
+    return {term for term in re.split(r"[^a-z0-9]+", expanded.lower()) if term}
+
+
+def _deterministic_skill(
+    candidate: dict[str, Any],
+    skill_catalog: tuple[dict[str, str], ...],
+) -> dict[str, str]:
+    path_terms = _identifier_terms(candidate["definition"])
+    ranked = sorted(
+        skill_catalog,
+        key=lambda skill: (-len(path_terms & _identifier_terms(skill["id"])), skill["id"]),
+    )
+    if not ranked:
+        raise OrchestrationError("No Orchestrator-visible Skill entrypoints")
+    return ranked[0]
+
+
+def _validate_planner_choices(
+    paths: tuple[PlannerPath, ...] | list[PlannerPath],
+    allowed_path_ids: set[str],
+    allowed_skill_ids: set[str],
+) -> None:
+    if not paths:
+        raise PlannerOutputError("Planner must select at least one Path")
+    selected_definitions = [path.definition for path in paths]
+    if len(set(selected_definitions)) != len(selected_definitions):
+        raise PlannerOutputError("Planner selected the same Path more than once")
+    returned = set(selected_definitions)
+    if returned != allowed_path_ids:
+        raise PlannerOutputError(
+            f"Planner must return every Catalog-declared Path exactly once; "
+            f"missing={sorted(allowed_path_ids - returned)}, unknown={sorted(returned - allowed_path_ids)}"
+        )
+    for planned in paths:
+        selected_ids = [choice.id for choice in planned.skills]
+        if not selected_ids:
+            raise PlannerOutputError(f"Planner selected no Skills for {planned.definition}")
+        unknown = set(selected_ids) - allowed_skill_ids
+        if unknown:
+            raise PlannerOutputError(f"Planner selected unknown Skill ids: {sorted(unknown)}")
+        if len(selected_ids) != len(set(selected_ids)):
+            raise PlannerOutputError(
+                f"Planner selected duplicate Skills for {planned.definition}"
+            )
 
 
 class Orchestrator:
@@ -306,7 +392,7 @@ class Orchestrator:
         trace(
             "paths.discovery",
             "COMPLETED",
-            f"编排 Skill 声明了 {len(definitions)} 条候选 Path",
+            f"Case Type Catalog 声明了 {len(definitions)} 条候选 Path",
             {"classification": dict(case.classification), "paths": [asdict(item) for item in definitions]},
         )
         resolutions: dict[str, Any] = {}
@@ -316,13 +402,7 @@ class Orchestrator:
             resolution = self.capabilities.resolve(
                 case.classification | {"path_definition": definition.id}
             )
-            path_level_skills = [
-                payload for payload in resolution.asset_payloads["skills"]
-                if definition.id in (payload.get("selector") or {}).get("path_definition", [])
-            ]
             missing: list[str] = []
-            if not path_level_skills:
-                missing.append("execution Skill")
             if not resolution.compiled_policy.get("commitments"):
                 missing.append("mandatory Policy")
             if missing:
@@ -333,12 +413,11 @@ class Orchestrator:
             trace(
                 "capabilities.resolve",
                 "FAILED" if missing else "COMPLETED",
-                f"解析 {definition.id} 的执行能力",
+                f"解析 {definition.id} 的 Policy 与 Knowledge",
                 {
                     "path_definition": definition.id,
                     "missing": missing,
                     "policies": [ref.id for ref in resolution.policies],
-                    "skills": [ref.id for ref in resolution.skills],
                     "knowledge": [ref.id for ref in resolution.knowledge],
                     "mandatory_commitments": [
                         item["id"] for item in resolution.compiled_policy.get("commitments", [])
@@ -349,33 +428,28 @@ class Orchestrator:
             raise OrchestrationError(
                 f"Catalog-declared Paths are not executable: {incomplete}"
             )
+        skill_catalog = self.capabilities.list_orchestrator_skills()
+        if not skill_catalog:
+            raise OrchestrationError("No Orchestrator-visible Skill entrypoints")
         candidates = tuple(
             {
                 "definition": definition.id,
                 "title": definition.title,
                 "description": definition.description,
                 "policy_ids": [ref.id for ref in resolution.policies],
-                "skill_ids": [ref.id for ref in resolution.skills],
                 "knowledge_ids": [ref.id for ref in resolution.knowledge],
                 "mandatory_commitment_ids": [
                     item["id"] for item in resolution.compiled_policy["commitments"]
                 ],
-                "skill_guidance": [
-                    {
-                        "id": payload["id"],
-                        "description": payload["description"],
-                        "instructions_markdown": payload["instructions_markdown"],
-                    }
-                    for payload in resolution.asset_payloads["skills"]
-                    if definition.id in (payload.get("selector") or {}).get(
-                        "path_definition", []
-                    )
+                "required_review_dimensions": [
+                    item["review_dimension"]
+                    for item in resolution.compiled_policy["commitments"]
                 ],
             }
             for definition, resolution in eligible
         )
         if not candidates:
-            raise OrchestrationError("No PathDefinition has both a matched Skill and applicable mandatory Policy")
+            raise OrchestrationError("No PathDefinition has applicable mandatory Policy")
         planning_context = {
             "case_id": case.id,
             "case_version": case.version,
@@ -392,30 +466,34 @@ class Orchestrator:
             "planner.input",
             "COMPLETED",
             "构造受限 Planner 输入",
-            {"context": planning_context, "candidates": list(candidates)},
+            {
+                "context": planning_context,
+                "candidates": list(candidates),
+                "skill_catalog": list(skill_catalog),
+            },
         )
         result = await self.planner.propose(
             planning_context,
             candidates,
+            skill_catalog,
             trace,
         )
-        allowed = {item["definition"] for item in candidates}
-        if not result.paths:
-            raise PlannerOutputError("Planner must select at least one Path")
+        allowed_path_ids = {item["definition"] for item in candidates}
+        allowed_skill_ids = {item["id"] for item in skill_catalog}
+        _validate_planner_choices(result.paths, allowed_path_ids, allowed_skill_ids)
         selected_definitions = [path.definition for path in result.paths]
-        if len(set(selected_definitions)) != len(selected_definitions):
-            raise PlannerOutputError("Planner selected the same Path more than once")
-        returned = set(selected_definitions)
-        if returned != allowed:
-            raise PlannerOutputError(
-                f"Planner must return every Catalog-declared Path exactly once; "
-                f"missing={sorted(allowed - returned)}, unknown={sorted(returned - allowed)}"
-            )
         trace(
             "planner.output_validation",
             "COMPLETED",
-            "Planner 输出通过 Path 白名单与完整性校验",
-            {"allowed": sorted(allowed), "returned_in_order": selected_definitions},
+            "Planner 输出通过 Path 白名单、Skill 白名单与完整性校验",
+            {
+                "allowed_paths": sorted(allowed_path_ids),
+                "allowed_skills": sorted(allowed_skill_ids),
+                "returned_in_order": selected_definitions,
+                "selected_skill_entrypoints": [
+                    choice.id for planned in result.paths for choice in planned.skills
+                ],
+            },
         )
 
         definitions_by_id = {definition.id: definition for definition in definitions}
@@ -428,17 +506,14 @@ class Orchestrator:
                 id=f"PATH-{index:02d}",
                 definition=definition.id,
                 rationale=planned.rationale,
-                skills=tuple(
-                    _manifest_ref(ref)
-                    for ref in resolution.skills
-                    if ref.id in {
-                        skill_id
-                        for payload in resolution.asset_payloads["skills"]
-                        if definition.id in (payload.get("selector") or {}).get(
-                            "path_definition", []
-                        )
-                        for skill_id in (payload["id"], *payload.get("members", []))
-                    }
+                skill_selections=tuple(
+                    ManifestSkillSelection(
+                        entrypoint=_manifest_ref(expanded.entrypoint),
+                        reason=choice.reason,
+                        members=tuple(_manifest_ref(ref) for ref in expanded.members),
+                    )
+                    for choice in planned.skills
+                    for expanded in (self.capabilities.resolve_skill_entrypoint(choice.id),)
                 ),
                 policies=tuple(_manifest_ref(ref) for ref in resolution.policies),
                 knowledge=tuple(
@@ -475,6 +550,20 @@ class Orchestrator:
                 "planner_profile": result.planner_profile,
                 "paths": [path.model_dump(mode="json") for path in manifest.paths],
                 "path_ids": [path.id for path in manifest.paths],
+                "selected_skill_entrypoints": [
+                    selection.entrypoint.id
+                    for path in manifest.paths
+                    for selection in path.skill_selections
+                ],
+                "expanded_skill_refs": [
+                    {
+                        "path": path.definition,
+                        "entrypoint": selection.entrypoint.id,
+                        "members": [item.id for item in selection.members],
+                    }
+                    for path in manifest.paths
+                    for selection in path.skill_selections
+                ],
                 "manifest_yaml": manifest.to_yaml(),
             },
         )
