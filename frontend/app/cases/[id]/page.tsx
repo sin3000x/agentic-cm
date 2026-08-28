@@ -59,6 +59,12 @@ type ManifestAssetRef = {
   digest: string;
 };
 
+type ManifestSkillSelection = {
+  entrypoint: ManifestAssetRef;
+  reason: string | null;
+  members: ManifestAssetRef[];
+};
+
 type ManifestPath = {
   id: string;
   definition: string;
@@ -66,11 +72,15 @@ type ManifestPath = {
   rationale: string;
   selected: boolean;
   policies: ManifestAssetRef[];
-  skills: ManifestAssetRef[];
+  skills?: ManifestAssetRef[];
+  skill_selections: ManifestSkillSelection[];
   knowledge: ManifestAssetRef[];
 };
 
-type ManifestPathPayload = Omit<ManifestPath, "title"> & { title?: string };
+type ManifestPathPayload = Omit<ManifestPath, "title" | "skill_selections"> & {
+  title?: string;
+  skill_selections?: ManifestSkillSelection[];
+};
 
 type CommitmentNode = {
   id: string;
@@ -601,6 +611,7 @@ export default function Home() {
     const paths = (manifest?.paths ?? workflowPaths).map((path) => ({
       ...path,
       title: workflowById.get(path.id)?.title ?? path.title ?? path.definition,
+      skill_selections: path.skill_selections ?? [],
     }));
     setManifestPaths(paths);
     setManifestVersion(manifest?.revision ?? null);
@@ -1338,7 +1349,7 @@ export default function Home() {
         <div><span className="agentIcon">✦</span><span><small>ORCHESTRATOR 建议</small><h2>审查 Path Manifest</h2></span></div>
         <span className="version">v1 · 待批准</span>
       </div>
-      <p className="lead">命中的缺料处理 Skill 支持以下三条 Path。Owner 可以选择本轮真正进入探索的 Path。</p>
+      <p className="lead">Orchestrator 已为每条候选 Path 选择本次采用的 Skill。Owner 可以选择本轮真正进入探索的 Path。</p>
       <div className="pathChoices">
         {manifestPaths.map((path, index) => {
           const selected = selectedPathIds.includes(path.id);
@@ -1356,8 +1367,25 @@ export default function Home() {
               <p>{path.rationale}</p>
               <div className="pathStats">
                 <span><small>强制 Policy</small><strong>{path.policies.length}</strong></span>
-                <span><small>命中 Skill</small><strong>{path.skills.length}</strong></span>
+                <span><small>Agent 选择</small><strong>{path.skill_selections.length}</strong></span>
                 <span><small>参考 Knowledge</small><strong>{path.knowledge.length}</strong></span>
+              </div>
+              <div className="manifestSkillChoices">
+                {path.skill_selections.map((selection) => (
+                  <details className="manifestSkillChoice" key={selection.entrypoint.id}>
+                    <summary>
+                      <strong>{selection.entrypoint.id}</strong>
+                      <span>{selection.members.length ? "SKILL BUNDLE" : "ATOMIC SKILL"}</span>
+                    </summary>
+                    <p><b>选择理由</b>{selection.reason ?? "历史 Manifest 未记录选择理由"}</p>
+                    {selection.members.length > 0 && (
+                      <div>
+                        <b>Bundle 成员</b>
+                        {selection.members.map((member) => <code key={member.id}>{member.id}</code>)}
+                      </div>
+                    )}
+                  </details>
+                ))}
               </div>
             </article>
           );
@@ -1531,7 +1559,7 @@ export default function Home() {
                                     <p>{path.rationale || "Manifest 未记录额外理由。"}</p>
                                     <dl>
                                       <div><dt>Policy</dt><dd>{path.policies.length}</dd></div>
-                                      <div><dt>Skill</dt><dd>{path.skills.length}</dd></div>
+                                      <div><dt>Agent 选择</dt><dd>{path.skill_selections.length}</dd></div>
                                       <div><dt>Knowledge</dt><dd>{path.knowledge.length}</dd></div>
                                     </dl>
                                   </article>
