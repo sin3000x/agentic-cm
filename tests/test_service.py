@@ -197,7 +197,7 @@ def test_orchestrator_builds_manifest_from_open_delay_case(tmp_path: Path) -> No
     assert case.phase is OrchestrationPhase.MANIFEST_REVIEW
     assert case.manifest.generated_from_case_version == 1
     # The deterministic planner does not rank or prioritize: it returns every
-    # Skill-declared candidate, in declaration order, each with a rationale.
+    # Catalog-declared candidate, in declaration order, each with a rationale.
     assert [path.definition for path in case.manifest.paths] == [
         "MaterialSubstitution", "SupplyExpediting", "OrderSplit"
     ]
@@ -404,28 +404,34 @@ def test_orchestrator_knowledge_is_not_duplicated_into_paths(tmp_path: Path) -> 
     )
 
 
-def test_orchestration_skill_paths_are_partitioned_by_case_type(tmp_path: Path) -> None:
-    builtin = tmp_path / "builtin"
-    skills = builtin / "skills"
-    bindings = {}
-    for skill_name, case_type, title in (
-        ("quality-planning", "QUALITY_INCIDENT", "质量人工复核"),
-        ("payment-planning", "PAYMENT_EXCEPTION", "付款人工复核"),
-    ):
-        skill_dir = skills / skill_name
-        skill_dir.mkdir(parents=True)
-        (skill_dir / "SKILL.md").write_text(
-            f"---\nname: {skill_name}\ndescription: Plan review paths for {case_type}.\n---\n\n# Plan\n"
-        )
-        (skill_dir / "paths.json").write_text(json.dumps({
-            "schema_version": 1,
-            "paths": [{"id": "ManualReview", "title": title, "description": "case-specific review"}],
-        }))
-        bindings[skill_name] = {"selector": {"case_type": [case_type]}}
-    (builtin / "skill-bindings.json").write_text(json.dumps({
+def _write_case_type_catalog(
+    root: Path,
+    directory: str,
+    case_type: str,
+    title: str,
+    paths: list[dict[str, str]],
+) -> None:
+    catalog_dir = root / "case-types" / directory
+    catalog_dir.mkdir(parents=True)
+    (catalog_dir / "paths.json").write_text(json.dumps({
         "schema_version": 1,
-        "bindings": bindings,
-    }))
+        "case_type": case_type,
+        "title": title,
+        "paths": paths,
+    }, ensure_ascii=False))
+
+
+def test_case_type_catalog_paths_are_partitioned_by_case_type(tmp_path: Path) -> None:
+    builtin = tmp_path / "builtin"
+    for directory, case_type, case_title, path_title in (
+        ("quality-incident", "QUALITY_INCIDENT", "质量事件", "质量人工复核"),
+        ("payment-exception", "PAYMENT_EXCEPTION", "付款异常", "付款人工复核"),
+    ):
+        _write_case_type_catalog(builtin, directory, case_type, case_title, [{
+            "id": "ManualReview",
+            "title": path_title,
+            "description": "case-specific review",
+        }])
 
     registry = CapabilityRegistry.from_directories(builtin, None)
 
@@ -438,12 +444,50 @@ def test_orchestration_skill_paths_are_partitioned_by_case_type(tmp_path: Path) 
     assert registry.resolve_path_candidates({"case_type": "ORDER_DELIVERY_RISK"}) == ()
 
 
-def test_paths_owning_skill_requires_one_case_type_binding(tmp_path: Path) -> None:
+def test_case_type_catalog_rejects_duplicate_path_ids(tmp_path: Path) -> None:
     builtin = tmp_path / "builtin"
-    skill_dir = builtin / "skills" / "unscoped-planning"
+    path = {"id": "ManualReview", "title": "人工复核", "description": "fixture"}
+    _write_case_type_catalog(
+        builtin, "quality-incident", "QUALITY_INCIDENT", "质量事件", [path, path]
+    )
+
+    try:
+        CapabilityRegistry.from_directories(builtin, None)
+    except CapabilityConfigurationError as exc:
+        assert "Path ids must be unique" in str(exc)
+    else:
+        raise AssertionError("A Case Type catalog must reject duplicate Path ids")
+
+
+def test_local_case_type_catalog_replaces_builtin_catalog(tmp_path: Path) -> None:
+    builtin = tmp_path / "builtin"
+    local = tmp_path / "local"
+    _write_case_type_catalog(builtin, "quality-incident", "QUALITY_INCIDENT", "质量事件", [{
+        "id": "ManualReview", "title": "人工复核", "description": "builtin",
+    }])
+    _write_case_type_catalog(local, "quality-incident", "QUALITY_INCIDENT", "质量事件本地版", [{
+        "id": "Containment", "title": "临时围堵", "description": "local",
+    }])
+    _write_case_type_catalog(local, "payment-exception", "PAYMENT_EXCEPTION", "付款异常", [{
+        "id": "PaymentReview", "title": "付款复核", "description": "local",
+    }])
+
+    registry = CapabilityRegistry.from_directories(builtin, local)
+
+    assert [item.id for item in registry.resolve_path_candidates({"case_type": "QUALITY_INCIDENT"})] == [
+        "Containment"
+    ]
+    assert [item.id for item in registry.resolve_path_candidates({"case_type": "PAYMENT_EXCEPTION"})] == [
+        "PaymentReview"
+    ]
+
+
+def test_skill_paths_json_is_rejected_as_a_legacy_playbook(tmp_path: Path) -> None:
+    builtin = tmp_path / "builtin"
+    skill_dir = builtin / "skills" / "legacy-planning"
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text(
-        "---\nname: unscoped-planning\ndescription: Invalid fixture.\n---\n\n# Plan\n"
+        "---\nname: legacy-planning\ndescription: Legacy fixture.\n---\n\n# Legacy\n"
     )
     (skill_dir / "paths.json").write_text(json.dumps({
         "schema_version": 1,
@@ -451,15 +495,29 @@ def test_paths_owning_skill_requires_one_case_type_binding(tmp_path: Path) -> No
     }))
     (builtin / "skill-bindings.json").write_text(json.dumps({
         "schema_version": 1,
-        "bindings": {"unscoped-planning": {"selector": {"case_type": ["ONE", "TWO"]}}},
+        "bindings": {"legacy-planning": {"selector": {"case_type": ["QUALITY_INCIDENT"]}}},
     }))
 
     try:
         CapabilityRegistry.from_directories(builtin, None)
     except CapabilityConfigurationError as exc:
-        assert "must bind exactly one case_type" in str(exc)
+        assert "Case Type catalogs" in str(exc)
     else:
-        raise AssertionError("A paths-owning Skill must belong to one Case type")
+        raise AssertionError("Skill paths.json must no longer define candidate Paths")
+
+
+def test_skill_payload_does_not_publish_paths_field(tmp_path: Path) -> None:
+    builtin = tmp_path / "builtin"
+    skill_dir = builtin / "skills" / "quality-analysis"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: quality-analysis\ndescription: Analyze quality.\n---\n\n# Analyze\n"
+    )
+
+    registry = CapabilityRegistry.from_directories(builtin, None)
+
+    skill = registry.list_assets()["skills"][0]
+    assert "paths" not in skill
 
 
 def test_professional_commitments_open_only_after_path_exploration(tmp_path: Path) -> None:
@@ -632,9 +690,36 @@ def test_capability_library_reports_every_effective_asset(client) -> None:
         for assets in body["assets"].values()
         for asset in assets
     )
-    assert [path["id"] for path in skills["shortage-response-planning"]["paths"]] == [
+    assert "shortage-response-planning" not in skills
+    assert all("paths" not in skill for skill in skills.values())
+    assert len(body["case_types"]) == 1
+    assert body["case_types"][0]["case_type"] == "ORDER_DELIVERY_RISK"
+    assert body["case_types"][0]["title"] == "订单交付风险"
+    assert body["case_types"][0]["source"] == "builtin"
+    assert [path["id"] for path in body["case_types"][0]["paths"]] == [
         "MaterialSubstitution", "SupplyExpediting", "OrderSplit"
     ]
+    assert {
+        skill_id: skills[skill_id]["title"]
+        for skill_id in (
+            "material-substitution-engineering-review",
+            "material-substitution-master-planning-review",
+            "material-substitution-supply-manager-review",
+        )
+    } == {
+        "material-substitution-engineering-review": "候选料技术可行性分析",
+        "material-substitution-master-planning-review": "候选料供应覆盖与交期分析",
+        "material-substitution-supply-manager-review": "候选料客户准入与商务影响分析",
+    }
+    assert "封装、引脚、固件改动与验证状态" in skills[
+        "material-substitution-engineering-review"
+    ]["description"]
+    assert "数量覆盖、调拨周期与补量需求" in skills[
+        "material-substitution-master-planning-review"
+    ]["description"]
+    assert "客户 AVL、偏差放行、正式认证与商务影响" in skills[
+        "material-substitution-supply-manager-review"
+    ]["description"]
     assert skills["material-substitution-analysis"]["members"] == [
         "material-substitution-engineering-review",
         "material-substitution-master-planning-review",
@@ -668,6 +753,78 @@ def test_skill_bundle_rejects_an_unknown_member(tmp_path: Path) -> None:
         assert "references unknown member" in str(exc)
     else:
         raise AssertionError("A Skill bundle must reference existing atomic Skills")
+
+
+def test_resolving_a_bound_skill_bundle_expands_reusable_unbound_atomic_members(tmp_path: Path) -> None:
+    builtin = tmp_path / "builtin"
+    for skill_id in ("complex-review", "alternate-review", "engineering-review", "supply-review"):
+        skill_dir = builtin / "skills" / skill_id
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            f"---\nname: {skill_id}\ndescription: Review evidence.\n---\n\n# Review\n"
+        )
+    (builtin / "skills" / "complex-review" / "bundle.json").write_text(json.dumps({
+        "schema_version": 1,
+        "members": ["engineering-review", "supply-review"],
+    }))
+    (builtin / "skills" / "alternate-review" / "bundle.json").write_text(json.dumps({
+        "schema_version": 1,
+        "members": ["engineering-review"],
+    }))
+    (builtin / "skill-bindings.json").write_text(json.dumps({
+        "schema_version": 1,
+        "bindings": {
+            "complex-review": {"selector": {
+                "case_type": ["QUALITY_INCIDENT"],
+                "path_definition": ["ManualReview"],
+            }},
+            "alternate-review": {"selector": {
+                "case_type": ["QUALITY_INCIDENT"],
+                "path_definition": ["AlternateReview"],
+            }},
+        },
+    }))
+
+    resolution = CapabilityRegistry.from_directories(builtin, None).resolve({
+        "case_type": "QUALITY_INCIDENT",
+        "path_definition": "ManualReview",
+    })
+
+    assert [skill.id for skill in resolution.skills] == [
+        "complex-review",
+        "engineering-review",
+        "supply-review",
+    ]
+
+
+def test_skill_bundle_rejects_a_member_bound_to_a_conflicting_path(tmp_path: Path) -> None:
+    builtin = tmp_path / "builtin"
+    for skill_id in ("manual-review", "alternate-review"):
+        skill_dir = builtin / "skills" / skill_id
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            f"---\nname: {skill_id}\ndescription: Review evidence.\n---\n\n# Review\n"
+        )
+    (builtin / "skills" / "manual-review" / "bundle.json").write_text(json.dumps({
+        "schema_version": 1,
+        "members": ["alternate-review"],
+    }))
+    (builtin / "skill-bindings.json").write_text(json.dumps({
+        "schema_version": 1,
+        "bindings": {
+            "manual-review": {"selector": {
+                "case_type": ["QUALITY_INCIDENT"],
+                "path_definition": ["ManualReview"],
+            }},
+            "alternate-review": {"selector": {
+                "case_type": ["QUALITY_INCIDENT"],
+                "path_definition": ["AlternateReview"],
+            }},
+        },
+    }))
+
+    with pytest.raises(CapabilityConfigurationError, match="conflicting selector"):
+        CapabilityRegistry.from_directories(builtin, None)
 
 
 def test_http_golden_path_runs_from_orchestration_to_owner_decision(client) -> None:
@@ -829,12 +986,7 @@ def test_demo_manifest_freezes_verified_capability_references(tmp_path: Path) ->
     case = service.get_case("CM-2026-014")
     path = case.manifest.paths[0]
     assert {item.id for item in path.policies} == {"POL-SUBSTITUTION-3", "POL-CUSTOMER-2"}
-    assert {item.id for item in path.skills} == {
-        "material-substitution-analysis",
-        "material-substitution-engineering-review",
-        "material-substitution-master-planning-review",
-        "material-substitution-supply-manager-review",
-    }
+    assert "material-substitution-analysis" in {item.id for item in path.skills}
     assert [item.id for item in path.knowledge] == ["KNOW-2025-041"]
     assert all(item.digest.startswith("sha256:") for item in path.policies)
     assert "path_inputs" not in case.business_payload
@@ -1145,18 +1297,16 @@ def test_skill_declares_three_candidates_and_manifest_supports_all_paths(tmp_pat
     assert [candidate["definition"] for candidate in planner.candidates] == expected_definitions
     assert [path.definition for path in case.manifest.paths] == expected_definitions
     assert {path.id for path in case.manifest.paths} == {"PATH-01", "PATH-02", "PATH-03"}
-    assert {
+    skill_ids = {
         item.id
         for path in case.manifest.paths
         for item in path.skills
-    } == {
+    }
+    assert {
         "material-substitution-analysis",
-        "material-substitution-engineering-review",
-        "material-substitution-master-planning-review",
-        "material-substitution-supply-manager-review",
         "supply-expediting-analysis",
         "order-split-analysis",
-    }
+    } <= skill_ids
 
     approved = service.approve_manifest(
         "CM-2026-014", actor=OWNER_ACTOR, role=OWNER_ROLE
@@ -1193,6 +1343,35 @@ def test_skill_declares_three_candidates_and_manifest_supports_all_paths(tmp_pat
     }
     split_capabilities = service.get_case_capabilities("CM-2026-014", "PATH-03")
     assert {item["id"] for item in split_capabilities["assets"]["policies"]} == {"POL-ORDER-SPLIT-1"}
+
+
+def test_case_scoped_skill_is_not_frozen_into_each_manifest_path(tmp_path: Path) -> None:
+    builtin = tmp_path / "builtin"
+    shutil.copytree(DEFAULT_BUILTIN_ROOT, builtin)
+    skill_dir = builtin / "skills" / "case-context-guidance"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: case-context-guidance\ndescription: Guide Case classification.\n---\n\n# Guide\n"
+    )
+    bindings_path = builtin / "skill-bindings.json"
+    bindings = json.loads(bindings_path.read_text())
+    bindings["bindings"]["case-context-guidance"] = {
+        "selector": {"case_type": ["ORDER_DELIVERY_RISK"]}
+    }
+    bindings_path.write_text(json.dumps(bindings))
+    service = CaseService(
+        CaseRepository(tmp_path / "test.db"),
+        capabilities=CapabilityRegistry.from_directories(builtin, None),
+        planner=_AllMatchedSkillPathsPlanner(),
+    )
+    service.ensure_demo_data()
+
+    case = orchestrate(service)
+
+    assert all(
+        "case-context-guidance" not in {skill.id for skill in path.skills}
+        for path in case.manifest.paths
+    )
 
 
 def test_multi_path_exploration_finishes_only_after_every_solution_revision(tmp_path: Path) -> None:
@@ -1543,10 +1722,10 @@ def test_owner_can_close_keep_open_or_modify_after_synthesis(tmp_path: Path) -> 
     assert other_role_view["owner_decision"]["synthesis_revision"] == 1
 
 
-def test_reducing_skill_declared_paths_reduces_manifest_candidates(tmp_path: Path) -> None:
+def test_reducing_catalog_declared_paths_reduces_manifest_candidates(tmp_path: Path) -> None:
     builtin = tmp_path / "builtin"
     shutil.copytree(DEFAULT_BUILTIN_ROOT, builtin)
-    paths_file = builtin / "skills" / "shortage-response-planning" / "paths.json"
+    paths_file = builtin / "case-types" / "order-delivery-risk" / "paths.json"
     payload = json.loads(paths_file.read_text())
     payload["paths"] = [item for item in payload["paths"] if item["id"] == "MaterialSubstitution"]
     paths_file.write_text(json.dumps(payload))
@@ -1561,7 +1740,7 @@ def test_reducing_skill_declared_paths_reduces_manifest_candidates(tmp_path: Pat
     assert [path.definition for path in case.manifest.paths] == ["MaterialSubstitution"]
 
 
-def test_declared_path_without_execution_skill_fails_closed(tmp_path: Path) -> None:
+def test_catalog_declared_path_without_execution_skill_fails_closed(tmp_path: Path) -> None:
     builtin = tmp_path / "builtin"
     shutil.copytree(DEFAULT_BUILTIN_ROOT, builtin)
     bindings_file = builtin / "skill-bindings.json"
@@ -1578,7 +1757,7 @@ def test_declared_path_without_execution_skill_fails_closed(tmp_path: Path) -> N
         assert "OrderSplit" in str(exc)
         assert "execution Skill" in str(exc)
     else:
-        raise AssertionError("Every Skill-declared Path must have an execution Skill")
+        raise AssertionError("Every Catalog-declared Path must have an execution Skill")
 
     case = service.get_case("CM-2026-014")
     assert case.phase is OrchestrationPhase.INTAKE
@@ -1604,7 +1783,7 @@ def test_planner_cannot_invent_path_or_mutate_case(tmp_path: Path) -> None:
         assert connection.execute("SELECT count(*) FROM domain_events").fetchone()[0] == 0
 
 
-def test_planner_cannot_omit_skill_declared_paths(tmp_path: Path) -> None:
+def test_planner_cannot_omit_catalog_declared_paths(tmp_path: Path) -> None:
     service = CaseService(CaseRepository(tmp_path / "test.db"), planner=_OmittingPlanner())
     service.ensure_demo_data()
 
@@ -1613,7 +1792,7 @@ def test_planner_cannot_omit_skill_declared_paths(tmp_path: Path) -> None:
     except PlannerOutputError as exc:
         assert "missing=" in str(exc)
     else:
-        raise AssertionError("Planner must return every Path declared by the matched Skill")
+        raise AssertionError("Planner must return every Path declared by the Case Type Catalog")
 
     unchanged = service.get_case("CM-2026-014")
     assert unchanged.phase is OrchestrationPhase.INTAKE

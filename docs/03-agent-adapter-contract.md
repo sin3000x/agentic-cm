@@ -19,7 +19,7 @@
 负责：
 
 - 理解 Case 与 HumanProposal；
-- 对命中 orchestration Skill 声明的全部 Path 生成 Case-specific 解释和相关性排序；
+- 对 Case Type Catalog 声明的全部 Path 生成 Case-specific 解释和相关性排序；
 - 检索相关 Experience；
 - 在编译后的 Policy 约束下生成 Manifest 草案。
 
