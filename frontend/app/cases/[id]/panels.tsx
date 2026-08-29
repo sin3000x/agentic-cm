@@ -85,10 +85,10 @@ export function AiWorkingCard({
           </>
         )}
         <p>你可以留在当前页面，结果完成后会自动出现；AI 只生成建议，不会替人批准业务承诺。</p>
-        <details className="embeddedLiveTrace" open>
-          <summary><span><small>LIVE TRACE</small><strong>实时审计轨迹</strong></span><em>每 600ms 刷新</em></summary>
-          <AgentTracePanel runs={runs} agentType={agentType} autoExpand />
-        </details>
+        <section className="embeddedLiveTrace" aria-label="实时审计轨迹">
+          <header><span><small>LIVE TRACE</small><strong>实时审计轨迹</strong></span><em>每 600ms 刷新</em></header>
+          <AgentTracePanel runs={runs} agentType={agentType} autoExpand embedded />
+        </section>
       </div>
     </section>
   );
@@ -140,47 +140,69 @@ export function ManifestYamlPanel({ yaml, downloadHref, onCopy }: { yaml: string
   );
 }
 
-export function AgentTracePanel({ runs, agentType, autoExpand = false }: { runs: AgentRun[]; agentType: "orchestrator" | "path" | "synthesis"; autoExpand?: boolean }) {
+export function AgentTracePanel({
+  runs,
+  agentType,
+  autoExpand = false,
+  embedded = false,
+}: {
+  runs: AgentRun[];
+  agentType: "orchestrator" | "path" | "synthesis";
+  autoExpand?: boolean;
+  embedded?: boolean;
+}) {
   const label = agentType === "orchestrator" ? "ORCHESTRATOR" : agentType === "path" ? "PATH AGENT" : "SYNTHESIS AGENT";
   const typedRuns = runs.filter((run) => run.agent_type === agentType);
+  const statusLabel = { RUNNING: "运行中", SUCCEEDED: "已完成", FAILED: "失败" } as const;
   return (
-    <section className="agentTracePanel" aria-label={`${label} Trace`}>
-      <div className="traceHeader">
-        <span><strong>{label} TRACE</strong><small>可审计步骤；不记录 API Key 或隐藏思维链</small></span>
-        <em>{typedRuns.length} RUNS</em>
-      </div>
+    <section className={`agentTracePanel${embedded ? " embedded" : ""}`} aria-label={`${label} Trace`}>
+      {!embedded && (
+        <header className="traceHeader">
+          <span><strong>{label} TRACE</strong><small>按 Run 展开审计步骤；不记录 API Key 或隐藏思维链</small></span>
+          <em>{typedRuns.length} RUNS</em>
+        </header>
+      )}
       {typedRuns.length === 0 ? (
         <p className="emptyTrace">尚无 {label} 运行记录。</p>
-      ) : typedRuns.map((run) => (
-        <details className={`traceRun ${run.status.toLowerCase()}`} open={autoExpand && (run.status === "RUNNING" || run.status === "FAILED")} key={run.id}>
-          <summary>
-            <span><b>{run.status}</b><strong>{run.adapter_profile}</strong></span>
-            <small>{formatThreadTime(run.started_at)} · {run.events.length} steps</small>
-          </summary>
-          {run.error_message && <p className="traceError">{run.error_type}: {run.error_message}</p>}
-          <ol className="traceSteps">
-            {run.events.map((event) => (
-              <li className={event.status.toLowerCase()} key={event.id}>
-                <span className="traceSequence">{String(event.sequence).padStart(2, "0")}</span>
-                <div>
-                  <header><code>{event.step}</code><b>{event.status}</b><time>{formatThreadTime(event.created_at)}</time></header>
-                  <p>{event.summary}</p>
-                  {Object.keys(event.details).length > 0 && (
-                    <details className="tracePayload">
-                      <summary>{typeof event.details.manifest_yaml === "string" ? "查看完整 Manifest YAML" : "查看输入 / 输出详情"}</summary>
-                      {typeof event.details.manifest_yaml === "string" ? (
-                        <pre>{event.details.manifest_yaml}</pre>
-                      ) : (
-                        <pre>{JSON.stringify(event.details, null, 2)}</pre>
-                      )}
-                    </details>
-                  )}
-                </div>
-              </li>
-            ))}
-          </ol>
-        </details>
-      ))}
+      ) : (
+        <div className="traceRuns">
+          {typedRuns.map((run) => (
+            <details className={`traceRun ${run.status.toLowerCase()}`} open={autoExpand && (run.status === "RUNNING" || run.status === "FAILED")} key={run.id}>
+              <summary>
+                <span className="traceRunIdentity">
+                  <i aria-hidden="true" />
+                  <span><strong>{run.adapter_profile}</strong><small>{formatThreadTime(run.started_at)} · {run.id.slice(0, 8)}</small></span>
+                </span>
+                <span className="traceRunMeta"><b>{statusLabel[run.status]}</b><small>{run.events.length} 步</small></span>
+              </summary>
+              <div className="traceRunBody">
+                {run.error_message && <p className="traceError">{run.error_type}: {run.error_message}</p>}
+                <ol className="traceSteps">
+                  {run.events.map((event) => (
+                    <li className={event.status.toLowerCase()} key={event.id}>
+                      <span className="traceSequence">{String(event.sequence).padStart(2, "0")}</span>
+                      <div>
+                        <header><code>{event.step}</code><b>{event.status}</b><time dateTime={event.created_at}>{formatThreadTime(event.created_at)}</time></header>
+                        <p>{event.summary}</p>
+                        {Object.keys(event.details).length > 0 && (
+                          <details className="tracePayload">
+                            <summary>{typeof event.details.manifest_yaml === "string" ? "完整 Manifest YAML" : "输入 / 输出详情"}</summary>
+                            {typeof event.details.manifest_yaml === "string" ? (
+                              <pre>{event.details.manifest_yaml}</pre>
+                            ) : (
+                              <pre>{JSON.stringify(event.details, null, 2)}</pre>
+                            )}
+                          </details>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            </details>
+          ))}
+        </div>
+      )}
     </section>
   );
 }
