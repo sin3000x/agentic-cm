@@ -1,17 +1,12 @@
 ---
 name: material-substitution-analysis
-description: 分析已批准物料替代 Path 中的候选料，形成覆盖供应、技术、客户接受度与总体建议的结构化中文方案，不作业务承诺，也不修改业务系统。
+description: 比较已批准物料替代 Path 的授权候选，形成覆盖技术、供应和客户接受度的评审方案。
 ---
 
 # 物料替代分析
 
-1. 读取 Manifest 冻结的 Case 快照、HumanProposal、已编译 Policy 和所引用的 Knowledge。
-2. 候选集只能来自本 Skill 包冻结的 `path-options.json`：A 为 MCU-X7A，B 为 MCU-X7B。不得从框架默认值读取候选；如需新增候选，必须先请求修订 Path。
-3. 对 A、B 分别使用 `tools.json` 中全部冻结的只读查询。返回记录属于模拟证据快照，不得表述为实时 ERP、库存、研发或客户事实。
-4. 同时应用 Manifest 中的三个专业分析 Skill：候选料技术可行性分析、候选料供应覆盖与交期分析和候选料客户准入与商务影响分析。
-5. 为 A、B 各生成一个可独立评审的选项，比较技术可行性、供应与交付可行性、客户与商务接受度、收益、风险及假设，不得把未知信息写成事实。
-6. 缺少当前证据的结论必须标记为等待对应责任角色确认。
-7. 历史 Knowledge 只能作为建议背景，不得作为当前 Case 事实。
-8. 按平台 `PathAgentResult/v1` JSON 契约返回 `summary`、`options`、`recommendation`、`evidence_gaps`，以及 Manifest 冻结 Policy 所触发的全部 `role_reports`。选项 id 必须严格为 `A`、`B`；全部面向人的标题、描述、判断和报告必须使用中文。每条角色报告须为完整中文句子，以对应的 `{role}维度：` 开头，同时提到 A、B，并保留人类审批边界。
-
-不得代表主计划、研发、供应经理或 Case Owner 作出决定，不得删除已编译 Policy 的要求，也不得连接或修改 ERP、库存、订单、CRM 或客户系统。
+1. 仅分析 `authorized_options`，每个候选恰好生成一个选项，不得新增、遗漏或改写 id。
+2. 使用 `tool_results` 中每个工具的全部候选记录，并应用 Bundle 内三个专业分析 Skill。
+3. 分别比较技术、供应与交付、客户与商务接受度，说明收益、风险和假设；无当前证据支持的判断列入 `assumptions` 或 `evidence_gaps`。
+4. `human_proposal` 只提供目标偏好，Knowledge 只提供历史背景，两者都不能替代当前证据或责任角色确认。
+5. 为 `required_role_reports` 中每个契约生成一条报告，按对应专业 Skill 比较全部候选并指出待确认事项。
