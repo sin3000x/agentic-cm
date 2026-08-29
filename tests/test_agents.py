@@ -258,6 +258,65 @@ def test_path_agent_request_uses_compact_output_schema() -> None:
     assert "minItems" not in output_schema["properties"]["options"]
 
 
+def test_path_agent_accepts_short_role_report_without_presentation_format() -> None:
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return chat_completion_response({
+            "summary": "已形成一项待复核方案。",
+            "options": [{
+                "id": "A",
+                "title": "候选方案甲",
+                "description": "依据冻结信息形成的候选方案。",
+                "benefits": ["便于责任角色复核。"],
+                "risks": ["当前证据仍不完整。"],
+                "assumptions": ["尚未形成业务承诺。"],
+            }],
+            "recommendation": {
+                "option_ids": ["A"],
+                "rationale": "建议优先复核候选方案甲。",
+            },
+            "evidence_gaps": ["需要补充当前业务证据。"],
+            "role_reports": [{
+                "role": "主计划",
+                "dimension": "供应可行性",
+                "report": "A待复核",
+            }],
+        })
+
+    context = PathAgentContext(
+        case_snapshot={
+            "description": "关键物料存在缺口。",
+            "business_payload": {"gap_quantity": 100},
+        },
+        human_proposal=None,
+        path={"definition": "MaterialSubstitution", "title": "物料替代"},
+        execution_skills=(),
+        knowledge=(),
+        authorized_options=({"id": "A", "title": "候选方案甲"},),
+        tool_results=(),
+        required_role_reports=({"role": "主计划", "dimension": "供应可行性"},),
+        previous_solution_revision=None,
+    )
+
+    async def run() -> PathAgentResult:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            adapter = OpenAICompatiblePathAgentAdapter(
+                "secret-key",
+                model="vendor-model-42",
+                base_url="https://gateway.example/v1",
+                http_client=client,
+            )
+            return await adapter.generate(context, lambda *args, **kwargs: None)
+
+    result = asyncio.run(run())
+
+    assert attempts == 1
+    assert result.role_reports[0].report == "A待复核"
+
+
 def test_path_agent_context_projects_only_generation_inputs() -> None:
     context = PathAgentContext(
         case_snapshot={
