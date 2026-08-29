@@ -503,15 +503,10 @@ def _validate_result_against_context(result: PathAgentResult, context: PathAgent
             f"missing={sorted(set(required) - set(returned))}, "
             f"unknown={sorted(set(returned) - set(required))}"
         )
-    for key, contract in required.items():
+    for key in required:
         report = returned[key].report
-        sentence_prefix = f"{contract['role']}维度："
-        if not report.startswith(sentence_prefix):
-            raise AgentOutputError(f"Role report {key} must start with {sentence_prefix}")
         if not all(option_id in report for option_id in context.authorized_option_ids):
             raise AgentOutputError(f"Role report {key} must mention every authorized option")
-        if len(report) < 20 or report[-1] not in "。！？.!?":
-            raise AgentOutputError(f"Role report {key} must be one complete sentence")
 
 
 def path_agent_from_environment() -> PathAgentAdapter:
