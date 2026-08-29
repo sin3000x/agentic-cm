@@ -1,5 +1,6 @@
 import asyncio
 import json
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 from time import perf_counter
 
@@ -188,17 +189,18 @@ def test_path_agent_request_uses_compact_output_schema() -> None:
         })
 
     context = PathAgentContext(
-        case_snapshot={"case_id": "CM-1"},
+        case_snapshot={
+            "title": "订单延期",
+            "description": "关键物料存在缺口。",
+            "business_payload": {"gap_quantity": 100},
+        },
         human_proposal=None,
-        manifest_ref={"id": "manifest-1", "revision": 1},
-        path={"id": "PATH-01", "title": "物料替代"},
-        path_attempt={"path_id": "PATH-01", "state": "PLANNED"},
-        execution_skills=[],
-        knowledge=[],
-        authorized_options=[{"id": "A", "title": "候选方案甲"}],
-        authorized_option_ids=("A",),
-        tool_results=[],
-        required_role_reports=[],
+        path={"definition": "MaterialSubstitution", "title": "物料替代", "rationale": "存在替代候选。"},
+        execution_skills=(),
+        knowledge=(),
+        authorized_options=({"id": "A", "title": "候选方案甲"},),
+        tool_results=(),
+        required_role_reports=(),
         previous_solution_revision=None,
     )
 
@@ -219,8 +221,31 @@ def test_path_agent_request_uses_compact_output_schema() -> None:
     )[1].split(". Return role_reports", maxsplit=1)[0]
     output_schema = json.loads(schema_text)
     option_schema = output_schema["$defs"]["ProposedOption"]
+    prompt_payload = json.loads(captured_request["messages"][1]["content"])
 
     assert result.options[0].id == "A"
+    assert set(prompt_payload) == {
+        "case_snapshot",
+        "path",
+        "execution_skills",
+        "knowledge",
+        "authorized_options",
+        "tool_results",
+        "required_role_reports",
+    }
+    assert prompt_payload["case_snapshot"] == {
+        "title": "订单延期",
+        "description": "关键物料存在缺口。",
+        "business_payload": {"gap_quantity": 100},
+    }
+    assert prompt_payload["path"] == {
+        "definition": "MaterialSubstitution",
+        "title": "物料替代",
+        "rationale": "存在替代候选。",
+    }
+    assert context.authorized_option_ids == ("A",)
+    with pytest.raises(FrozenInstanceError):
+        context.path = {}
     assert output_schema["required"] == [
         "summary", "options", "recommendation", "evidence_gaps", "role_reports"
     ]
@@ -238,6 +263,87 @@ def test_path_agent_request_uses_compact_output_schema() -> None:
     assert "additionalProperties" not in option_schema
     assert "minLength" not in option_schema["properties"]["id"]
     assert "minItems" not in output_schema["properties"]["options"]
+
+
+def test_path_agent_context_projects_only_generation_inputs() -> None:
+    context = PathAgentContext(
+        case_snapshot={
+            "title": "订单延期",
+            "description": "关键物料存在缺口。",
+            "business_payload": {"gap_quantity": 100},
+            "id": "CM-1",
+            "version": 3,
+            "classification": {"case_type": "ORDER_DELIVERY_RISK"},
+        },
+        human_proposal={
+            "revision": 2,
+            "author": "陈澄",
+            "role": "订单统筹经理",
+            "content": "优先评估认证范围内的替代料。",
+        },
+        path={
+            "id": "PATH-01",
+            "definition": "MaterialSubstitution",
+            "title": "物料替代",
+            "rationale": "存在替代候选。",
+            "selected": True,
+            "policies": [{"id": "POL-1"}],
+        },
+        execution_skills=({
+            "id": "material-substitution-analysis",
+            "version": "abc123",
+            "description": "分析替代候选。",
+            "instructions_markdown": "只分析授权候选。",
+        },),
+        knowledge=({
+            "id": "KNOW-1",
+            "version": "1.0.0",
+            "title": "历史观察",
+            "knowledge_type": "experience",
+            "source": {"type": "closed_case"},
+            "confidence": "medium",
+            "content": {"summary": "客户认证可能造成返工。"},
+        },),
+        authorized_options=({"id": "A", "material_id": "MCU-X7A"},),
+        tool_results=({
+            "tool_id": "mock.lookup",
+            "description": "查询冻结快照。",
+            "read_only": True,
+            "input": {"option_id": "A"},
+            "output": {"available_quantity": 100},
+            "source_skill": {"id": "material-substitution-analysis"},
+        },),
+        required_role_reports=({"role": "主计划", "dimension": "供应可行性"},),
+        previous_solution_revision=None,
+    )
+
+    payload = context.prompt_payload()
+
+    assert payload["human_proposal"] == {
+        "author": "陈澄",
+        "role": "订单统筹经理",
+        "content": "优先评估认证范围内的替代料。",
+    }
+    assert payload["execution_skills"] == [{
+        "id": "material-substitution-analysis",
+        "instructions_markdown": "只分析授权候选。",
+    }]
+    assert payload["knowledge"] == [{
+        "title": "历史观察",
+        "knowledge_type": "experience",
+        "source": {"type": "closed_case"},
+        "confidence": "medium",
+        "content": {"summary": "客户认证可能造成返工。"},
+    }]
+    assert payload["tool_results"] == [{
+        "tool_id": "mock.lookup",
+        "description": "查询冻结快照。",
+        "input": {"option_id": "A"},
+        "output": {"available_quantity": 100},
+    }]
+    assert "id" not in payload["case_snapshot"]
+    assert "classification" not in payload["case_snapshot"]
+    assert "id" not in payload["path"]
 
 
 def test_openai_adapter_repairs_invalid_output_once() -> None:

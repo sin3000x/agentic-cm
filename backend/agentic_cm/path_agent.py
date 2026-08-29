@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 import httpx
@@ -66,22 +67,37 @@ def _compact_prompt_schema(value: Any, *, property_map: bool = False) -> Any:
     return value
 
 
+@dataclass(frozen=True, slots=True)
 class PathAgentContext:
-    def __init__(self, **fields: Any) -> None:
-        self.__dict__.update(fields)
+    case_snapshot: dict[str, Any]
+    human_proposal: dict[str, Any] | None
+    path: dict[str, Any]
+    execution_skills: tuple[dict[str, Any], ...]
+    knowledge: tuple[dict[str, Any], ...]
+    authorized_options: tuple[dict[str, Any], ...]
+    tool_results: tuple[dict[str, Any], ...]
+    required_role_reports: tuple[dict[str, str], ...]
+    previous_solution_revision: SolutionRevision | None
+
+    @property
+    def authorized_option_ids(self) -> tuple[str, ...]:
+        return tuple(str(item["id"]) for item in self.authorized_options)
 
     def prompt_payload(self) -> dict[str, Any]:
-        return {
-            "case_snapshot": self.case_snapshot,
-            "human_proposal": self.human_proposal,
-            "manifest_ref": self.manifest_ref,
-            "path": self.path,
-            "path_attempt": self.path_attempt,
+        payload: dict[str, Any] = {
+            "case_snapshot": {
+                key: self.case_snapshot[key]
+                for key in ("title", "description", "business_payload")
+                if key in self.case_snapshot
+            },
+            "path": {
+                key: self.path[key]
+                for key in ("definition", "title", "rationale")
+                if key in self.path
+            },
             "execution_skills": [
                 {
                     "id": skill["id"],
-                    "version": skill["version"],
-                    "description": skill["description"],
                     "instructions_markdown": skill["instructions_markdown"],
                 }
                 for skill in self.execution_skills
@@ -90,7 +106,7 @@ class PathAgentContext:
                 {
                     key: item[key]
                     for key in (
-                        "id", "version", "title", "knowledge_type",
+                        "title", "knowledge_type",
                         "source", "confidence", "content",
                     )
                     if key in item
@@ -98,14 +114,34 @@ class PathAgentContext:
                 for item in self.knowledge
             ],
             "authorized_options": list(self.authorized_options),
-            "tool_results": list(self.tool_results),
+            "tool_results": [
+                {
+                    key: result[key]
+                    for key in ("tool_id", "description", "input", "output")
+                    if key in result
+                }
+                for result in self.tool_results
+            ],
             "required_role_reports": list(self.required_role_reports),
-            "previous_solution_revision": (
-                self.previous_solution_revision.model_dump(mode="json")
-                if self.previous_solution_revision
-                else None
-            ),
         }
+        if self.human_proposal is not None:
+            payload["human_proposal"] = {
+                key: self.human_proposal[key]
+                for key in ("author", "role", "content")
+                if key in self.human_proposal
+            }
+        if self.previous_solution_revision is not None:
+            payload["previous_solution_revision"] = self.previous_solution_revision.model_dump(
+                mode="json",
+                include={
+                    "summary",
+                    "options",
+                    "recommendation",
+                    "evidence_gaps",
+                    "role_reports",
+                },
+            )
+        return payload
 
 
 class PathAgentAdapter(Protocol):
@@ -394,25 +430,15 @@ class PathAgent:
             trace("tools.query", "COMPLETED", "执行 Manifest 冻结的只读模拟查询", {"results": tool_results})
         context = PathAgentContext(
             case_snapshot={
-                "id": case.id,
-                "version": case.version,
                 "title": case.title,
                 "description": case.description,
-                "classification": dict(case.classification),
                 "business_payload": dict(case.business_payload),
             },
             human_proposal=case.human_proposal.model_dump(mode="json") if case.human_proposal else None,
-            manifest_ref={
-                "id": case.manifest.id,
-                "revision": case.manifest.revision,
-                "generated_from_case_version": case.manifest.generated_from_case_version,
-            },
             path=path.model_dump(mode="json") | {"title": path_title},
-            path_attempt={"path_id": attempt.path_id, "state": attempt.state.value},
             execution_skills=execution_skills,
             knowledge=knowledge,
             authorized_options=authorized_options,
-            authorized_option_ids=tuple(item["id"] for item in authorized_options),
             tool_results=tuple(tool_results),
             required_role_reports=required_role_reports,
             previous_solution_revision=previous,
