@@ -84,16 +84,25 @@ class PathAgentContext:
         return tuple(str(item["id"]) for item in self.authorized_options)
 
     def prompt_payload(self) -> dict[str, Any]:
+        grouped_tool_results: list[dict[str, Any]] = []
+        tools_by_id: dict[str, dict[str, Any]] = {}
+        for result in self.tool_results:
+            tool_id = str(result["tool_id"])
+            tool = tools_by_id.get(tool_id)
+            if tool is None:
+                tool = {"tool_id": tool_id, "records": {}}
+                if "description" in result:
+                    tool["description"] = result["description"]
+                tools_by_id[tool_id] = tool
+                grouped_tool_results.append(tool)
+            option_id = next(iter(result["input"].values()))
+            tool["records"][str(option_id)] = result["output"]
+
         payload: dict[str, Any] = {
             "case_snapshot": {
                 key: self.case_snapshot[key]
-                for key in ("title", "description", "business_payload")
+                for key in ("description", "business_payload")
                 if key in self.case_snapshot
-            },
-            "path": {
-                key: self.path[key]
-                for key in ("definition", "title", "rationale")
-                if key in self.path
             },
             "execution_skills": [
                 {
@@ -114,14 +123,7 @@ class PathAgentContext:
                 for item in self.knowledge
             ],
             "authorized_options": list(self.authorized_options),
-            "tool_results": [
-                {
-                    key: result[key]
-                    for key in ("tool_id", "description", "input", "output")
-                    if key in result
-                }
-                for result in self.tool_results
-            ],
+            "tool_results": grouped_tool_results,
             "required_role_reports": list(self.required_role_reports),
         }
         if self.human_proposal is not None:

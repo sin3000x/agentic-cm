@@ -226,7 +226,6 @@ def test_path_agent_request_uses_compact_output_schema() -> None:
     assert result.options[0].id == "A"
     assert set(prompt_payload) == {
         "case_snapshot",
-        "path",
         "execution_skills",
         "knowledge",
         "authorized_options",
@@ -234,14 +233,8 @@ def test_path_agent_request_uses_compact_output_schema() -> None:
         "required_role_reports",
     }
     assert prompt_payload["case_snapshot"] == {
-        "title": "订单延期",
         "description": "关键物料存在缺口。",
         "business_payload": {"gap_quantity": 100},
-    }
-    assert prompt_payload["path"] == {
-        "definition": "MaterialSubstitution",
-        "title": "物料替代",
-        "rationale": "存在替代候选。",
     }
     assert context.authorized_option_ids == ("A",)
     with pytest.raises(FrozenInstanceError):
@@ -312,7 +305,14 @@ def test_path_agent_context_projects_only_generation_inputs() -> None:
             "input": {"option_id": "A"},
             "output": {"available_quantity": 100},
             "source_skill": {"id": "material-substitution-analysis"},
-        },),
+        }, {
+            "tool_id": "mock.lookup",
+            "description": "查询冻结快照。",
+            "read_only": True,
+            "input": {"option_id": "B"},
+            "output": {"available_quantity": 80},
+            "source_skill": {"id": "material-substitution-analysis"},
+        }),
         required_role_reports=({"role": "主计划", "dimension": "供应可行性"},),
         previous_solution_revision=None,
     )
@@ -337,13 +337,16 @@ def test_path_agent_context_projects_only_generation_inputs() -> None:
     }]
     assert payload["tool_results"] == [{
         "tool_id": "mock.lookup",
+        "records": {
+            "A": {"available_quantity": 100},
+            "B": {"available_quantity": 80},
+        },
         "description": "查询冻结快照。",
-        "input": {"option_id": "A"},
-        "output": {"available_quantity": 100},
     }]
     assert "id" not in payload["case_snapshot"]
+    assert "title" not in payload["case_snapshot"]
     assert "classification" not in payload["case_snapshot"]
-    assert "id" not in payload["path"]
+    assert "path" not in payload
 
 
 def test_openai_adapter_repairs_invalid_output_once() -> None:
