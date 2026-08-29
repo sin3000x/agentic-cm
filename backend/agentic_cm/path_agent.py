@@ -47,6 +47,24 @@ _PATH_AGENT_NARRATION = TraceNarration(
     request_failed="Path Agent 模型服务请求失败",
 )
 
+_PROMPT_SCHEMA_NOISE = frozenset(
+    {"title", "description", "additionalProperties", "minLength", "minItems"}
+)
+
+
+def _compact_prompt_schema(value: Any, *, property_map: bool = False) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _compact_prompt_schema(
+                item, property_map=not property_map and key == "properties"
+            )
+            for key, item in value.items()
+            if property_map or key not in _PROMPT_SCHEMA_NOISE
+        }
+    if isinstance(value, list):
+        return [_compact_prompt_schema(item) for item in value]
+    return value
+
 
 class PathAgentContext:
     def __init__(self, **fields: Any) -> None:
@@ -200,6 +218,7 @@ class OpenAICompatiblePathAgentAdapter:
 
     async def generate(self, context: PathAgentContext, trace: AgentTraceSink) -> PathAgentResult:
         prompt = context.prompt_payload()
+        output_schema = _compact_prompt_schema(PathAgentResult.model_json_schema())
         trace("model.context_projection", "COMPLETED", "构造 Path Agent 模型上下文", {"context": prompt})
         request = {
             "model": self._model,
@@ -215,7 +234,8 @@ class OpenAICompatiblePathAgentAdapter:
                         "unsupported claim in assumptions or evidence_gaps. Write every human-facing "
                         "title, description, analysis, recommendation, evidence gap, and role report in Chinese. "
                         "Return JSON only. "
-                        f"Match this JSON Schema exactly: {json.dumps(PathAgentResult.model_json_schema())}. "
+                        "Match this compact JSON Schema exactly: "
+                        f"{json.dumps(output_schema, ensure_ascii=False, separators=(',', ':'))}. "
                         "Return role_reports for exactly the Policy-triggered contracts in "
                         "required_role_reports, with no missing or extra role/dimension pair; "
                         "if required_role_reports is empty, return an empty role_reports array. "

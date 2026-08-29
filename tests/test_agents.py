@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 from time import perf_counter
 
@@ -14,8 +15,12 @@ from agentic_cm.orchestrator import (
     PlannerPath,
     PlannerSkillChoice,
 )
-from agentic_cm.path_agent import DeterministicPathAgentAdapter
-from agentic_cm.path_agent import path_agent_from_environment
+from agentic_cm.path_agent import (
+    DeterministicPathAgentAdapter,
+    OpenAICompatiblePathAgentAdapter,
+    PathAgentContext,
+    path_agent_from_environment,
+)
 from agentic_cm.repository import CaseRepository
 from agentic_cm.service import CaseService
 from agentic_cm.synthesis_agent import (
@@ -157,6 +162,82 @@ def test_path_agent_cannot_invent_unauthorized_option(tmp_path: Path) -> None:
         asyncio.run(service.execute_path(DEMO_CASE_ID, "PATH-01", actor=OWNER_ACTOR, role=OWNER_ROLE))
     case = service.get_case(DEMO_CASE_ID)
     assert case.path_attempts[0].solution_revision is None
+
+
+def test_path_agent_request_uses_compact_output_schema() -> None:
+    captured_request: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_request.update(json.loads(request.content))
+        return chat_completion_response({
+            "summary": "已形成一项待复核方案。",
+            "options": [{
+                "id": "A",
+                "title": "候选方案甲",
+                "description": "依据冻结信息形成的候选方案。",
+                "benefits": ["便于责任角色复核。"],
+                "risks": ["当前证据仍不完整。"],
+                "assumptions": ["尚未形成业务承诺。"],
+            }],
+            "recommendation": {
+                "option_ids": ["A"],
+                "rationale": "建议优先复核候选方案甲。",
+            },
+            "evidence_gaps": ["需要补充当前业务证据。"],
+            "role_reports": [],
+        })
+
+    context = PathAgentContext(
+        case_snapshot={"case_id": "CM-1"},
+        human_proposal=None,
+        manifest_ref={"id": "manifest-1", "revision": 1},
+        path={"id": "PATH-01", "title": "物料替代"},
+        path_attempt={"path_id": "PATH-01", "state": "PLANNED"},
+        execution_skills=[],
+        knowledge=[],
+        authorized_options=[{"id": "A", "title": "候选方案甲"}],
+        authorized_option_ids=("A",),
+        tool_results=[],
+        required_role_reports=[],
+        previous_solution_revision=None,
+    )
+
+    async def run() -> PathAgentResult:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            adapter = OpenAICompatiblePathAgentAdapter(
+                "secret-key",
+                model="vendor-model-42",
+                base_url="https://gateway.example/v1",
+                http_client=client,
+            )
+            return await adapter.generate(context, lambda *args, **kwargs: None)
+
+    result = asyncio.run(run())
+    system_prompt = captured_request["messages"][0]["content"]
+    schema_text = system_prompt.split(
+        "Match this compact JSON Schema exactly: ", maxsplit=1
+    )[1].split(". Return role_reports", maxsplit=1)[0]
+    output_schema = json.loads(schema_text)
+    option_schema = output_schema["$defs"]["ProposedOption"]
+
+    assert result.options[0].id == "A"
+    assert output_schema["required"] == [
+        "summary", "options", "recommendation", "evidence_gaps", "role_reports"
+    ]
+    assert option_schema["properties"]["title"] == {"type": "string"}
+    assert option_schema["properties"]["description"] == {"type": "string"}
+    assert '"title":"' not in schema_text
+    assert '"description":"' not in schema_text
+    assert '"additionalProperties"' not in schema_text
+    assert '"minLength"' not in schema_text
+    assert '"minItems"' not in schema_text
+    assert "title" not in output_schema
+    assert "description" not in output_schema
+    assert "additionalProperties" not in output_schema
+    assert "title" not in option_schema
+    assert "additionalProperties" not in option_schema
+    assert "minLength" not in option_schema["properties"]["id"]
+    assert "minItems" not in output_schema["properties"]["options"]
 
 
 def test_openai_adapter_repairs_invalid_output_once() -> None:
