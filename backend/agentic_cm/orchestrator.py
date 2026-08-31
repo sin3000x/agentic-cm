@@ -217,6 +217,10 @@ class OpenAICompatiblePlannerAdapter:
             "knowledge": list(context.get("orchestration_knowledge", [])),
         }
         trace("planner.context_projection", "COMPLETED", "构造 Planner 模型上下文", {"context": prompt_context})
+        ordered_path_ids = tuple(item["definition"] for item in candidates)
+        allowed_path_ids = set(ordered_path_ids)
+        allowed_skill_ids = {item["id"] for item in skill_catalog}
+        path_ids_json = json.dumps(ordered_path_ids)
         request = {
             "model": self._model,
             "messages": [
@@ -224,6 +228,10 @@ class OpenAICompatiblePlannerAdapter:
                     "role": "system",
                     "content": (
                         "You are an enterprise exception Case planning component. Return JSON only. "
+                        "Treat candidate.definition as an immutable Path id, not natural language. "
+                        f"Copy each of these exact ids into paths[].definition exactly once: {path_ids_json}. "
+                        "Never translate a definition or replace it with candidate.title or "
+                        "candidate.description. "
                         "Return every provided candidate definition exactly once, with a Case-specific rationale. "
                         "For every Path, select at least one Skill id from the provided skill_catalog "
                         "and give a Chinese reason. Never invent Skill ids. Bundle members are not selectable. "
@@ -243,8 +251,6 @@ class OpenAICompatiblePlannerAdapter:
         configure_thinking(
             request, enabled=self._thinking_enabled, reasoning_effort=self._reasoning_effort
         )
-        allowed_path_ids = {item["definition"] for item in candidates}
-        allowed_skill_ids = {item["id"] for item in skill_catalog}
 
         def build_result(payload: PlannerDraft) -> PlannerOutput:
             _validate_planner_choices(payload.paths, allowed_path_ids, allowed_skill_ids)
@@ -260,8 +266,9 @@ class OpenAICompatiblePlannerAdapter:
             payload_model=PlannerDraft,
             build_result=build_result,
             repair_instruction=lambda exc: (
-                "The previous output was invalid. Return one non-empty JSON object "
-                "matching the exact schema. Select only Skill ids from skill_catalog."
+                "The previous output was invalid. Return JSON only. Copy each exact Path id "
+                f"into paths[].definition once: {path_ids_json}. Never use a Path title or description "
+                "as its definition. Select only Skill ids from skill_catalog."
             ),
             execution_error=AgentExecutionError,
             output_error=AgentOutputError,
