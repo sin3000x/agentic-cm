@@ -172,40 +172,20 @@ class CommitmentNode(FrozenModel):
     path_id: str = ""
 
 
-class ProposedOption(MutableModel):
-    id: NonEmptyText
-    title: NonEmptyText
-    description: NonEmptyText
-    benefits: list[NonEmptyText]
-    risks: list[NonEmptyText]
-    assumptions: list[NonEmptyText]
-
-
 class RoleReport(MutableModel):
     role: NonEmptyText
     dimension: NonEmptyText
     report: NonEmptyText
 
 
-class Recommendation(MutableModel):
-    option_ids: list[NonEmptyText]
-    rationale: NonEmptyText
-
-
 class PathAgentResult(MutableModel):
-    """Structured Path Agent output. SolutionRevision adds platform fields."""
+    """Chinese Path recommendation plus one role_report per required contract."""
 
-    summary: NonEmptyText
-    options: list[ProposedOption] = Field(min_length=1)
-    recommendation: Recommendation
-    evidence_gaps: list[NonEmptyText]
+    recommendation: NonEmptyText
     role_reports: list[RoleReport]
 
     @model_validator(mode="after")
     def validate_unique_keys(self) -> "PathAgentResult":
-        option_ids = [option.id for option in self.options]
-        if len(set(option_ids)) != len(option_ids):
-            raise ValueError("Path Agent options must have unique ids")
         role_keys = [(item.role, item.dimension) for item in self.role_reports]
         if len(set(role_keys)) != len(role_keys):
             raise ValueError("Path Agent role reports must be unique by role and dimension")

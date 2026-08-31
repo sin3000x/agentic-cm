@@ -720,7 +720,7 @@ export default function Home() {
         <div><span className="agentIcon">✓</span><span><small>PROFESSIONAL COMMITMENT</small><h2>专业承诺 · 审批 DAG</h2></span></div>
         <span className="version">{selectedPathViews.length} PATHS</span>
       </div>
-      <p className="lead">Path 卡片只保留所有角色共享的方案摘要。轮到本人审批时，从责任节点打开专属依据与决策面板；Agent 不能代替审批。</p>
+      <p className="lead">Path 卡片只保留所有角色共享的推荐方案。轮到本人审批时，从责任节点打开专属依据与决策面板；Agent 不能代替审批。</p>
       <div className="pathApprovalList">
         {selectedPathViews.map(({ path, revision, nodes, runs }) => {
           const rootNodes = nodes.filter((node) => node.depends_on.length === 0);
@@ -733,25 +733,14 @@ export default function Home() {
                 <em>{completedNodes} / {nodes.length} 已通过</em>
               </header>
               {revision ? (
-                <section className="solutionRevision sharedSolution" aria-label={`${path.title} 共同方案摘要`}>
+                <section className="solutionRevision sharedSolution" aria-label={`${path.title} 推荐方案`}>
                   <div className="solutionHeader">
-                    <span><small>SHARED SOLUTION BRIEF</small><strong>v{revision.revision} · 共同方案摘要</strong></span>
+                    <span><small>PATH RECOMMENDATION</small><strong>v{revision.revision} · 推荐方案</strong></span>
                     <em>{revision.generated_by}</em>
-                  </div>
-                  <p>{revision.summary}</p>
-                  <div className="solutionOptions">
-                    {revision.options.map((option) => (
-                      <article key={option.id}>
-                        <span>{option.id}</span>
-                        <h3>{option.title}</h3>
-                        <p>{option.description}</p>
-                      </article>
-                    ))}
                   </div>
                   <div className="solutionRecommendation">
                     <strong>Agent 建议（非业务决定）</strong>
-                    <p>{revision.recommendation.rationale}</p>
-                    <small>推荐选项：{revision.recommendation.option_ids.join("、") || "待责任角色核验"}</small>
+                    <p>{revision.recommendation}</p>
                   </div>
                   {runs.length > 0 && (
                     <>
@@ -1025,7 +1014,7 @@ export default function Home() {
                   return (
                     <div className="threadEvent completedEvent" key={event.id}>
                       <BotIcon kind="path" className="eventIcon botEvent" />
-                      <p><strong>Path Agent 生成 SolutionRevision v{event.details.revision ?? 1}</strong><span>{event.details.path_id} · {event.details.option_count ?? 0} 个可审查选项；{explorationCompleted ? "Path 探索完成，进入专业承诺" : "继续探索其余 Path"} · {formatThreadTime(event.created_at)}</span></p>
+                      <p><strong>Path Agent 生成推荐方案 v{event.details.revision ?? 1}</strong><span>{event.details.path_id}；{explorationCompleted ? "Path 探索完成，进入专业承诺" : "继续探索其余 Path"} · {formatThreadTime(event.created_at)}</span></p>
                     </div>
                   );
                 }
@@ -1229,19 +1218,10 @@ export default function Home() {
                 <p>{approvalReview.context.role_report?.report ?? "当前没有可供本角色审查的报告，请选择“修改”要求补充。"}</p>
               </section>
               <section className="evidenceSection">
-                <small>共同方案上下文 · REVISION {approvalReview.context.revision ?? "—"}</small>
-                <p>{approvalReview.context.summary}</p>
-                <div className="evidenceOptions">
-                  {approvalReview.context.options.map((option) => (
-                    <article key={option.id}>
-                      <span>{option.id}</span>
-                      <div><strong>{option.title}</strong><p>{option.description}</p></div>
-                    </article>
-                  ))}
-                </div>
+                <small>推荐方案 · REVISION {approvalReview.context.revision ?? "—"}</small>
                 <div className="evidenceRecommendation">
                   <strong>Agent 建议（非业务决定）</strong>
-                  <p>{approvalReview.context.recommendation.rationale || "暂无推荐意见。"}</p>
+                  <p>{approvalReview.context.recommendation || "暂无推荐方案。"}</p>
                 </div>
               </section>
               <p className="roleEvidenceBoundary">其他角色的判断与证据在其责任节点审批时展示，不在本报告中展开。</p>

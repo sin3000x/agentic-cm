@@ -12,8 +12,7 @@ from agentic_cm.orchestrator import (
     planner_from_environment,
 )
 from agentic_cm.path_agent import (
-    DeterministicPathAgentAdapter,
-    OpenAICompatiblePathAgentAdapter,
+    DeepAgentPathAdapter,
     path_agent_from_environment,
 )
 from agentic_cm.synthesis_agent import (
@@ -29,7 +28,7 @@ def test_single_adapter_setting_selects_all_agent_runtimes(monkeypatch) -> None:
     monkeypatch.setenv("AGENTIC_CM_LLM_MODEL", "test-model")
 
     assert isinstance(planner_from_environment(), OpenAICompatiblePlannerAdapter)
-    assert isinstance(path_agent_from_environment(), OpenAICompatiblePathAgentAdapter)
+    assert isinstance(path_agent_from_environment(), DeepAgentPathAdapter)
     assert isinstance(
         synthesis_agent_from_environment(), OpenAICompatibleSynthesisAgentAdapter
     )
@@ -75,7 +74,11 @@ def test_llm_timeout_setting_applies_to_every_openai_compatible_agent(monkeypatc
         synthesis_agent_from_environment(),
     )
 
-    assert [adapter._endpoint.client.sdk.timeout for adapter in adapters] == [
+    assert [
+        adapters[0]._endpoint.client.sdk.timeout,
+        adapters[1]._model.request_timeout,
+        adapters[2]._endpoint.client.sdk.timeout,
+    ] == [
         12.5,
         12.5,
         12.5,
@@ -95,7 +98,11 @@ def test_llm_timeout_defaults_to_45_seconds(monkeypatch) -> None:
         synthesis_agent_from_environment(),
     )
 
-    assert [adapter._endpoint.client.sdk.timeout for adapter in adapters] == [
+    assert [
+        adapters[0]._endpoint.client.sdk.timeout,
+        adapters[1]._model.request_timeout,
+        adapters[2]._endpoint.client.sdk.timeout,
+    ] == [
         45.0,
         45.0,
         45.0,
@@ -184,7 +191,7 @@ def test_single_adapter_setting_selects_deterministic_for_all_agent_runtimes(
     monkeypatch.setenv("AGENTIC_CM_ADAPTER", "deterministic")
 
     assert isinstance(planner_from_environment(), DeterministicPlannerAdapter)
-    assert isinstance(path_agent_from_environment(), DeterministicPathAgentAdapter)
+    assert isinstance(path_agent_from_environment(), DeepAgentPathAdapter)
     assert isinstance(
         synthesis_agent_from_environment(), DeterministicSynthesisAgentAdapter
     )

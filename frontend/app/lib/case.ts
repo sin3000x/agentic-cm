@@ -71,30 +71,16 @@ export type CommitmentNode = {
 
 export type CommitmentDecision = "APPROVE" | "REVISE" | "REJECT";
 
-export type SolutionOption = {
-  id: string;
-  title: string;
-  description: string;
-  benefits: string[];
-  risks: string[];
-  assumptions: string[];
-};
-
 export type SolutionRevision = {
   revision: number;
-  summary: string;
-  options: SolutionOption[];
-  recommendation: { option_ids: string[]; rationale: string };
-  evidence_gaps: string[];
+  recommendation: string;
   role_reports: Array<{ role: string; dimension: string; report: string }>;
   generated_by: string;
 };
 
 export type ApprovalContext = {
   revision: number | null;
-  summary: string;
-  options: SolutionOption[];
-  recommendation: { option_ids?: string[]; rationale?: string };
+  recommendation: string;
   role_report: { role: string; dimension: string; report: string } | null;
 };
 
@@ -218,7 +204,6 @@ export type TimelineEvent = {
     role?: string;
     node_id?: string;
     path_id?: string;
-    option_count?: number;
     next_phase?: string;
     successful_path_count?: number;
     failed_path_count?: number;
@@ -290,15 +275,7 @@ export function skillLabel(asset: ManifestAssetRef, fallback?: string | null) {
 export function isSolutionRevision(value: unknown): value is SolutionRevision {
   if (!value || typeof value !== "object") return false;
   const revision = value as Partial<SolutionRevision>;
-  return Array.isArray(revision.options)
-    && revision.options.every((option) => option
-      && typeof option === "object"
-      && Array.isArray(option.benefits)
-      && Array.isArray(option.risks)
-      && Array.isArray(option.assumptions))
-    && !!revision.recommendation
-    && Array.isArray(revision.recommendation.option_ids)
-    && Array.isArray(revision.evidence_gaps)
+  return typeof revision.recommendation === "string"
     && Array.isArray(revision.role_reports)
     && revision.role_reports.every((item) => item
       && typeof item.role === "string"
@@ -309,9 +286,7 @@ export function isSolutionRevision(value: unknown): value is SolutionRevision {
 export function approvalContextFor(revision: SolutionRevision | null, role: string): ApprovalContext {
   return {
     revision: revision?.revision ?? null,
-    summary: revision?.summary ?? "尚未读取到可审查的方案摘要。",
-    options: revision?.options ?? [],
-    recommendation: revision?.recommendation ?? {},
+    recommendation: revision?.recommendation ?? "",
     role_report: revision?.role_reports.find((item) => item.role === role) ?? null,
   };
 }

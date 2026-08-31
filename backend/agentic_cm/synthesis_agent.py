@@ -61,10 +61,7 @@ class SynthesisContext:
                 "status": item["status"],
                 "solution_revision": {
                     key: revision[key]
-                    for key in (
-                        "revision", "summary", "options",
-                        "recommendation", "evidence_gaps", "role_reports",
-                    )
+                    for key in ("revision", "recommendation", "role_reports")
                     if key in revision
                 },
                 "commitments": [
@@ -119,7 +116,7 @@ class DeterministicSynthesisAgentAdapter:
                     f"{item['path_id']}/solution-revision/{solution['revision']}",
                     *commitment_refs,
                 ],
-                risks=list(solution.get("evidence_gaps", [])),
+                risks=[],
             ))
         successful = [item for item in assessments if item.status == "SUCCEEDED"]
         failed = [item for item in assessments if item.status == "FAILED"]

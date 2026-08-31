@@ -190,7 +190,7 @@ class CaseService:
         public_fields = {
             CaseEvent.MANIFEST_PROPOSED: ("revision",),
             CaseEvent.MANIFEST_APPROVED: ("actor",),
-            CaseEvent.SOLUTION_REVISION_PROPOSED: ("path_id", "revision", "option_count"),
+            CaseEvent.SOLUTION_REVISION_PROPOSED: ("path_id", "revision"),
             CaseEvent.COMMITMENT_APPROVED: ("actor", "role", "node_id", "path_id"),
             CaseEvent.COMMITMENT_REVISION_REQUESTED: ("actor", "role", "node_id", "path_id"),
             CaseEvent.COMMITMENT_REJECTED: ("actor", "role", "node_id", "path_id"),
@@ -470,7 +470,6 @@ class CaseService:
                 self.repository.save(case, CaseEvent.SOLUTION_REVISION_PROPOSED, {
                     "path_id": path_id,
                     "revision": solution_revision.revision,
-                    "option_count": len(solution_revision.options),
                     "generated_by": solution_revision.generated_by,
                     "next_phase": case.phase.value,
                 })
@@ -519,9 +518,7 @@ class CaseService:
                     "node": node.model_dump(mode="json"),
                     "approval_context": {
                         "revision": revision.revision if revision else None,
-                        "summary": revision.summary if revision else "",
-                        "options": [option.model_dump(mode="json") for option in revision.options] if revision else [],
-                        "recommendation": revision.recommendation.model_dump(mode="json") if revision else {},
+                        "recommendation": revision.recommendation if revision else "",
                         "role_report": role_report.model_dump(mode="json") if role_report else None,
                     },
                 })

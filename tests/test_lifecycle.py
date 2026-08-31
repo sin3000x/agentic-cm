@@ -10,7 +10,6 @@ from agentic_cm.domain import (
     OwnerDecisionAction,
     PathAttemptState,
 )
-from agentic_cm.path_agent import DeterministicPathAgentAdapter
 from agentic_cm.service import InvalidTransitionError
 from conftest import (
     DEMO_CASE_ID,
@@ -19,6 +18,7 @@ from conftest import (
     OWNER_ROLE,
     AllMatchedSkillPathsPlanner,
     approve_and_execute,
+    deterministic_path_adapter,
     make_service,
     orchestrate,
 )
@@ -28,7 +28,7 @@ class _ConcurrencyProbe:
     profile = "concurrency-probe"
 
     def __init__(self) -> None:
-        self.delegate = DeterministicPathAgentAdapter()
+        self.delegate = deterministic_path_adapter()
         self.active = 0
         self.max_active = 0
 
@@ -56,7 +56,8 @@ def test_http_golden_path_runs_from_orchestration_to_owner_decision(client) -> N
     )
     assert path_result.status_code == 200
     revision = path_result.json()["case"]["path_attempts"][0]["solution_revision"]
-    assert [option["id"] for option in revision["options"]] == ["A", "B"]
+    assert revision["recommendation"]
+    assert {item["role"] for item in revision["role_reports"]} == {"主计划", "研发", "供应经理"}
 
     approval = client.post(
         f"/api/cases/{DEMO_CASE_ID}/paths/PATH-01/commitments/SUPPLY/approve",

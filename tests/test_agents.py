@@ -6,9 +6,11 @@ from time import perf_counter
 
 import httpx
 import pytest
+from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+from langchain_core.messages import AIMessage
 
-from agentic_cm.agent_runtime import AgentError, AgentOutputError
-from agentic_cm.domain import PathAgentResult, ProposedOption, Recommendation, RoleReport
+from agentic_cm.agent_runtime import AgentError, AgentExecutionError, AgentOutputError
+from agentic_cm.domain import PathAgentResult, RoleReport
 from agentic_cm.orchestrator import (
     planner_from_environment,
     OpenAICompatiblePlannerAdapter,
@@ -17,9 +19,9 @@ from agentic_cm.orchestrator import (
     PlannerSkillChoice,
 )
 from agentic_cm.path_agent import (
-    DeterministicPathAgentAdapter,
-    OpenAICompatiblePathAgentAdapter,
+    DeepAgentPathAdapter,
     PathAgentContext,
+    _skill_files,
     path_agent_from_environment,
 )
 from agentic_cm.repository import CaseRepository
@@ -33,6 +35,7 @@ from conftest import (
     OWNER_ACTOR,
     OWNER_ROLE,
     chat_completion_response,
+    deterministic_path_adapter,
     make_service,
     orchestrate,
 )
@@ -63,29 +66,223 @@ class _OmittingPlanner:
         )
 
 
-class _InventingPathAgent:
-    profile = "test/inventing-path"
+class _OmittingRoleReportsPathAgent:
+    profile = "test/omitting-role-reports"
 
     async def generate(self, context, trace):
         return PathAgentResult(
-            summary="引入了清单外选项。",
-            options=[
-                ProposedOption(
-                    id="INVENTED",
-                    title="清单外选项",
-                    description="模型自行发明的方案。",
-                    benefits=["无"],
-                    risks=["越权"],
-                    assumptions=["无依据"],
-                )
-            ],
-            recommendation=Recommendation(option_ids=["INVENTED"], rationale="发明了未授权选项。"),
-            evidence_gaps=["缺少授权"],
-            role_reports=[
-                RoleReport(role=item["role"], dimension=item["dimension"], report=f"{item['role']}维度：未授权。")
-                for item in context.required_role_reports
-            ],
+            recommendation="省略了责任角色报告。",
+            role_reports=[],
         )
+
+
+def test_deep_agent_projects_only_authorized_skills() -> None:
+    context = PathAgentContext(
+        case_snapshot={"description": "关键物料存在缺口。"},
+        human_proposal=None,
+        path={"definition": "MaterialSubstitution", "title": "物料替代"},
+        execution_skills=(
+            {
+                "id": "material-analysis",
+                "description": "分析替代物料。",
+                "instructions_markdown": "只分析 Manifest 授权的候选。",
+            },
+            {
+                "id": "supply-review",
+                "description": "复核供应证据。",
+                "instructions_markdown": "标记需要主计划确认的信息。",
+            },
+        ),
+        knowledge=(),
+        authorized_options=({"id": "A", "title": "候选方案甲"},),
+        tool_results=(),
+        required_role_reports=(),
+        previous_solution_revision=None,
+    )
+
+    assert _skill_files(context) == {
+        "/skills/material-analysis/SKILL.md": (
+            "---\n"
+            "name: material-analysis\n"
+            "description: 分析替代物料。\n"
+            "---\n\n"
+            "只分析 Manifest 授权的候选。\n"
+        ),
+        "/skills/supply-review/SKILL.md": (
+            "---\n"
+            "name: supply-review\n"
+            "description: 复核供应证据。\n"
+            "---\n\n"
+            "标记需要主计划确认的信息。\n"
+        ),
+    }
+
+
+def test_deep_agent_returns_existing_path_result_contract() -> None:
+    payload = {
+        "recommendation": "建议按授权候选推进物料替代，待责任角色确认供应与技术证据。",
+        "role_reports": [],
+    }
+
+    class ScriptedModel(FakeMessagesListChatModel):
+        def bind_tools(self, tools, *, tool_choice=None, **kwargs):
+            return self
+
+        def _get_ls_params(self, **kwargs):
+            return {
+                "ls_provider": "agentic-cm",
+                "ls_model_name": "path-scripted",
+            }
+
+    context = PathAgentContext(
+        case_snapshot={"description": "关键物料存在缺口。"},
+        human_proposal=None,
+        path={"definition": "MaterialSubstitution", "title": "物料替代"},
+        execution_skills=({
+            "id": "material-analysis",
+            "description": "分析替代物料。",
+            "instructions_markdown": "只分析 Manifest 授权的候选。",
+        },),
+        knowledge=(),
+        authorized_options=({"id": "A", "title": "候选方案甲"},),
+        tool_results=(),
+        required_role_reports=(),
+        previous_solution_revision=None,
+    )
+    model = ScriptedModel(responses=[AIMessage(
+        content="",
+        tool_calls=[{
+            "name": "PathAgentResult",
+            "args": payload,
+            "id": "result-1",
+            "type": "tool_call",
+        }],
+    )])
+
+    result = asyncio.run(
+        DeepAgentPathAdapter(model, profile="test/path").generate(
+            context, lambda *args, **kwargs: None
+        )
+    )
+
+    assert result == PathAgentResult.model_validate(payload)
+
+
+def test_deep_agent_maps_model_failure_to_execution_error() -> None:
+    class FailingModel(FakeMessagesListChatModel):
+        def bind_tools(self, tools, *, tool_choice=None, **kwargs):
+            return self
+
+        def _get_ls_params(self, **kwargs):
+            return {"ls_provider": "agentic-cm", "ls_model_name": "failing"}
+
+        def _generate(self, *args, **kwargs):
+            raise RuntimeError("provider unavailable")
+
+    context = PathAgentContext(
+        case_snapshot={"description": "关键物料存在缺口。"},
+        human_proposal=None,
+        path={"definition": "MaterialSubstitution", "title": "物料替代"},
+        execution_skills=(),
+        knowledge=(),
+        authorized_options=({"id": "A", "title": "候选方案甲"},),
+        tool_results=(),
+        required_role_reports=(),
+        previous_solution_revision=None,
+    )
+    traces = []
+
+    with pytest.raises(AgentExecutionError, match="provider unavailable"):
+        asyncio.run(
+            DeepAgentPathAdapter(
+                FailingModel(responses=[AIMessage(content="")]),
+                profile="test/failing",
+            ).generate(context, lambda *args: traces.append(args))
+        )
+
+    details = traces[-1][3]
+    assert traces[-1][0:2] == ("deepagent.runtime.failed", "FAILED")
+    assert details["error_type"] == "RuntimeError"
+    assert "provider unavailable" in details["error"]
+
+
+def test_deep_agent_rejects_missing_structured_response() -> None:
+    class TextOnlyModel(FakeMessagesListChatModel):
+        def bind_tools(self, tools, *, tool_choice=None, **kwargs):
+            return self
+
+        def _get_ls_params(self, **kwargs):
+            return {"ls_provider": "agentic-cm", "ls_model_name": "text-only"}
+
+    context = PathAgentContext(
+        case_snapshot={"description": "关键物料存在缺口。"},
+        human_proposal=None,
+        path={"definition": "MaterialSubstitution", "title": "物料替代"},
+        execution_skills=(),
+        knowledge=(),
+        authorized_options=({"id": "A", "title": "候选方案甲"},),
+        tool_results=(),
+        required_role_reports=(),
+        previous_solution_revision=None,
+    )
+
+    with pytest.raises(AgentOutputError):
+        asyncio.run(
+            DeepAgentPathAdapter(
+                TextOnlyModel(responses=[AIMessage(content="只有文本，没有结构化结果。")]),
+                profile="test/text-only",
+            ).generate(context, lambda *args: None)
+        )
+
+
+def test_deep_agent_traces_rejected_semantic_output() -> None:
+    class ScriptedModel(FakeMessagesListChatModel):
+        def bind_tools(self, tools, *, tool_choice=None, **kwargs):
+            return self
+
+        def _get_ls_params(self, **kwargs):
+            return {"ls_provider": "agentic-cm", "ls_model_name": "invalid-report"}
+
+    payload = {
+        "recommendation": "建议按授权候选推进物料替代，待责任角色确认供应证据。",
+        "role_reports": [],
+    }
+    context = PathAgentContext(
+        case_snapshot={"description": "关键物料存在缺口。"},
+        human_proposal=None,
+        path={"definition": "MaterialSubstitution", "title": "物料替代"},
+        execution_skills=(),
+        knowledge=(),
+        authorized_options=({"id": "A"}, {"id": "B"}),
+        tool_results=(),
+        required_role_reports=({
+            "role": "主计划",
+            "dimension": "供应与交付可行性",
+        },),
+        previous_solution_revision=None,
+    )
+    model = ScriptedModel(responses=[AIMessage(
+        content="",
+        tool_calls=[{
+            "name": "PathAgentResult",
+            "args": payload,
+            "id": "invalid-result",
+            "type": "tool_call",
+        }],
+    )])
+    traces = []
+
+    with pytest.raises(AgentOutputError):
+        asyncio.run(
+            DeepAgentPathAdapter(model, profile="test/invalid-report").generate(
+                context, lambda *args: traces.append(args)
+            )
+        )
+
+    details = traces[-1][3]
+    assert details["error_type"] == "AgentOutputError"
+    assert "missing=" in details["error"]
+    assert details["rejected_result"] == payload
 
 
 def test_deterministic_mode_delays_every_agent_stage(
@@ -155,166 +352,14 @@ def test_planner_cannot_invent_or_omit_catalog_paths(tmp_path: Path) -> None:
         assert case.phase.value == "INTAKE"
 
 
-def test_path_agent_cannot_invent_unauthorized_option(tmp_path: Path) -> None:
-    service = make_service(tmp_path, path_agent=_InventingPathAgent())
+def test_path_agent_cannot_omit_required_role_reports(tmp_path: Path) -> None:
+    service = make_service(tmp_path, path_agent=_OmittingRoleReportsPathAgent())
     orchestrate(service)
     service.approve_manifest(DEMO_CASE_ID, ["PATH-01"], actor=OWNER_ACTOR, role=OWNER_ROLE)
     with pytest.raises(AgentOutputError):
         asyncio.run(service.execute_path(DEMO_CASE_ID, "PATH-01", actor=OWNER_ACTOR, role=OWNER_ROLE))
     case = service.get_case(DEMO_CASE_ID)
     assert case.path_attempts[0].solution_revision is None
-
-
-def test_path_agent_request_uses_compact_output_schema() -> None:
-    captured_request: dict = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        captured_request.update(json.loads(request.content))
-        return chat_completion_response({
-            "summary": "已形成一项待复核方案。",
-            "options": [{
-                "id": "A",
-                "title": "候选方案甲",
-                "description": "依据冻结信息形成的候选方案。",
-                "benefits": ["便于责任角色复核。"],
-                "risks": ["当前证据仍不完整。"],
-                "assumptions": ["尚未形成业务承诺。"],
-            }],
-            "recommendation": {
-                "option_ids": ["A"],
-                "rationale": "建议优先复核候选方案甲。",
-            },
-            "evidence_gaps": ["需要补充当前业务证据。"],
-            "role_reports": [],
-        })
-
-    context = PathAgentContext(
-        case_snapshot={
-            "title": "订单延期",
-            "description": "关键物料存在缺口。",
-            "business_payload": {"gap_quantity": 100},
-        },
-        human_proposal=None,
-        path={"definition": "MaterialSubstitution", "title": "物料替代", "rationale": "存在替代候选。"},
-        execution_skills=(),
-        knowledge=(),
-        authorized_options=({"id": "A", "title": "候选方案甲"},),
-        tool_results=(),
-        required_role_reports=(),
-        previous_solution_revision=None,
-    )
-
-    async def run() -> PathAgentResult:
-        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            adapter = OpenAICompatiblePathAgentAdapter(
-                "secret-key",
-                model="vendor-model-42",
-                base_url="https://gateway.example/v1",
-                http_client=client,
-            )
-            return await adapter.generate(context, lambda *args, **kwargs: None)
-
-    result = asyncio.run(run())
-    system_prompt = captured_request["messages"][0]["content"]
-    schema_text = system_prompt.split(
-        "Match this compact JSON Schema exactly: ", maxsplit=1
-    )[1].split(". Return role_reports", maxsplit=1)[0]
-    output_schema = json.loads(schema_text)
-    option_schema = output_schema["$defs"]["ProposedOption"]
-    prompt_payload = json.loads(captured_request["messages"][1]["content"])
-
-    assert result.options[0].id == "A"
-    assert set(prompt_payload) == {
-        "case_snapshot",
-        "execution_skills",
-        "knowledge",
-        "authorized_options",
-        "tool_results",
-        "required_role_reports",
-    }
-    assert prompt_payload["case_snapshot"] == {
-        "description": "关键物料存在缺口。",
-        "business_payload": {"gap_quantity": 100},
-    }
-    assert context.authorized_option_ids == ("A",)
-    with pytest.raises(FrozenInstanceError):
-        context.path = {}
-    assert output_schema["required"] == [
-        "summary", "options", "recommendation", "evidence_gaps", "role_reports"
-    ]
-    assert option_schema["properties"]["title"] == {"type": "string"}
-    assert option_schema["properties"]["description"] == {"type": "string"}
-    assert '"title":"' not in schema_text
-    assert '"description":"' not in schema_text
-    assert '"additionalProperties"' not in schema_text
-    assert '"minLength"' not in schema_text
-    assert '"minItems"' not in schema_text
-    assert "title" not in output_schema
-    assert "description" not in output_schema
-    assert "additionalProperties" not in output_schema
-    assert "title" not in option_schema
-    assert "additionalProperties" not in option_schema
-    assert "minLength" not in option_schema["properties"]["id"]
-    assert "minItems" not in output_schema["properties"]["options"]
-
-
-def test_path_agent_accepts_short_role_report_without_presentation_format() -> None:
-    attempts = 0
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal attempts
-        attempts += 1
-        return chat_completion_response({
-            "summary": "已形成一项待复核方案。",
-            "options": [{
-                "id": "A",
-                "title": "候选方案甲",
-                "description": "依据冻结信息形成的候选方案。",
-                "benefits": ["便于责任角色复核。"],
-                "risks": ["当前证据仍不完整。"],
-                "assumptions": ["尚未形成业务承诺。"],
-            }],
-            "recommendation": {
-                "option_ids": ["A"],
-                "rationale": "建议优先复核候选方案甲。",
-            },
-            "evidence_gaps": ["需要补充当前业务证据。"],
-            "role_reports": [{
-                "role": "主计划",
-                "dimension": "供应可行性",
-                "report": "A待复核",
-            }],
-        })
-
-    context = PathAgentContext(
-        case_snapshot={
-            "description": "关键物料存在缺口。",
-            "business_payload": {"gap_quantity": 100},
-        },
-        human_proposal=None,
-        path={"definition": "MaterialSubstitution", "title": "物料替代"},
-        execution_skills=(),
-        knowledge=(),
-        authorized_options=({"id": "A", "title": "候选方案甲"},),
-        tool_results=(),
-        required_role_reports=({"role": "主计划", "dimension": "供应可行性"},),
-        previous_solution_revision=None,
-    )
-
-    async def run() -> PathAgentResult:
-        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            adapter = OpenAICompatiblePathAgentAdapter(
-                "secret-key",
-                model="vendor-model-42",
-                base_url="https://gateway.example/v1",
-                http_client=client,
-            )
-            return await adapter.generate(context, lambda *args, **kwargs: None)
-
-    result = asyncio.run(run())
-
-    assert attempts == 1
-    assert result.role_reports[0].report == "A待复核"
 
 
 def test_path_agent_context_projects_only_generation_inputs() -> None:
@@ -385,7 +430,6 @@ def test_path_agent_context_projects_only_generation_inputs() -> None:
     }
     assert payload["execution_skills"] == [{
         "id": "material-substitution-analysis",
-        "instructions_markdown": "只分析授权候选。",
     }]
     assert payload["knowledge"] == [{
         "title": "历史观察",
@@ -406,6 +450,8 @@ def test_path_agent_context_projects_only_generation_inputs() -> None:
     assert "title" not in payload["case_snapshot"]
     assert "classification" not in payload["case_snapshot"]
     assert "path" not in payload
+    with pytest.raises(FrozenInstanceError):
+        context.path = {}
 
 
 def test_openai_adapter_repairs_invalid_output_once() -> None:
@@ -497,7 +543,7 @@ def test_synthesis_repairs_paraphrased_artifact_refs(tmp_path: Path) -> None:
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
             service = CaseService(
                 CaseRepository(tmp_path / "test.db"),
-                path_agent=DeterministicPathAgentAdapter(),
+                path_agent=deterministic_path_adapter(),
                 synthesis_agent=OpenAICompatibleSynthesisAgentAdapter(
                     "synthesis-secret",
                     model="vendor-model-42",

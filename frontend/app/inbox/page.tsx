@@ -139,7 +139,7 @@ export default function InboxPage() {
             <div className="inboxReviewBody">
               <section><small>本次责任边界</small><strong>{commitmentCopy[reviewItem.node.id] ?? reviewItem.node.review_dimension}</strong><p>你只批准本节点对应的专业判断，不代表其他角色，也不执行任何业务动作。</p></section>
               <section className="roleEvidence"><small>你的专业判断与证据摘要</small><strong>{reviewItem.approval_context.role_report?.dimension ?? "对应角色报告尚未生成"}</strong><p>{reviewItem.approval_context.role_report?.report ?? "当前没有可供本角色审查的报告，请选择“修改”要求补充。"}</p></section>
-              <section><small>共同方案上下文 · REVISION {reviewItem.approval_context.revision ?? "—"}</small><p>{reviewItem.approval_context.summary}</p><div className="inboxEvidenceOptions">{reviewItem.approval_context.options.map((option) => <article key={option.id}><span>{option.id}</span><div><strong>{option.title}</strong><p>{option.description}</p></div></article>)}</div><div className="inboxRecommendation"><strong>Agent 建议（非业务决定）</strong><p>{reviewItem.approval_context.recommendation.rationale || "暂无推荐意见。"}</p></div></section>
+              <section><small>推荐方案 · REVISION {reviewItem.approval_context.revision ?? "—"}</small><div className="inboxRecommendation"><strong>Agent 建议（非业务决定）</strong><p>{reviewItem.approval_context.recommendation || "暂无推荐方案。"}</p></div></section>
             </div>
             <footer><span><small>当前身份</small><strong>{currentIdentity.name} · {currentIdentity.role}</strong></span>{approvalActions(reviewItem)}</footer>
           </aside>

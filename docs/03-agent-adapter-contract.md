@@ -11,7 +11,7 @@
 | Agent | 输入 | 输出 | 不能做 |
 |---|---|---|---|
 | Orchestrator / Planner | Case 摘要、Catalog Path、可见 Skill 入口 | 每条 Path 的 rationale + Skill 选择 | 发明/省略 Path，选择 Bundle 成员，改 Policy |
-| Path Agent | 已批准 Manifest 冻结引用、只读 tool 结果 | `PathAgentResult` | 发明未授权 option，跳过角色报告，改 Case |
+| Path Agent | 已批准 Manifest 冻结引用、只读 tool 结果 | `PathAgentResult` | 跳过角色报告，改 Case |
 | Synthesis Agent | 全部终态 PathAttempt + Commitment | `SynthesisResult` | 补造未探索 Path，杜撰 supporting_refs |
 
 平台在 Adapter 之外校验白名单，然后把 LLM 输出加上 `revision` / `generated_by` 写成 `SolutionRevision` 或 `SynthesisReport`。不要再复制一套 dataclass。

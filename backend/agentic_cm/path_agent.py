@@ -6,22 +6,35 @@ import os
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-import httpx
+from deepagents import create_deep_agent
+from deepagents.backends import StateBackend
+from deepagents.backends.utils import create_file_data
+from deepagents.profiles import (
+    GeneralPurposeSubagentProfile,
+    HarnessProfile,
+    register_harness_profile,
+)
+from langchain.agents.structured_output import ToolStrategy
+from langchain_core.callbacks import (
+    AsyncCallbackManagerForLLMRun,
+    CallbackManagerForLLMRun,
+)
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_openai import ChatOpenAI
+from langgraph.errors import GraphRecursionError
+from pydantic import ValidationError
 
 from .agent_runtime import (
     AgentError,
     AgentExecutionError,
     AgentOutputError,
     AgentTraceSink,
-    TraceNarration,
-    configure_thinking,
     contains_chinese,
-    openai_model_endpoint,
-    request_structured_output,
 )
 from .capabilities import CapabilityResolution
 from .config import (
-    ReasoningEffort,
     agent_adapter_from_environment,
     agent_llm_config_from_environment,
     deterministic_delay_seconds_from_environment,
@@ -32,39 +45,28 @@ from .domain import (
     OrchestrationPhase,
     PathAgentResult,
     PathAttemptState,
-    ProposedOption,
-    Recommendation,
     RoleReport,
     SolutionRevision,
 )
 
 
-_PATH_AGENT_NARRATION = TraceNarration(
-    request="向 OpenAI-compatible Path Agent 发送 Manifest 组装请求",
-    repair_request="上次响应无效，发送一次结构化修复请求",
-    retry_request="模型连接或请求超时，自动重试一次",
-    response="收到 Path Agent 模型响应",
-    validation_failed="Path Agent 响应未通过结构化校验",
-    request_failed="Path Agent 模型服务请求失败",
+_PATH_AGENT_SYSTEM_PROMPT = (
+    "You are a Path Agent assembled only from an approved Manifest snapshot. "
+    "Read and follow the authorized Skills available under /skills before producing a result. "
+    "Treat Knowledge as advisory, never as current Case fact. Write one Chinese recommendation "
+    "for this Path. Do not make business commitments, claim actions were executed, remove Policy "
+    "duties, or invent confirmed quantities, dates, certifications, or approvals. "
+    "Return role_reports for exactly the contracts in required_role_reports, with no missing or "
+    "extra role/dimension pair; each report explains why this recommendation should be approved "
+    "from that role's dimension and what that role still needs to confirm."
 )
 
-_PROMPT_SCHEMA_NOISE = frozenset(
-    {"title", "description", "additionalProperties", "minLength", "minItems"}
+_PATH_HARNESS_PROFILE = HarnessProfile(
+    excluded_tools=frozenset({"write_file", "edit_file", "delete", "execute"}),
+    general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
 )
-
-
-def _compact_prompt_schema(value: Any, *, property_map: bool = False) -> Any:
-    if isinstance(value, dict):
-        return {
-            key: _compact_prompt_schema(
-                item, property_map=not property_map and key == "properties"
-            )
-            for key, item in value.items()
-            if property_map or key not in _PROMPT_SCHEMA_NOISE
-        }
-    if isinstance(value, list):
-        return [_compact_prompt_schema(item) for item in value]
-    return value
+for _provider in ("agentic-cm", "openai"):
+    register_harness_profile(_provider, _PATH_HARNESS_PROFILE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,10 +80,6 @@ class PathAgentContext:
     tool_results: tuple[dict[str, Any], ...]
     required_role_reports: tuple[dict[str, str], ...]
     previous_solution_revision: SolutionRevision | None
-
-    @property
-    def authorized_option_ids(self) -> tuple[str, ...]:
-        return tuple(str(item["id"]) for item in self.authorized_options)
 
     def prompt_payload(self) -> dict[str, Any]:
         grouped_tool_results: list[dict[str, Any]] = []
@@ -105,10 +103,7 @@ class PathAgentContext:
                 if key in self.case_snapshot
             },
             "execution_skills": [
-                {
-                    "id": skill["id"],
-                    "instructions_markdown": skill["instructions_markdown"],
-                }
+                {"id": skill["id"]}
                 for skill in self.execution_skills
             ],
             "knowledge": [
@@ -135,13 +130,7 @@ class PathAgentContext:
         if self.previous_solution_revision is not None:
             payload["previous_solution_revision"] = self.previous_solution_revision.model_dump(
                 mode="json",
-                include={
-                    "summary",
-                    "options",
-                    "recommendation",
-                    "evidence_gaps",
-                    "role_reports",
-                },
+                include={"recommendation", "role_reports"},
             )
         return payload
 
@@ -150,169 +139,196 @@ class PathAgentAdapter(Protocol):
     async def generate(self, context: PathAgentContext, trace: AgentTraceSink) -> PathAgentResult: ...
 
 
-class DeterministicPathAgentAdapter:
-    profile = "deterministic-path/v1"
+def _skill_files(context: PathAgentContext) -> dict[str, str]:
+    return {
+        f"/skills/{skill['id']}/SKILL.md": (
+            "---\n"
+            f"name: {skill['id']}\n"
+            f"description: {skill.get('description', skill['id'])}\n"
+            "---\n\n"
+            f"{skill['instructions_markdown'].rstrip()}\n"
+        )
+        for skill in context.execution_skills
+    }
 
-    def __init__(self, delay_seconds: float = 0.0) -> None:
-        self._delay_seconds = delay_seconds
 
-    async def generate(self, context: PathAgentContext, trace: AgentTraceSink) -> PathAgentResult:
+def _truncate_error(value: str, *, limit: int = 4000) -> str:
+    if len(value) <= limit:
+        return value
+    return value[: limit - 1] + "…"
+
+
+def _exception_trace_details(exc: BaseException) -> dict[str, Any]:
+    details: dict[str, Any] = {
+        "error_type": type(exc).__name__,
+        "error": _truncate_error(str(exc)),
+    }
+    cause = exc.__cause__ or exc.__context__
+    if isinstance(cause, BaseException) and cause is not exc:
+        details["cause_type"] = type(cause).__name__
+        details["cause"] = _truncate_error(str(cause))
+    return details
+
+
+class DeepAgentPathAdapter:
+    def __init__(self, model: BaseChatModel, *, profile: str) -> None:
+        self._model = model
+        self.profile = profile
+
+    async def generate(
+        self, context: PathAgentContext, trace: AgentTraceSink
+    ) -> PathAgentResult:
+        skill_files = _skill_files(context)
         trace(
-            "model.request",
-            "COMPLETED",
-            "Deterministic Path Adapter 接收 Manifest 组装上下文",
-            {"context": context.prompt_payload(), "adapter": self.profile},
-        )
-        await asyncio.sleep(self._delay_seconds)
-        options = tuple(
-            ProposedOption(
-                id=str(item["id"]),
-                title=str(item.get("title") or item["id"]),
-                description=str(item.get("description") or "作为冻结 Skill 候选进入并行核验。"),
-                benefits=["保留原订单目标的探索空间"],
-                risks=["当前供应与技术证据尚未由责任角色确认"],
-                assumptions=["仅为分析提案，不代表物料、数量或交期承诺"],
-            )
-            for item in context.authorized_options
-            if isinstance(item, dict) and item.get("id")
-        )
-        if not options:
-            options = (
-                ProposedOption(
-                    id="OPTION-01",
-                    title=context.path["title"],
-                    description="按冻结 Skill 生成的待核验分析选项。",
-                    benefits=["形成可审查的结构化提案"],
-                    risks=["缺少可确认的候选事实"],
-                    assumptions=["所有业务结论均等待责任角色确认"],
-                ),
-            )
-        option_reference = "、".join(option.id for option in options)
-        result = PathAgentResult(
-            summary="已依据 Manifest 冻结的执行 Skill 形成替代方案草案；尚未作出业务承诺。",
-            options=list(options),
-            recommendation=Recommendation(
-                option_ids=[],
-                rationale="deterministic 模式不判断候选业务优先级。",
-            ),
-            evidence_gaps=["供应、技术与客户接受度需要由 Manifest 编译出的责任角色确认"],
-            role_reports=[
-                RoleReport(
-                    role=contract["role"],
-                    dimension=contract["dimension"],
-                    report=(
-                        f"{contract['role']}维度：冻结 Skill 中的{option_reference}已按{contract['dimension']}形成比较，"
-                        f"但模拟查询结果仍须由{contract['role']}核验后才能形成业务判断。"
-                    ),
-                )
-                for contract in context.required_role_reports
-            ],
+            "deepagent.runtime.started",
+            "STARTED",
+            "启动 Deep Agents Path Runtime",
+            {"profile": self.profile, "path": context.path.get("definition")},
         )
         trace(
-            "model.response",
+            "deepagent.skill.projected",
             "COMPLETED",
-            "Deterministic Path Adapter 返回结构化 SolutionRevision 草案",
+            "投影 Manifest 授权的执行 Skill",
+            {"skills": list(skill_files)},
+        )
+        try:
+            agent = create_deep_agent(
+                model=self._model,
+                system_prompt=_PATH_AGENT_SYSTEM_PROMPT,
+                skills=["/skills/"],
+                backend=StateBackend(),
+                subagents=[],
+                response_format=ToolStrategy(PathAgentResult),
+            )
+            state = await agent.ainvoke(
+                {
+                    "messages": [{
+                        "role": "user",
+                        "content": json.dumps(context.prompt_payload(), ensure_ascii=False),
+                    }],
+                    "files": {
+                        path: create_file_data(content)
+                        for path, content in skill_files.items()
+                    },
+                },
+                config={"recursion_limit": 20},
+            )
+        except GraphRecursionError as exc:
+            trace(
+                "deepagent.runtime.failed",
+                "FAILED",
+                "Deep Agents Path Runtime 未能收敛",
+                _exception_trace_details(exc),
+            )
+            raise AgentOutputError("Path Agent did not produce structured output") from exc
+        except Exception as exc:
+            details = _exception_trace_details(exc)
+            trace(
+                "deepagent.runtime.failed",
+                "FAILED",
+                "Deep Agents Path Runtime 执行失败",
+                details,
+            )
+            raise AgentExecutionError(
+                "Path Agent model execution failed "
+                f"({details['error_type']}: {details['error']})"
+            ) from exc
+        result: PathAgentResult | None = None
+        raw_response = state.get("structured_response")
+        try:
+            result = PathAgentResult.model_validate(raw_response)
+            _require_chinese(result)
+            _validate_result_against_context(result, context)
+        except (ValidationError, AgentOutputError) as exc:
+            details = _exception_trace_details(exc)
+            if result is not None:
+                details["rejected_result"] = result.model_dump(mode="json")
+            elif raw_response is not None:
+                details["rejected_result"] = raw_response
+            trace(
+                "deepagent.runtime.failed",
+                "FAILED",
+                "Deep Agents Path Runtime 输出无效",
+                details,
+            )
+            raise AgentOutputError(str(exc)) from exc
+        trace(
+            "deepagent.model.completed",
+            "COMPLETED",
+            "Deep Agents Path Runtime 返回结构化方案",
             {"result": result.model_dump(mode="json")},
         )
         return result
 
 
-class OpenAICompatiblePathAgentAdapter:
-    def __init__(
-        self,
-        api_key: str | None,
-        *,
-        model: str,
-        base_url: str,
-        api_key_header: str = "Authorization",
-        api_key_prefix: str = "Bearer",
-        timeout_seconds: float = 45.0,
-        max_output_tokens: int = 6000,
-        thinking_enabled: bool = False,
-        reasoning_effort: ReasoningEffort = "high",
-        client=None,
-        http_client: httpx.AsyncClient | None = None,
-    ) -> None:
-        if max_output_tokens < 1000:
-            raise AgentError("Path Agent max output tokens must be at least 1000")
-        self._model = model
-        self._max_output_tokens = max_output_tokens
-        self._thinking_enabled = thinking_enabled
-        self._reasoning_effort = reasoning_effort
-        self._endpoint = openai_model_endpoint(
-            api_key,
-            model=model,
-            base_url=base_url,
-            api_key_header=api_key_header,
-            api_key_prefix=api_key_prefix,
-            timeout_seconds=timeout_seconds,
-            http_client=http_client,
-            client=client,
-        )
+class _DeterministicPathChatModel(BaseChatModel):
+    delay_seconds: float = 0.0
 
     @property
-    def profile(self) -> str:
-        return f"openai-compatible-path/{self._model}"
+    def _llm_type(self) -> str:
+        return "agentic-cm-deterministic-path"
 
-    async def generate(self, context: PathAgentContext, trace: AgentTraceSink) -> PathAgentResult:
-        prompt = context.prompt_payload()
-        output_schema = _compact_prompt_schema(PathAgentResult.model_json_schema())
-        trace("model.context_projection", "COMPLETED", "构造 Path Agent 模型上下文", {"context": prompt})
-        request = {
-            "model": self._model,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a Path Agent assembled only from an approved Manifest snapshot. "
-                        "Follow the frozen execution Skill instructions. Treat Knowledge as advisory, "
-                        "never as current Case fact. Propose reviewable alternatives but do not make "
-                        "business commitments, claim actions were executed, remove Policy duties, or "
-                        "invent confirmed quantities, dates, certifications, or approvals. Put every "
-                        "unsupported claim in assumptions or evidence_gaps. Write every human-facing "
-                        "title, description, analysis, recommendation, evidence gap, and role report in Chinese. "
-                        "Return JSON only. "
-                        "Match this compact JSON Schema exactly: "
-                        f"{json.dumps(output_schema, ensure_ascii=False, separators=(',', ':'))}. "
-                        "Return role_reports for exactly the Policy-triggered contracts in "
-                        "required_role_reports, with no missing or extra role/dimension pair; "
-                        "if required_role_reports is empty, return an empty role_reports array. "
-                        "Keep the JSON concise: at most two short items in each benefits, risks, assumptions, "
-                        "and evidence_gaps array. Do not repeat the full evidence outside the required role reports."
-                    ),
-                },
-                {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
-            ],
-            "response_format": {"type": "json_object"},
-            "max_tokens": self._max_output_tokens,
-            "stream": False,
+    def _get_ls_params(self, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "ls_provider": "agentic-cm",
+            "ls_model_name": "deterministic-path",
         }
-        configure_thinking(
-            request, enabled=self._thinking_enabled, reasoning_effort=self._reasoning_effort
+
+    def bind_tools(self, tools: Any, *, tool_choice: Any = None, **kwargs: Any) -> BaseChatModel:
+        return self
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        return ChatResult(generations=[ChatGeneration(message=self._response(messages))])
+
+    async def _agenerate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        await asyncio.sleep(self.delay_seconds)
+        return self._generate(messages, stop=stop)
+
+    def _response(self, messages: list[BaseMessage]) -> AIMessage:
+        user_message = next(
+            message for message in reversed(messages) if isinstance(message, HumanMessage)
         )
-
-        def build_result(payload: PathAgentResult) -> PathAgentResult:
-            _require_chinese(payload)
-            _validate_result_against_context(payload, context)
-            return payload
-
-        return await request_structured_output(
-            self._endpoint,
-            request,
-            agent_label="Path Agent",
-            trace=trace,
-            step_prefix="model",
-            narration=_PATH_AGENT_NARRATION,
-            payload_model=PathAgentResult,
-            build_result=build_result,
-            repair_instruction=lambda exc: (
-                f"The previous output was invalid: {exc}. Return one non-empty JSON object "
-                "matching the exact schema, every authorized option, and exactly the "
-                "Policy-triggered required_role_reports with no extra role/dimension pair."
+        prompt = json.loads(str(user_message.content))
+        option_ids = [str(item["id"]) for item in prompt.get("authorized_options", [])]
+        option_reference = "、".join(option_ids) if option_ids else "授权候选"
+        result = PathAgentResult(
+            recommendation=(
+                f"已依据 Manifest 冻结的执行 Skill 对{option_reference}形成推荐方案草案；"
+                "尚未作出业务承诺，待责任角色按各维度确认。"
             ),
-            execution_error=AgentExecutionError,
-            output_error=AgentOutputError,
-            recoverable_output_errors=(AgentOutputError,),
+            role_reports=[
+                RoleReport(
+                    role=contract["role"],
+                    dimension=contract["dimension"],
+                    report=(
+                        f"{contract['role']}维度：推荐方案已按{contract['dimension']}对照"
+                        f"{option_reference}形成判断，但模拟查询结果仍须由"
+                        f"{contract['role']}核验后才能形成业务承诺。"
+                    ),
+                )
+                for contract in prompt["required_role_reports"]
+            ],
+        )
+        return AIMessage(
+            content="",
+            tool_calls=[{
+                "name": "PathAgentResult",
+                "args": result.model_dump(mode="json"),
+                "id": "deterministic-path-result",
+                "type": "tool_call",
+            }],
         )
 
 
@@ -470,14 +486,7 @@ def _safe_ref(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _require_chinese(result: PathAgentResult) -> None:
     values = [
-        result.summary,
-        result.recommendation.rationale,
-        *result.evidence_gaps,
-        *(
-            value
-            for option in result.options
-            for value in (option.title, option.description, *option.benefits, *option.risks, *option.assumptions)
-        ),
+        result.recommendation,
         *(value for report in result.role_reports for value in (report.role, report.dimension, report.report)),
     ]
     if any(not contains_chinese(value) for value in values):
@@ -485,16 +494,6 @@ def _require_chinese(result: PathAgentResult) -> None:
 
 
 def _validate_result_against_context(result: PathAgentResult, context: PathAgentContext) -> None:
-    option_ids = [option.id for option in result.options]
-    unknown = set(result.recommendation.option_ids) - set(option_ids)
-    if unknown:
-        raise AgentOutputError(f"Recommendation references unknown options: {sorted(unknown)}")
-    if context.authorized_option_ids and set(option_ids) != set(context.authorized_option_ids):
-        raise AgentOutputError(
-            "Path Agent must return every Manifest-authorized option exactly once; "
-            f"missing={sorted(set(context.authorized_option_ids) - set(option_ids))}, "
-            f"unknown={sorted(set(option_ids) - set(context.authorized_option_ids))}"
-        )
     returned = {(item.role, item.dimension): item for item in result.role_reports}
     required = {(item["role"], item["dimension"]): item for item in context.required_role_reports}
     if set(returned) != set(required):
@@ -503,29 +502,46 @@ def _validate_result_against_context(result: PathAgentResult, context: PathAgent
             f"missing={sorted(set(required) - set(returned))}, "
             f"unknown={sorted(set(returned) - set(required))}"
         )
-    for key in required:
-        report = returned[key].report
-        if not all(option_id in report for option_id in context.authorized_option_ids):
-            raise AgentOutputError(f"Role report {key} must mention every authorized option")
 
 
 def path_agent_from_environment() -> PathAgentAdapter:
     adapter = agent_adapter_from_environment()
     if adapter == "deterministic":
-        return DeterministicPathAgentAdapter(
-            delay_seconds=deterministic_delay_seconds_from_environment()
+        return DeepAgentPathAdapter(
+            _DeterministicPathChatModel(
+                delay_seconds=deterministic_delay_seconds_from_environment()
+            ),
+            profile="deterministic-path/v1",
         )
     if adapter == "openai-compatible":
         llm = agent_llm_config_from_environment("path")
-        return OpenAICompatiblePathAgentAdapter(
-            os.getenv("AGENTIC_CM_LLM_API_KEY"),
+        api_key = os.getenv("AGENTIC_CM_LLM_API_KEY")
+        api_key_header = os.getenv("AGENTIC_CM_LLM_API_KEY_HEADER", "Authorization")
+        api_key_prefix = os.getenv("AGENTIC_CM_LLM_API_KEY_PREFIX", "Bearer")
+        default_headers = None
+        if api_key and api_key_header.lower() != "authorization":
+            default_headers = {
+                api_key_header: f"{api_key_prefix} {api_key}".strip()
+            }
+        max_output_tokens = int(os.getenv("AGENTIC_CM_PATH_MAX_OUTPUT_TOKENS", "6000"))
+        if max_output_tokens < 1000:
+            raise AgentError("Path Agent max output tokens must be at least 1000")
+        model = ChatOpenAI(
             model=llm.model,
             base_url=os.getenv("AGENTIC_CM_LLM_BASE_URL", ""),
-            api_key_header=os.getenv("AGENTIC_CM_LLM_API_KEY_HEADER", "Authorization"),
-            api_key_prefix=os.getenv("AGENTIC_CM_LLM_API_KEY_PREFIX", "Bearer"),
-            timeout_seconds=llm_timeout_seconds_from_environment(),
-            max_output_tokens=int(os.getenv("AGENTIC_CM_PATH_MAX_OUTPUT_TOKENS", "6000")),
-            thinking_enabled=llm.thinking_enabled,
-            reasoning_effort=llm.reasoning_effort,
+            api_key=api_key or "not-configured",
+            timeout=llm_timeout_seconds_from_environment(),
+            max_tokens=max_output_tokens,
+            default_headers=default_headers,
+            extra_body={
+                "thinking": {
+                    "type": "enabled" if llm.thinking_enabled else "disabled"
+                }
+            },
+            reasoning_effort=llm.reasoning_effort if llm.thinking_enabled else None,
+        )
+        return DeepAgentPathAdapter(
+            model,
+            profile=f"openai-compatible-path/{llm.model}",
         )
     raise AgentError(f"Unknown Path Agent adapter: {adapter}")

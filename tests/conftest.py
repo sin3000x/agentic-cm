@@ -22,7 +22,7 @@ import httpx
 import pytest
 
 from agentic_cm.orchestrator import DeterministicPlannerAdapter, PlannerOutput, PlannerPath, PlannerSkillChoice
-from agentic_cm.path_agent import DeterministicPathAgentAdapter
+from agentic_cm.path_agent import DeepAgentPathAdapter, _DeterministicPathChatModel
 from agentic_cm.repository import CaseRepository
 from agentic_cm.service import CaseService
 from agentic_cm.synthesis_agent import DeterministicSynthesisAgentAdapter
@@ -39,12 +39,18 @@ def make_service(tmp_path: Path, **overrides) -> CaseService:
     service = CaseService(
         CaseRepository(tmp_path / "test.db"),
         planner=overrides.get("planner", DeterministicPlannerAdapter()),
-        path_agent=overrides.get("path_agent", DeterministicPathAgentAdapter()),
+        path_agent=overrides.get("path_agent", deterministic_path_adapter()),
         synthesis_agent=overrides.get("synthesis_agent", DeterministicSynthesisAgentAdapter()),
         **{key: value for key, value in overrides.items() if key not in {"planner", "path_agent", "synthesis_agent"}},
     )
     service.ensure_demo_data()
     return service
+
+
+def deterministic_path_adapter() -> DeepAgentPathAdapter:
+    return DeepAgentPathAdapter(
+        _DeterministicPathChatModel(), profile="deterministic-path/v1"
+    )
 
 
 def orchestrate(service: CaseService, case_id: str = DEMO_CASE_ID):

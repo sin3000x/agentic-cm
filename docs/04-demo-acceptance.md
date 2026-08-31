@@ -12,7 +12,7 @@
 
 1. Owner 打开 `CM-2026-014`；Orchestrator 生成含提拉 / 替代 / 拆分的 Manifest。
 2. Demo UI 默认勾选物料替代；批准后只为所选 Path 建 PathAttempt 和 Commitment。
-3. Path Agent 按冻结 Skill 的 `path-options.json` 提出候选 A/B。
+3. Path Agent 依据冻结 Skill 的 `path-options` 写出中文推荐方案和角色报告。
 4. 主计划与研发并行审批，供应经理依赖二者。
 5. 全部 READY 后进入 FINAL_REVIEW；Synthesis 汇总；Owner CLOSE / KEEP_OPEN / MODIFY。
 
