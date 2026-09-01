@@ -6,12 +6,16 @@ from time import perf_counter
 
 import httpx
 import pytest
+from deepagents import create_deep_agent
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
-from langchain_core.messages import AIMessage
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
 
 from agentic_cm.agent_runtime import AgentError, AgentExecutionError, AgentOutputError
-from agentic_cm.domain import PathAgentResult, RoleReport
+from agentic_cm.domain import PathAgentResult, RoleReport, SolutionRevision
 from agentic_cm.orchestrator import (
+    DeterministicPlannerAdapter,
     planner_from_environment,
     OpenAICompatiblePlannerAdapter,
     PlannerOutput,
@@ -21,6 +25,7 @@ from agentic_cm.orchestrator import (
 from agentic_cm.path_agent import (
     DeepAgentPathAdapter,
     PathAgentContext,
+    _context_files,
     _skill_files,
     path_agent_from_environment,
 )
@@ -31,6 +36,7 @@ from agentic_cm.synthesis_agent import (
     synthesis_agent_from_environment,
 )
 from conftest import (
+    AllMatchedSkillPathsPlanner,
     DEMO_CASE_ID,
     OWNER_ACTOR,
     OWNER_ROLE,
@@ -76,6 +82,27 @@ class _OmittingRoleReportsPathAgent:
         )
 
 
+class _CapturingFunctionToolPathAgent:
+    profile = "test/capturing-function-tools"
+
+    def __init__(self) -> None:
+        self.context: PathAgentContext | None = None
+
+    async def generate(self, context, trace):
+        self.context = context
+        return PathAgentResult(
+            recommendation="建议依据冻结证据评审授权候选，尚未形成业务承诺。",
+            role_reports=[
+                RoleReport(
+                    role=item["role"],
+                    dimension=item["dimension"],
+                    report=f"{item['role']}需核验{item['dimension']}证据后确认。",
+                )
+                for item in context.required_role_reports
+            ],
+        )
+
+
 def test_deep_agent_projects_only_authorized_skills() -> None:
     context = PathAgentContext(
         case_snapshot={"description": "关键物料存在缺口。"},
@@ -95,7 +122,7 @@ def test_deep_agent_projects_only_authorized_skills() -> None:
         ),
         knowledge=(),
         authorized_options=({"id": "A", "title": "候选方案甲"},),
-        tool_results=(),
+        tool_contracts=(),
         required_role_reports=(),
         previous_solution_revision=None,
     )
@@ -116,6 +143,67 @@ def test_deep_agent_projects_only_authorized_skills() -> None:
             "标记需要主计划确认的信息。\n"
         ),
     }
+
+
+def test_deep_agent_projects_complete_read_only_context_files() -> None:
+    context = PathAgentContext(
+        case_snapshot={
+            "description": "关键物料存在缺口。",
+            "business_payload": {"gap_quantity": 18400},
+        },
+        human_proposal={
+            "author": "陈澄",
+            "role": "订单统筹经理",
+            "content": "优先评估认证范围内的替代料。",
+        },
+        path={
+            "id": "PATH-01",
+            "definition": "MaterialSubstitution",
+            "skill_selections": [{
+                "entrypoint": {"id": "material-substitution-analysis"},
+                "members": [
+                    {"id": "material-substitution-engineering-review"},
+                    {"id": "material-substitution-master-planning-review"},
+                ],
+            }],
+        },
+        execution_skills=({
+            "id": "material-substitution-analysis",
+            "description": "分析物料替代。",
+            "instructions_markdown": "读取冻结 Bundle 和证据。",
+        },),
+        knowledge=({"title": "历史案例", "content": {"summary": "认证可能返工"}},),
+        authorized_options=({"id": "A", "material_id": "MCU-X7A"},),
+        tool_contracts=(),
+        required_role_reports=({"role": "研发", "dimension": "技术可行性"},),
+        previous_solution_revision=SolutionRevision(
+            recommendation="上一版建议。",
+            role_reports=[],
+            revision=1,
+            generated_by="test/path",
+        ),
+    )
+
+    files = _context_files(context)
+
+    assert set(files) == {
+        "/skills/material-substitution-analysis/SKILL.md",
+        "/skills/material-substitution-analysis/bundle.json",
+        "/case/snapshot.json",
+        "/case/path.json",
+        "/case/human-proposal.json",
+        "/case/previous-solution-revision.json",
+        "/knowledge/context.json",
+        "/evidence/authorized-options.json",
+        "/evidence/required-role-reports.json",
+    }
+    assert json.loads(files["/skills/material-substitution-analysis/bundle.json"])["members"] == [
+        "material-substitution-engineering-review",
+        "material-substitution-master-planning-review",
+    ]
+    assert json.loads(files["/case/snapshot.json"])["business_payload"]["gap_quantity"] == 18400
+    assert json.loads(files["/knowledge/context.json"])[0]["title"] == "历史案例"
+    assert json.loads(files["/evidence/authorized-options.json"])[0]["id"] == "A"
 
 
 def test_deep_agent_returns_existing_path_result_contract() -> None:
@@ -145,7 +233,7 @@ def test_deep_agent_returns_existing_path_result_contract() -> None:
         },),
         knowledge=(),
         authorized_options=({"id": "A", "title": "候选方案甲"},),
-        tool_results=(),
+        tool_contracts=(),
         required_role_reports=(),
         previous_solution_revision=None,
     )
@@ -168,6 +256,438 @@ def test_deep_agent_returns_existing_path_result_contract() -> None:
     assert result == PathAgentResult.model_validate(payload)
 
 
+def test_deep_agent_invokes_manifest_function_tool() -> None:
+    class ToolCallingModel(BaseChatModel):
+        calls: int = 0
+        observed_tool_result: str = ""
+        observed_user_message: str = ""
+        observed_system_message: str = ""
+
+        @property
+        def _llm_type(self) -> str:
+            return "test-tool-calling-model"
+
+        def _get_ls_params(self, **kwargs):
+            return {"ls_provider": "agentic-cm", "ls_model_name": "tool-calling"}
+
+        def bind_tools(self, tools, *, tool_choice=None, **kwargs):
+            return self
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            if self.calls == 0:
+                self.observed_user_message = str(next(
+                    item.content for item in messages if isinstance(item, HumanMessage)
+                ))
+                self.observed_system_message = str(next(
+                    item.content for item in messages if isinstance(item, SystemMessage)
+                ))
+                message = AIMessage(
+                    content="",
+                    tool_calls=[{
+                        "name": "lookup_material_master",
+                        "args": {"option_id": "A"},
+                        "id": "lookup-1",
+                        "type": "tool_call",
+                    }],
+                )
+            else:
+                tool_message = next(
+                    item for item in reversed(messages) if isinstance(item, ToolMessage)
+                )
+                self.observed_tool_result = str(tool_message.content)
+                message = AIMessage(
+                    content="",
+                    tool_calls=[{
+                        "name": "PathAgentResult",
+                        "args": {
+                            "recommendation": "建议优先评审封装为 QFN-48 的候选 A。",
+                            "role_reports": [],
+                        },
+                        "id": "result-1",
+                        "type": "tool_call",
+                    }],
+                )
+            self.calls += 1
+            return ChatResult(generations=[ChatGeneration(message=message)])
+
+    context = PathAgentContext(
+        case_snapshot={"description": "关键物料存在缺口。"},
+        human_proposal=None,
+        path={"definition": "MaterialSubstitution", "skill_selections": []},
+        execution_skills=(),
+        knowledge=(),
+        authorized_options=({"id": "A"},),
+        tool_contracts=({
+            "id": "lookup_material_master",
+            "description": "查询冻结的物料主数据。",
+            "read_only": True,
+            "input_key": "option_id",
+            "records": {
+                "A": {"package": "QFN-48"},
+                "B": {"package": "BGA-64"},
+            },
+        },),
+        required_role_reports=(),
+        previous_solution_revision=None,
+    )
+    model = ToolCallingModel()
+
+    result = asyncio.run(
+        DeepAgentPathAdapter(model, profile="test/function-tools").generate(
+            context, lambda *args: None
+        )
+    )
+
+    assert result.recommendation == "建议优先评审封装为 QFN-48 的候选 A。"
+    assert '"package":"QFN-48"' in model.observed_tool_result.replace(" ", "")
+    assert model.observed_user_message == (
+        "分析当前已批准 Path。先读取 Manifest 授权的 Skill 和只读上下文文件，"
+        "按需调用可用 Function Tools，最后返回 PathAgentResult。"
+    )
+    assert "**Manifest Skills**" in model.observed_system_message
+    assert "**Skills Skills**" not in model.observed_system_message
+
+
+def test_deep_agent_trace_records_internal_turns_and_tools() -> None:
+    skill_body = "只分析 Manifest 授权的候选，并调用冻结查询。"
+
+    class InternalTraceModel(BaseChatModel):
+        calls: int = 0
+
+        @property
+        def _llm_type(self) -> str:
+            return "test-internal-trace-model"
+
+        def _get_ls_params(self, **kwargs):
+            return {"ls_provider": "agentic-cm", "ls_model_name": "internal-trace"}
+
+        def bind_tools(self, tools, *, tool_choice=None, **kwargs):
+            return self
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            if self.calls == 0:
+                message = AIMessage(
+                    content="",
+                    tool_calls=[{
+                        "name": "read_file",
+                        "args": {"file_path": "/skills/material-analysis/SKILL.md"},
+                        "id": "read-skill",
+                        "type": "tool_call",
+                    }, {
+                        "name": "lookup_material_master",
+                        "args": {"option_id": "A"},
+                        "id": "lookup-1",
+                        "type": "tool_call",
+                    }],
+                )
+            else:
+                message = AIMessage(
+                    content="",
+                    tool_calls=[{
+                        "name": "PathAgentResult",
+                        "args": {
+                            "recommendation": "建议依据冻结物料主数据评审候选 A，尚未形成业务承诺。",
+                            "role_reports": [],
+                        },
+                        "id": "result-1",
+                        "type": "tool_call",
+                    }],
+                )
+            self.calls += 1
+            return ChatResult(generations=[ChatGeneration(message=message)])
+
+    context = PathAgentContext(
+        case_snapshot={"description": "关键物料存在缺口。"},
+        human_proposal=None,
+        path={"definition": "MaterialSubstitution"},
+        execution_skills=({
+            "id": "material-analysis",
+            "description": "分析替代物料。",
+            "instructions_markdown": skill_body,
+        },),
+        knowledge=(),
+        authorized_options=({"id": "A"},),
+        tool_contracts=({
+            "id": "lookup_material_master",
+            "description": "查询冻结的物料主数据。",
+            "read_only": True,
+            "input_key": "option_id",
+            "records": {"A": {"package": "QFN-48"}},
+        },),
+        required_role_reports=(),
+        previous_solution_revision=None,
+    )
+    traces: list[tuple] = []
+
+    result = asyncio.run(
+        DeepAgentPathAdapter(InternalTraceModel(), profile="test/internal-trace").generate(
+            context, lambda *args: traces.append(args)
+        )
+    )
+
+    steps = [item[0] for item in traces]
+    started = traces[0][3]
+    assert traces[0][0:2] == ("deepagent.runtime.started", "STARTED")
+    assert started["skills"] == ["material-analysis"]
+    assert started["recursion_limit"] == 20
+    assert "deepagent.turn.started" in steps
+    assert "deepagent.tool.started" in steps
+
+    read_events = [
+        item[3] for item in traces
+        if item[0] == "deepagent.tool.completed" and item[3].get("tool") == "read_file"
+    ]
+    assert read_events[0]["input"]["file_path"] == "/skills/material-analysis/SKILL.md"
+    assert read_events[0]["output"]["chars"] > 0
+    assert skill_body not in json.dumps(traces, ensure_ascii=False)
+
+    lookup_events = [
+        item[3] for item in traces
+        if item[0] == "deepagent.tool.completed" and item[3].get("tool") == "lookup_material_master"
+    ]
+    assert lookup_events == [{
+        "tool": "lookup_material_master",
+        "input": {"option_id": "A"},
+        "output": {"package": "QFN-48"},
+    }]
+
+    final = traces[-1]
+    assert final[0:2] == ("deepagent.model.completed", "COMPLETED")
+    assert final[3]["turns"] == 2
+    assert set(final[3]["token_usage"]) == {
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+    }
+    assert final[3]["result"]["role_report_count"] == 0
+    assert "recommendation" not in final[3]["result"]
+    assert result.recommendation not in json.dumps(final[3], ensure_ascii=False)
+
+
+def test_manifest_function_tool_rejects_unauthorized_option() -> None:
+    class UnauthorizedToolModel(BaseChatModel):
+        calls: int = 0
+        tool_error: str = ""
+
+        @property
+        def _llm_type(self) -> str:
+            return "test-unauthorized-tool-model"
+
+        def _get_ls_params(self, **kwargs):
+            return {"ls_provider": "agentic-cm", "ls_model_name": "unauthorized-tool"}
+
+        def bind_tools(self, tools, *, tool_choice=None, **kwargs):
+            return self
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            if self.calls == 0:
+                message = AIMessage(
+                    content="",
+                    tool_calls=[{
+                        "name": "lookup_material_master",
+                        "args": {"option_id": "B"},
+                        "id": "lookup-unauthorized",
+                        "type": "tool_call",
+                    }],
+                )
+            else:
+                self.tool_error = str(next(
+                    item.content for item in reversed(messages) if isinstance(item, ToolMessage)
+                ))
+                message = AIMessage(
+                    content="",
+                    tool_calls=[{
+                        "name": "PathAgentResult",
+                        "args": {"recommendation": "未使用未授权候选。", "role_reports": []},
+                        "id": "result-1",
+                        "type": "tool_call",
+                    }],
+                )
+            self.calls += 1
+            return ChatResult(generations=[ChatGeneration(message=message)])
+
+    context = PathAgentContext(
+        case_snapshot={},
+        human_proposal=None,
+        path={"definition": "MaterialSubstitution"},
+        execution_skills=(),
+        knowledge=(),
+        authorized_options=({"id": "A"},),
+        tool_contracts=({
+            "id": "lookup_material_master",
+            "description": "查询冻结的物料主数据。",
+            "read_only": True,
+            "input_key": "option_id",
+            "records": {
+                "A": {"package": "QFN-48"},
+                "B": {"package": "BGA-64"},
+            },
+        },),
+        required_role_reports=(),
+        previous_solution_revision=None,
+    )
+    model = UnauthorizedToolModel()
+    traces: list[tuple] = []
+
+    with pytest.raises(AgentExecutionError, match="unauthorized option 'B'"):
+        asyncio.run(
+            DeepAgentPathAdapter(model, profile="test/unauthorized-tool").generate(
+                context, lambda *args: traces.append(args)
+            )
+        )
+
+    failed_tools = [
+        item[3] for item in traces
+        if item[0] == "deepagent.tool.failed" and item[3].get("tool") == "lookup_material_master"
+    ]
+    assert failed_tools[0]["input"] == {"option_id": "B"}
+    assert "unauthorized option 'B'" in failed_tools[0]["error"]
+
+
+def test_deep_agent_denies_reads_outside_manifest_context() -> None:
+    class OutsideReadModel(BaseChatModel):
+        calls: int = 0
+        read_result: str = ""
+
+        @property
+        def _llm_type(self) -> str:
+            return "test-outside-read-model"
+
+        def _get_ls_params(self, **kwargs):
+            return {"ls_provider": "agentic-cm", "ls_model_name": "outside-read"}
+
+        def bind_tools(self, tools, *, tool_choice=None, **kwargs):
+            return self
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            if self.calls == 0:
+                message = AIMessage(
+                    content="",
+                    tool_calls=[{
+                        "name": "read_file",
+                        "args": {"file_path": "/outside.txt"},
+                        "id": "read-1",
+                        "type": "tool_call",
+                    }],
+                )
+            else:
+                self.read_result = str(next(
+                    item.content for item in reversed(messages) if isinstance(item, ToolMessage)
+                ))
+                message = AIMessage(
+                    content="",
+                    tool_calls=[{
+                        "name": "PathAgentResult",
+                        "args": {"recommendation": "未读取授权范围外文件。", "role_reports": []},
+                        "id": "result-1",
+                        "type": "tool_call",
+                    }],
+                )
+            self.calls += 1
+            return ChatResult(generations=[ChatGeneration(message=message)])
+
+    context = PathAgentContext(
+        case_snapshot={},
+        human_proposal=None,
+        path={"definition": "OrderSplit"},
+        execution_skills=(),
+        knowledge=(),
+        authorized_options=(),
+        tool_contracts=(),
+        required_role_reports=(),
+        previous_solution_revision=None,
+    )
+    model = OutsideReadModel()
+
+    asyncio.run(
+        DeepAgentPathAdapter(model, profile="test/permissions").generate(
+            context, lambda *args: None
+        )
+    )
+
+    assert "permission denied for read on /outside.txt" in model.read_result
+
+
+def test_deep_agent_reuses_graph_without_reusing_frozen_tool_records() -> None:
+    class ReusableToolModel(BaseChatModel):
+        observed_results: list[str] = []
+
+        @property
+        def _llm_type(self) -> str:
+            return "test-reusable-tool-model"
+
+        def _get_ls_params(self, **kwargs):
+            return {"ls_provider": "agentic-cm", "ls_model_name": "reusable-tool"}
+
+        def bind_tools(self, tools, *, tool_choice=None, **kwargs):
+            return self
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            tool_messages = [item for item in messages if isinstance(item, ToolMessage)]
+            if not tool_messages:
+                message = AIMessage(
+                    content="",
+                    tool_calls=[{
+                        "name": "lookup_material_master",
+                        "args": {"option_id": "A"},
+                        "id": "lookup-1",
+                        "type": "tool_call",
+                    }],
+                )
+            else:
+                self.observed_results.append(str(tool_messages[-1].content))
+                message = AIMessage(
+                    content="",
+                    tool_calls=[{
+                        "name": "PathAgentResult",
+                        "args": {"recommendation": "已读取本次冻结记录。", "role_reports": []},
+                        "id": "result-1",
+                        "type": "tool_call",
+                    }],
+                )
+            return ChatResult(generations=[ChatGeneration(message=message)])
+
+    def context_with_package(package: str) -> PathAgentContext:
+        return PathAgentContext(
+            case_snapshot={},
+            human_proposal=None,
+            path={"definition": "MaterialSubstitution"},
+            execution_skills=(),
+            knowledge=(),
+            authorized_options=({"id": "A"},),
+            tool_contracts=({
+                "id": "lookup_material_master",
+                "description": "查询冻结的物料主数据。",
+                "read_only": True,
+                "input_key": "option_id",
+                "records": {"A": {"package": package}},
+            },),
+            required_role_reports=(),
+            previous_solution_revision=None,
+        )
+
+    compile_count = 0
+
+    def counting_graph_factory(**kwargs):
+        nonlocal compile_count
+        compile_count += 1
+        return create_deep_agent(**kwargs)
+
+    model = ReusableToolModel()
+    adapter = DeepAgentPathAdapter(
+        model,
+        profile="test/graph-cache",
+        graph_factory=counting_graph_factory,
+    )
+
+    asyncio.run(adapter.generate(context_with_package("QFN-48"), lambda *args: None))
+    asyncio.run(adapter.generate(context_with_package("LGA-64"), lambda *args: None))
+
+    assert compile_count == 1
+    assert '"package":"QFN-48"' in model.observed_results[0].replace(" ", "")
+    assert '"package":"LGA-64"' in model.observed_results[1].replace(" ", "")
+
+
 def test_deep_agent_maps_model_failure_to_execution_error() -> None:
     class FailingModel(FakeMessagesListChatModel):
         def bind_tools(self, tools, *, tool_choice=None, **kwargs):
@@ -186,7 +706,7 @@ def test_deep_agent_maps_model_failure_to_execution_error() -> None:
         execution_skills=(),
         knowledge=(),
         authorized_options=({"id": "A", "title": "候选方案甲"},),
-        tool_results=(),
+        tool_contracts=(),
         required_role_reports=(),
         previous_solution_revision=None,
     )
@@ -221,7 +741,7 @@ def test_deep_agent_rejects_missing_structured_response() -> None:
         execution_skills=(),
         knowledge=(),
         authorized_options=({"id": "A", "title": "候选方案甲"},),
-        tool_results=(),
+        tool_contracts=(),
         required_role_reports=(),
         previous_solution_revision=None,
     )
@@ -235,7 +755,7 @@ def test_deep_agent_rejects_missing_structured_response() -> None:
         )
 
 
-def test_deep_agent_traces_rejected_semantic_output() -> None:
+def test_deep_agent_leaves_semantic_output_validation_to_path_agent() -> None:
     class ScriptedModel(FakeMessagesListChatModel):
         def bind_tools(self, tools, *, tool_choice=None, **kwargs):
             return self
@@ -254,7 +774,7 @@ def test_deep_agent_traces_rejected_semantic_output() -> None:
         execution_skills=(),
         knowledge=(),
         authorized_options=({"id": "A"}, {"id": "B"}),
-        tool_results=(),
+        tool_contracts=(),
         required_role_reports=({
             "role": "主计划",
             "dimension": "供应与交付可行性",
@@ -272,17 +792,14 @@ def test_deep_agent_traces_rejected_semantic_output() -> None:
     )])
     traces = []
 
-    with pytest.raises(AgentOutputError):
-        asyncio.run(
-            DeepAgentPathAdapter(model, profile="test/invalid-report").generate(
-                context, lambda *args: traces.append(args)
-            )
+    result = asyncio.run(
+        DeepAgentPathAdapter(model, profile="test/invalid-report").generate(
+            context, lambda *args: traces.append(args)
         )
+    )
 
-    details = traces[-1][3]
-    assert details["error_type"] == "AgentOutputError"
-    assert "missing=" in details["error"]
-    assert details["rejected_result"] == payload
+    assert result == PathAgentResult.model_validate(payload)
+    assert traces[-1][0:2] == ("deepagent.model.completed", "COMPLETED")
 
 
 def test_deterministic_mode_delays_every_agent_stage(
@@ -362,7 +879,41 @@ def test_path_agent_cannot_omit_required_role_reports(tmp_path: Path) -> None:
     assert case.path_attempts[0].solution_revision is None
 
 
-def test_path_agent_context_projects_only_generation_inputs() -> None:
+def test_path_agent_registers_frozen_tools_without_precomputing_results(tmp_path: Path) -> None:
+    adapter = _CapturingFunctionToolPathAgent()
+    service = make_service(
+        tmp_path,
+        planner=AllMatchedSkillPathsPlanner(),
+        path_agent=adapter,
+    )
+    orchestrate(service)
+    service.approve_manifest(
+        DEMO_CASE_ID, ["PATH-01"], actor=OWNER_ACTOR, role=OWNER_ROLE
+    )
+
+    asyncio.run(
+        service.execute_path(
+            DEMO_CASE_ID, "PATH-01", actor=OWNER_ACTOR, role=OWNER_ROLE
+        )
+    )
+
+    assert adapter.context is not None
+    assert {tool["id"] for tool in adapter.context.tool_contracts} == {
+        "lookup_material_master",
+        "lookup_supply_snapshot",
+        "lookup_customer_acceptance",
+    }
+    assert not hasattr(adapter.context, "tool_results")
+    path_run = service.get_agent_runs(
+        DEMO_CASE_ID,
+        actor=OWNER_ACTOR,
+        role=OWNER_ROLE,
+        agent_type="path",
+    )[0]
+    assert "tools.query" not in {event["step"] for event in path_run["events"]}
+
+
+def test_path_agent_context_files_project_only_generation_inputs() -> None:
     context = PathAgentContext(
         case_snapshot={
             "title": "订单延期",
@@ -402,54 +953,39 @@ def test_path_agent_context_projects_only_generation_inputs() -> None:
             "content": {"summary": "客户认证可能造成返工。"},
         },),
         authorized_options=({"id": "A", "material_id": "MCU-X7A"},),
-        tool_results=({
-            "tool_id": "mock.lookup",
+        tool_contracts=({
+            "id": "lookup_supply_snapshot",
             "description": "查询冻结快照。",
             "read_only": True,
-            "input": {"option_id": "A"},
-            "output": {"available_quantity": 100},
-            "source_skill": {"id": "material-substitution-analysis"},
-        }, {
-            "tool_id": "mock.lookup",
-            "description": "查询冻结快照。",
-            "read_only": True,
-            "input": {"option_id": "B"},
-            "output": {"available_quantity": 80},
-            "source_skill": {"id": "material-substitution-analysis"},
-        }),
+            "input_key": "option_id",
+            "records": {
+                "A": {"available_quantity": 100},
+                "B": {"available_quantity": 80},
+            },
+        },),
         required_role_reports=({"role": "主计划", "dimension": "供应可行性"},),
         previous_solution_revision=None,
     )
 
-    payload = context.prompt_payload()
+    files = _context_files(context)
 
-    assert payload["human_proposal"] == {
+    assert json.loads(files["/case/human-proposal.json"]) == {
         "author": "陈澄",
         "role": "订单统筹经理",
         "content": "优先评估认证范围内的替代料。",
     }
-    assert payload["execution_skills"] == [{
-        "id": "material-substitution-analysis",
-    }]
-    assert payload["knowledge"] == [{
+    assert json.loads(files["/knowledge/context.json"]) == [{
         "title": "历史观察",
         "knowledge_type": "experience",
         "source": {"type": "closed_case"},
         "confidence": "medium",
         "content": {"summary": "客户认证可能造成返工。"},
     }]
-    assert payload["tool_results"] == [{
-        "tool_id": "mock.lookup",
-        "records": {
-            "A": {"available_quantity": 100},
-            "B": {"available_quantity": 80},
-        },
-        "description": "查询冻结快照。",
-    }]
-    assert "id" not in payload["case_snapshot"]
-    assert "title" not in payload["case_snapshot"]
-    assert "classification" not in payload["case_snapshot"]
-    assert "path" not in payload
+    snapshot = json.loads(files["/case/snapshot.json"])
+    assert "id" not in snapshot
+    assert "title" not in snapshot
+    assert "classification" not in snapshot
+    assert not any("tool-results" in path for path in files)
     with pytest.raises(FrozenInstanceError):
         context.path = {}
 
@@ -543,6 +1079,7 @@ def test_synthesis_repairs_paraphrased_artifact_refs(tmp_path: Path) -> None:
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
             service = CaseService(
                 CaseRepository(tmp_path / "test.db"),
+                planner=DeterministicPlannerAdapter(),
                 path_agent=deterministic_path_adapter(),
                 synthesis_agent=OpenAICompatibleSynthesisAgentAdapter(
                     "synthesis-secret",

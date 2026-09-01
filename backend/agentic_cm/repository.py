@@ -93,6 +93,7 @@ class CaseRepository:
         details: dict[str, Any] | None = None,
     ) -> None:
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 "SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence "
                 "FROM agent_trace_events WHERE run_id = ?",

@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from copy import deepcopy
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -17,6 +18,7 @@ SELECTOR_FIELDS = frozenset({"case_type", "path_definition"})
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BUILTIN_ROOT = REPOSITORY_ROOT / "capabilities" / "builtin"
 DEFAULT_LOCAL_ROOT = REPOSITORY_ROOT / ".agentic-cm" / "capabilities"
+FUNCTION_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 
 
 class CapabilityConfigurationError(ValueError):
@@ -408,6 +410,14 @@ class CapabilityRegistry:
                     or not isinstance(item.get("records"), dict)
                 ):
                     raise CapabilityConfigurationError(f"Invalid read-only Skill tool: {tools_file}")
+                if not FUNCTION_NAME_PATTERN.fullmatch(item["id"]):
+                    raise CapabilityConfigurationError(
+                        f"Skill tool id must be a valid function name: {tools_file}"
+                    )
+                if not FUNCTION_NAME_PATTERN.fullmatch(item["input_key"]):
+                    raise CapabilityConfigurationError(
+                        f"Skill tool input_key must be a valid function name: {tools_file}"
+                    )
                 tools.append(deepcopy(item))
             if len({item["id"] for item in tools}) != len(tools):
                 raise CapabilityConfigurationError(f"Skill tool ids must be unique: {tools_file}")

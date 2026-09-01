@@ -3,28 +3,35 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from dataclasses import dataclass
-from typing import Any, Protocol
+from threading import Lock
+from typing import Any, Callable, Protocol
+from uuid import UUID
 
-from deepagents import create_deep_agent
+from deepagents import FilesystemPermission, create_deep_agent
 from deepagents.backends import StateBackend
 from deepagents.backends.utils import create_file_data
+from deepagents.graph import DeepAgentState
 from deepagents.profiles import (
     GeneralPurposeSubagentProfile,
     HarnessProfile,
     register_harness_profile,
 )
 from langchain.agents.structured_output import ToolStrategy
+from langchain.tools import ToolRuntime
 from langchain_core.callbacks import (
     AsyncCallbackManagerForLLMRun,
+    BaseCallbackHandler,
     CallbackManagerForLLMRun,
 )
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
-from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.outputs import ChatGeneration, ChatResult, LLMResult
+from langchain_core.tools import BaseTool, StructuredTool, ToolException
 from langchain_openai import ChatOpenAI
 from langgraph.errors import GraphRecursionError
-from pydantic import ValidationError
+from pydantic import ValidationError, create_model
 
 from .agent_runtime import (
     AgentError,
@@ -52,21 +59,48 @@ from .domain import (
 
 _PATH_AGENT_SYSTEM_PROMPT = (
     "You are a Path Agent assembled only from an approved Manifest snapshot. "
-    "Read and follow the authorized Skills available under /skills before producing a result. "
-    "Treat Knowledge as advisory, never as current Case fact. Write one Chinese recommendation "
-    "for this Path. Do not make business commitments, claim actions were executed, remove Policy "
-    "duties, or invent confirmed quantities, dates, certifications, or approvals. "
-    "Return role_reports for exactly the contracts in required_role_reports, with no missing or "
-    "extra role/dimension pair; each report explains why this recommendation should be approved "
-    "from that role's dimension and what that role still needs to confirm."
+    "Read and follow the authorized Skills under /skills, and read only the projected Case, "
+    "Knowledge, and evidence files. Call the registered read-only Function Tools when a Skill "
+    "requires current frozen records. Treat Knowledge as advisory, never as current Case fact. "
+    "Write one Chinese recommendation for this Path. Do not make business commitments, claim "
+    "actions were executed, remove Policy duties, or invent confirmed quantities, dates, "
+    "certifications, or approvals. Return role_reports for exactly the contracts in "
+    "/evidence/required-role-reports.json, with no missing or extra role/dimension pair; each "
+    "report explains why this recommendation should be approved from that role's dimension and "
+    "what that role still needs to confirm."
 )
+
+_PATH_AGENT_USER_TASK = (
+    "分析当前已批准 Path。先读取 Manifest 授权的 Skill 和只读上下文文件，"
+    "按需调用可用 Function Tools，最后返回 PathAgentResult。"
+)
+
+_PATH_FILESYSTEM_PERMISSIONS = [
+    FilesystemPermission(
+        operations=["read"],
+        paths=["/skills/**", "/case/**", "/knowledge/**", "/evidence/**"],
+        mode="allow",
+    ),
+    FilesystemPermission(operations=["read"], paths=["/**"], mode="deny"),
+    FilesystemPermission(operations=["write"], paths=["/**"], mode="deny"),
+]
 
 _PATH_HARNESS_PROFILE = HarnessProfile(
     excluded_tools=frozenset({"write_file", "edit_file", "delete", "execute"}),
     general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
 )
-for _provider in ("agentic-cm", "openai"):
-    register_harness_profile(_provider, _PATH_HARNESS_PROFILE)
+register_harness_profile("agentic-cm", _PATH_HARNESS_PROFILE)
+
+_PATH_RECURSION_LIMIT = 20
+_FILESYSTEM_TOOLS = frozenset({"ls", "read_file", "glob", "grep"})
+_STRUCTURED_OUTPUT_TOOLS = frozenset({"PathAgentResult"})
+
+
+class _PathChatOpenAI(ChatOpenAI):
+    def _get_ls_params(self, **kwargs: Any) -> dict[str, Any]:
+        params = super()._get_ls_params(**kwargs)
+        params["ls_provider"] = "agentic-cm"
+        return params
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,66 +111,23 @@ class PathAgentContext:
     execution_skills: tuple[dict[str, Any], ...]
     knowledge: tuple[dict[str, Any], ...]
     authorized_options: tuple[dict[str, Any], ...]
-    tool_results: tuple[dict[str, Any], ...]
+    tool_contracts: tuple[dict[str, Any], ...]
     required_role_reports: tuple[dict[str, str], ...]
     previous_solution_revision: SolutionRevision | None
-
-    def prompt_payload(self) -> dict[str, Any]:
-        grouped_tool_results: list[dict[str, Any]] = []
-        tools_by_id: dict[str, dict[str, Any]] = {}
-        for result in self.tool_results:
-            tool_id = str(result["tool_id"])
-            tool = tools_by_id.get(tool_id)
-            if tool is None:
-                tool = {"tool_id": tool_id, "records": {}}
-                if "description" in result:
-                    tool["description"] = result["description"]
-                tools_by_id[tool_id] = tool
-                grouped_tool_results.append(tool)
-            option_id = next(iter(result["input"].values()))
-            tool["records"][str(option_id)] = result["output"]
-
-        payload: dict[str, Any] = {
-            "case_snapshot": {
-                key: self.case_snapshot[key]
-                for key in ("description", "business_payload")
-                if key in self.case_snapshot
-            },
-            "execution_skills": [
-                {"id": skill["id"]}
-                for skill in self.execution_skills
-            ],
-            "knowledge": [
-                {
-                    key: item[key]
-                    for key in (
-                        "title", "knowledge_type",
-                        "source", "confidence", "content",
-                    )
-                    if key in item
-                }
-                for item in self.knowledge
-            ],
-            "authorized_options": list(self.authorized_options),
-            "tool_results": grouped_tool_results,
-            "required_role_reports": list(self.required_role_reports),
-        }
-        if self.human_proposal is not None:
-            payload["human_proposal"] = {
-                key: self.human_proposal[key]
-                for key in ("author", "role", "content")
-                if key in self.human_proposal
-            }
-        if self.previous_solution_revision is not None:
-            payload["previous_solution_revision"] = self.previous_solution_revision.model_dump(
-                mode="json",
-                include={"recommendation", "role_reports"},
-            )
-        return payload
 
 
 class PathAgentAdapter(Protocol):
     async def generate(self, context: PathAgentContext, trace: AgentTraceSink) -> PathAgentResult: ...
+
+
+class _PathAgentState(DeepAgentState):
+    path_tool_records: dict[str, dict[str, Any]]
+    authorized_option_ids: list[str]
+
+
+@dataclass(frozen=True)
+class _PathRuntimeContext:
+    trace: AgentTraceSink
 
 
 def _skill_files(context: PathAgentContext) -> dict[str, str]:
@@ -150,6 +141,113 @@ def _skill_files(context: PathAgentContext) -> dict[str, str]:
         )
         for skill in context.execution_skills
     }
+
+
+def _context_files(context: PathAgentContext) -> dict[str, str]:
+    files = _skill_files(context)
+    for selection in context.path.get("skill_selections", []):
+        entrypoint = selection.get("entrypoint", {})
+        entrypoint_id = entrypoint.get("id")
+        if not isinstance(entrypoint_id, str) or not entrypoint_id:
+            continue
+        member_ids = [
+            member["id"]
+            for member in selection.get("members", [])
+            if isinstance(member, dict)
+            and isinstance(member.get("id"), str)
+            and member["id"]
+        ]
+        files[f"/skills/{entrypoint_id}/bundle.json"] = json.dumps(
+            {"entrypoint": entrypoint_id, "members": member_ids},
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    def add_json(path: str, value: Any) -> None:
+        files[path] = json.dumps(value, ensure_ascii=False, indent=2)
+
+    add_json(
+        "/case/snapshot.json",
+        {
+            key: context.case_snapshot[key]
+            for key in ("description", "business_payload")
+            if key in context.case_snapshot
+        },
+    )
+    add_json(
+        "/case/path.json",
+        {
+            key: context.path[key]
+            for key in ("id", "definition", "title", "rationale")
+            if key in context.path
+        },
+    )
+    if context.human_proposal is not None:
+        add_json(
+            "/case/human-proposal.json",
+            {
+                key: context.human_proposal[key]
+                for key in ("author", "role", "content")
+                if key in context.human_proposal
+            },
+        )
+    if context.previous_solution_revision is not None:
+        add_json(
+            "/case/previous-solution-revision.json",
+            context.previous_solution_revision.model_dump(
+                mode="json", include={"recommendation", "role_reports"}
+            ),
+        )
+    add_json(
+        "/knowledge/context.json",
+        [
+            {
+                key: item[key]
+                for key in ("title", "knowledge_type", "source", "confidence", "content")
+                if key in item
+            }
+            for item in context.knowledge
+        ],
+    )
+    add_json("/evidence/authorized-options.json", list(context.authorized_options))
+    add_json("/evidence/required-role-reports.json", list(context.required_role_reports))
+    return files
+
+
+def _function_tools(context: PathAgentContext) -> tuple[BaseTool, ...]:
+    def build_tool(contract: dict[str, Any]) -> BaseTool:
+        tool_id = str(contract["id"])
+        input_key = str(contract["input_key"])
+        args_schema = create_model(
+            f"{''.join(part.title() for part in tool_id.split('_'))}Input",
+            **{input_key: (str, ...)},
+        )
+
+        def query(
+            runtime: ToolRuntime[_PathRuntimeContext, _PathAgentState],
+            **arguments: str,
+        ) -> dict[str, Any]:
+            option_id = arguments[input_key]
+            authorized_ids = set(runtime.state["authorized_option_ids"])
+            records = runtime.state["path_tool_records"][tool_id]
+            if option_id not in authorized_ids:
+                raise ToolException(
+                    f"Tool {tool_id} cannot query unauthorized option {option_id!r}"
+                )
+            if option_id not in records:
+                raise ToolException(
+                    f"Tool {tool_id} has no frozen record for option {option_id!r}"
+                )
+            return records[option_id]
+
+        return StructuredTool.from_function(
+            func=query,
+            name=tool_id,
+            description=str(contract["description"]),
+            args_schema=args_schema,
+        )
+
+    return tuple(build_tool(contract) for contract in context.tool_contracts)
 
 
 def _truncate_error(value: str, *, limit: int = 4000) -> str:
@@ -170,59 +268,363 @@ def _exception_trace_details(exc: BaseException) -> dict[str, Any]:
     return details
 
 
+def _tool_name(serialized: dict[str, Any] | None, kwargs: dict[str, Any]) -> str:
+    name = kwargs.get("name") or (serialized or {}).get("name")
+    return str(name or "")
+
+
+def _json_content(value: Any) -> Any:
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return value
+    return value
+
+
+def _tool_output_content(output: Any) -> Any:
+    if isinstance(output, ToolMessage):
+        return _json_content(output.content)
+    if hasattr(output, "content"):
+        return _json_content(output.content)
+    return _json_content(output)
+
+
+def _summarize_tool_input(name: str, inputs: dict[str, Any] | None, input_str: str) -> dict[str, Any]:
+    payload = dict(inputs) if isinstance(inputs, dict) else {}
+    if not payload and input_str:
+        payload = {"input": input_str}
+    if name in _FILESYSTEM_TOOLS:
+        allowed = ("file_path", "path", "pattern", "offset", "limit")
+        return {key: payload[key] for key in allowed if key in payload}
+    return payload
+
+
+def _summarize_tool_output(name: str, output: Any) -> Any:
+    content = _tool_output_content(output)
+    if name in _FILESYSTEM_TOOLS:
+        text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+        return {"chars": len(text), "lines": text.count("\n") + (1 if text else 0)}
+    return content
+
+
+def _tool_call_summaries(message: BaseMessage | None) -> list[dict[str, Any]]:
+    if not isinstance(message, AIMessage):
+        return []
+    summaries: list[dict[str, Any]] = []
+    for call in message.tool_calls or []:
+        name = str(call.get("name") or "")
+        item: dict[str, Any] = {"name": name}
+        if name not in _STRUCTURED_OUTPUT_TOOLS:
+            args = call.get("args")
+            if isinstance(args, dict):
+                item["input"] = _summarize_tool_input(name, args, "")
+        summaries.append(item)
+    return summaries
+
+
+def _usage_from_llm_result(response: LLMResult) -> dict[str, int]:
+    usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    llm_output = response.llm_output or {}
+    raw = llm_output.get("token_usage") or llm_output.get("usage") or {}
+    if isinstance(raw, dict):
+        usage["prompt_tokens"] = int(raw.get("prompt_tokens") or raw.get("input_tokens") or 0)
+        usage["completion_tokens"] = int(
+            raw.get("completion_tokens") or raw.get("output_tokens") or 0
+        )
+        usage["total_tokens"] = int(raw.get("total_tokens") or 0)
+    generations = response.generations[0] if response.generations else []
+    message = generations[0].message if generations else None
+    metadata = getattr(message, "usage_metadata", None) or {}
+    if isinstance(metadata, dict) and metadata:
+        usage["prompt_tokens"] = int(metadata.get("input_tokens") or usage["prompt_tokens"])
+        usage["completion_tokens"] = int(
+            metadata.get("output_tokens") or usage["completion_tokens"]
+        )
+        usage["total_tokens"] = int(metadata.get("total_tokens") or usage["total_tokens"])
+    if usage["total_tokens"] == 0:
+        usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
+    return usage
+
+
+def _result_trace_details(
+    result: PathAgentResult, callback: "_DeepAgentTraceCallback"
+) -> dict[str, Any]:
+    return {
+        "turns": callback.turns,
+        "token_usage": {
+            "prompt_tokens": callback.prompt_tokens,
+            "completion_tokens": callback.completion_tokens,
+            "total_tokens": callback.total_tokens,
+        },
+        "result": {
+            "recommendation_chars": len(result.recommendation),
+            "role_report_count": len(result.role_reports),
+            "roles": [item.role for item in result.role_reports],
+        },
+    }
+
+
+class _DeepAgentTraceCallback(BaseCallbackHandler):
+    """Bridge LangGraph/Deep Agents callbacks into the product AgentRun trace.
+
+    Official Deep Agents tracing ships to LangSmith. This handler keeps the same
+    internal events in `agent_trace_events` without that dependency, and never
+    records hidden reasoning or full virtual-file bodies.
+    """
+
+    raise_error = True
+
+    def __init__(self, trace: AgentTraceSink) -> None:
+        super().__init__()
+        self._trace = trace
+        self._lock = Lock()
+        self._pending_tools: dict[str, dict[str, Any]] = {}
+        self.turns = 0
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.total_tokens = 0
+
+    def on_chat_model_start(
+        self,
+        serialized: dict[str, Any],
+        messages: list[list[BaseMessage]],
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,
+        tags: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        with self._lock:
+            self.turns += 1
+            turn = self.turns
+        self._trace(
+            "deepagent.turn.started",
+            "STARTED",
+            "Deep Agents 模型轮次开始",
+            {"turn": turn},
+        )
+
+    def on_llm_end(
+        self,
+        response: LLMResult,
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,
+        **kwargs: Any,
+    ) -> None:
+        usage = _usage_from_llm_result(response)
+        generations = response.generations[0] if response.generations else []
+        message = generations[0].message if generations else None
+        with self._lock:
+            self.prompt_tokens += usage["prompt_tokens"]
+            self.completion_tokens += usage["completion_tokens"]
+            self.total_tokens += usage["total_tokens"]
+            turn = self.turns
+        self._trace(
+            "deepagent.turn.completed",
+            "COMPLETED",
+            "Deep Agents 模型轮次完成",
+            {
+                "turn": turn,
+                "token_usage": usage,
+                "tool_calls": _tool_call_summaries(message),
+            },
+        )
+
+    def on_llm_error(
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,
+        **kwargs: Any,
+    ) -> None:
+        with self._lock:
+            turn = self.turns
+        self._trace(
+            "deepagent.turn.failed",
+            "FAILED",
+            "Deep Agents 模型轮次失败",
+            {"turn": turn, **_exception_trace_details(error)},
+        )
+
+    def on_tool_start(
+        self,
+        serialized: dict[str, Any],
+        input_str: str,
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,
+        tags: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+        inputs: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        name = _tool_name(serialized, kwargs)
+        if name in _STRUCTURED_OUTPUT_TOOLS:
+            return
+        tool_input = _summarize_tool_input(name, inputs, input_str)
+        with self._lock:
+            self._pending_tools[str(run_id)] = {"name": name, "input": tool_input}
+        self._trace(
+            "deepagent.tool.started",
+            "STARTED",
+            "Deep Agents 调用只读工具",
+            {"tool": name, "input": tool_input},
+        )
+
+    def on_tool_end(
+        self,
+        output: Any,
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,
+        **kwargs: Any,
+    ) -> None:
+        with self._lock:
+            pending = self._pending_tools.pop(str(run_id), {})
+        name = str(pending.get("name") or _tool_name(None, kwargs))
+        if name in _STRUCTURED_OUTPUT_TOOLS:
+            return
+        details: dict[str, Any] = {
+            "tool": name,
+            "output": _summarize_tool_output(name, output),
+        }
+        if "input" in pending:
+            details["input"] = pending["input"]
+        self._trace(
+            "deepagent.tool.completed",
+            "COMPLETED",
+            "Deep Agents 只读工具返回",
+            details,
+        )
+
+    def on_tool_error(
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,
+        **kwargs: Any,
+    ) -> None:
+        with self._lock:
+            pending = self._pending_tools.pop(str(run_id), {})
+        name = str(pending.get("name") or _tool_name(None, kwargs))
+        if name in _STRUCTURED_OUTPUT_TOOLS:
+            return
+        details = {"tool": name, **_exception_trace_details(error)}
+        if "input" in pending:
+            details["input"] = pending["input"]
+        self._trace(
+            "deepagent.tool.failed",
+            "FAILED",
+            "Deep Agents 只读工具失败",
+            details,
+        )
+
+
 class DeepAgentPathAdapter:
-    def __init__(self, model: BaseChatModel, *, profile: str) -> None:
+    def __init__(
+        self,
+        model: BaseChatModel,
+        *,
+        profile: str,
+        graph_factory: Callable[..., Any] = create_deep_agent,
+    ) -> None:
         self._model = model
         self.profile = profile
+        self._graph_factory = graph_factory
+        self._graphs: dict[tuple[tuple[str, str, str], ...], Any] = {}
+
+    def _graph_for(self, context: PathAgentContext) -> Any:
+        key = tuple(
+            sorted(
+                (
+                    str(contract["id"]),
+                    str(contract["description"]),
+                    str(contract["input_key"]),
+                )
+                for contract in context.tool_contracts
+            )
+        )
+        graph = self._graphs.get(key)
+        if graph is None:
+            graph = self._graph_factory(
+                model=self._model,
+                tools=list(_function_tools(context)),
+                system_prompt=_PATH_AGENT_SYSTEM_PROMPT,
+                skills=[("/skills/", "Manifest")],
+                permissions=_PATH_FILESYSTEM_PERMISSIONS,
+                backend=StateBackend(),
+                subagents=[],
+                response_format=ToolStrategy(PathAgentResult),
+                state_schema=_PathAgentState,
+                context_schema=_PathRuntimeContext,
+            )
+            self._graphs[key] = graph
+        return graph
 
     async def generate(
         self, context: PathAgentContext, trace: AgentTraceSink
     ) -> PathAgentResult:
-        skill_files = _skill_files(context)
+        context_files = _context_files(context)
+        callback = _DeepAgentTraceCallback(trace)
         trace(
             "deepagent.runtime.started",
             "STARTED",
             "启动 Deep Agents Path Runtime",
-            {"profile": self.profile, "path": context.path.get("definition")},
+            {
+                "profile": self.profile,
+                "path": context.path.get("definition"),
+                "skills": [str(skill["id"]) for skill in context.execution_skills],
+                "recursion_limit": _PATH_RECURSION_LIMIT,
+            },
         )
         trace(
             "deepagent.skill.projected",
             "COMPLETED",
             "投影 Manifest 授权的执行 Skill",
-            {"skills": list(skill_files)},
+            {"skills": list(_skill_files(context))},
         )
         try:
-            agent = create_deep_agent(
-                model=self._model,
-                system_prompt=_PATH_AGENT_SYSTEM_PROMPT,
-                skills=["/skills/"],
-                backend=StateBackend(),
-                subagents=[],
-                response_format=ToolStrategy(PathAgentResult),
-            )
+            agent = self._graph_for(context)
             state = await agent.ainvoke(
                 {
                     "messages": [{
                         "role": "user",
-                        "content": json.dumps(context.prompt_payload(), ensure_ascii=False),
+                        "content": _PATH_AGENT_USER_TASK,
                     }],
                     "files": {
                         path: create_file_data(content)
-                        for path, content in skill_files.items()
+                        for path, content in context_files.items()
                     },
+                    "path_tool_records": {
+                        str(contract["id"]): contract["records"]
+                        for contract in context.tool_contracts
+                    },
+                    "authorized_option_ids": [
+                        str(option["id"])
+                        for option in context.authorized_options
+                    ],
                 },
-                config={"recursion_limit": 20},
+                config={
+                    "recursion_limit": _PATH_RECURSION_LIMIT,
+                    "callbacks": [callback],
+                },
+                context=_PathRuntimeContext(trace=trace),
             )
         except GraphRecursionError as exc:
             trace(
                 "deepagent.runtime.failed",
                 "FAILED",
                 "Deep Agents Path Runtime 未能收敛",
-                _exception_trace_details(exc),
+                {**_exception_trace_details(exc), "turns": callback.turns},
             )
             raise AgentOutputError("Path Agent did not produce structured output") from exc
         except Exception as exc:
-            details = _exception_trace_details(exc)
+            details = {**_exception_trace_details(exc), "turns": callback.turns}
             trace(
                 "deepagent.runtime.failed",
                 "FAILED",
@@ -237,9 +639,7 @@ class DeepAgentPathAdapter:
         raw_response = state.get("structured_response")
         try:
             result = PathAgentResult.model_validate(raw_response)
-            _require_chinese(result)
-            _validate_result_against_context(result, context)
-        except (ValidationError, AgentOutputError) as exc:
+        except ValidationError as exc:
             details = _exception_trace_details(exc)
             if result is not None:
                 details["rejected_result"] = result.model_dump(mode="json")
@@ -256,7 +656,7 @@ class DeepAgentPathAdapter:
             "deepagent.model.completed",
             "COMPLETED",
             "Deep Agents Path Runtime 返回结构化方案",
-            {"result": result.model_dump(mode="json")},
+            _result_trace_details(result, callback),
         )
         return result
 
@@ -297,11 +697,38 @@ class _DeterministicPathChatModel(BaseChatModel):
         return self._generate(messages, stop=stop)
 
     def _response(self, messages: list[BaseMessage]) -> AIMessage:
-        user_message = next(
-            message for message in reversed(messages) if isinstance(message, HumanMessage)
-        )
-        prompt = json.loads(str(user_message.content))
-        option_ids = [str(item["id"]) for item in prompt.get("authorized_options", [])]
+        tool_messages = {
+            message.tool_call_id: message
+            for message in messages
+            if isinstance(message, ToolMessage)
+        }
+        if not {"deterministic-options", "deterministic-reports"} <= set(tool_messages):
+            return AIMessage(
+                content="",
+                tool_calls=[{
+                    "name": "read_file",
+                    "args": {"file_path": "/evidence/authorized-options.json"},
+                    "id": "deterministic-options",
+                    "type": "tool_call",
+                }, {
+                    "name": "read_file",
+                    "args": {"file_path": "/evidence/required-role-reports.json"},
+                    "id": "deterministic-reports",
+                    "type": "tool_call",
+                }],
+            )
+
+        def read_json(tool_call_id: str) -> Any:
+            numbered_content = str(tool_messages[tool_call_id].content)
+            content = "\n".join(
+                re.sub(r"^\s*\d+\s{2}", "", line)
+                for line in numbered_content.splitlines()
+            )
+            return json.loads(content)
+
+        authorized_options = read_json("deterministic-options")
+        required_role_reports = read_json("deterministic-reports")
+        option_ids = [str(item["id"]) for item in authorized_options]
         option_reference = "、".join(option_ids) if option_ids else "授权候选"
         result = PathAgentResult(
             recommendation=(
@@ -314,11 +741,11 @@ class _DeterministicPathChatModel(BaseChatModel):
                     dimension=contract["dimension"],
                     report=(
                         f"{contract['role']}维度：推荐方案已按{contract['dimension']}对照"
-                        f"{option_reference}形成判断，但模拟查询结果仍须由"
+                        f"{option_reference}形成判断，但冻结查询记录仍须由"
                         f"{contract['role']}核验后才能形成业务承诺。"
                     ),
                 )
-                for contract in prompt["required_role_reports"]
+                for contract in required_role_reports
             ],
         )
         return AIMessage(
@@ -430,22 +857,21 @@ class PathAgent:
                 "required_role_reports": list(required_role_reports),
             },
         )
-        tool_results: list[dict[str, Any]] = []
-        for tool_id, (tool, skill) in sorted(tools_by_id.items()):
+        for tool_id, (tool, _skill) in sorted(tools_by_id.items()):
             for option in authorized_options:
                 option_id = option["id"]
                 if option_id not in tool["records"]:
                     raise AgentError(f"Frozen tool {tool_id} has no record for option {option_id}")
-                tool_results.append({
-                    "tool_id": tool_id,
-                    "description": tool["description"],
-                    "read_only": True,
-                    "input": {tool["input_key"]: option_id},
-                    "output": tool["records"][option_id],
-                    "source_skill": _safe_ref(skill),
-                })
-        if tool_results:
-            trace("tools.query", "COMPLETED", "执行 Manifest 冻结的只读模拟查询", {"results": tool_results})
+        tool_contracts = tuple(
+            tool for tool, _skill in (tools_by_id[tool_id] for tool_id in sorted(tools_by_id))
+        )
+        if tool_contracts:
+            trace(
+                "tools.register",
+                "COMPLETED",
+                "注册 Manifest 授权的只读 Function Tools",
+                {"tool_ids": [tool["id"] for tool in tool_contracts]},
+            )
         context = PathAgentContext(
             case_snapshot={
                 "title": case.title,
@@ -457,11 +883,19 @@ class PathAgent:
             execution_skills=execution_skills,
             knowledge=knowledge,
             authorized_options=authorized_options,
-            tool_results=tuple(tool_results),
+            tool_contracts=tool_contracts,
             required_role_reports=required_role_reports,
             previous_solution_revision=previous,
         )
-        trace("agent.input", "COMPLETED", "构造冻结、最小授权的 Path Agent 上下文", {"context": context.prompt_payload()})
+        trace(
+            "agent.input",
+            "COMPLETED",
+            "构造冻结、最小授权的 Path Agent 上下文",
+            {
+                "files": sorted(_context_files(context)),
+                "tool_ids": [tool["id"] for tool in tool_contracts],
+            },
+        )
         result = await self.adapter.generate(context, trace)
         _require_chinese(result)
         _validate_result_against_context(result, context)
@@ -526,7 +960,7 @@ def path_agent_from_environment() -> PathAgentAdapter:
         max_output_tokens = int(os.getenv("AGENTIC_CM_PATH_MAX_OUTPUT_TOKENS", "6000"))
         if max_output_tokens < 1000:
             raise AgentError("Path Agent max output tokens must be at least 1000")
-        model = ChatOpenAI(
+        model = _PathChatOpenAI(
             model=llm.model,
             base_url=os.getenv("AGENTIC_CM_LLM_BASE_URL", ""),
             api_key=api_key or "not-configured",

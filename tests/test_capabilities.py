@@ -139,6 +139,24 @@ def test_skill_bundle_hides_members_and_rejects_unknown_member(tmp_path: Path) -
         CapabilityRegistry.from_directories(broken, None)
 
 
+def test_skill_tool_ids_must_be_valid_function_names(tmp_path: Path) -> None:
+    builtin = tmp_path / "builtin"
+    skill_dir = _write_skill(builtin, "tool-backed-analysis")
+    (skill_dir / "tools.json").write_text(json.dumps({
+        "schema_version": 1,
+        "tools": [{
+            "id": "mock.material.lookup",
+            "description": "查询冻结记录。",
+            "read_only": True,
+            "input_key": "option_id",
+            "records": {"A": {"status": "known"}},
+        }],
+    }))
+
+    with pytest.raises(CapabilityConfigurationError, match="valid function name"):
+        CapabilityRegistry.from_directories(builtin, None)
+
+
 def test_incompatible_commitment_policy_conflict_fails_closed(tmp_path: Path) -> None:
     policy_dir = tmp_path / "builtin" / "policies"
     policy_dir.mkdir(parents=True)

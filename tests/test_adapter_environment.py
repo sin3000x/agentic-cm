@@ -1,4 +1,5 @@
 import pytest
+from deepagents.profiles.harness.harness_profiles import _get_harness_profile
 
 import agentic_cm.config as config_module
 from agentic_cm.config import (
@@ -32,6 +33,20 @@ def test_single_adapter_setting_selects_all_agent_runtimes(monkeypatch) -> None:
     assert isinstance(
         synthesis_agent_from_environment(), OpenAICompatibleSynthesisAgentAdapter
     )
+
+
+def test_path_agent_profile_does_not_modify_all_openai_models(monkeypatch) -> None:
+    monkeypatch.setenv("AGENTIC_CM_ADAPTER", "openai-compatible")
+    monkeypatch.setenv("AGENTIC_CM_LLM_BASE_URL", "https://model.example/v1")
+    monkeypatch.setenv("AGENTIC_CM_LLM_MODEL", "test-model")
+
+    adapter = path_agent_from_environment()
+    openai_profile = _get_harness_profile("openai")
+
+    assert adapter._model._get_ls_params()["ls_provider"] == "agentic-cm"
+    assert openai_profile is None or not {
+        "write_file", "edit_file", "delete", "execute"
+    } <= openai_profile.excluded_tools
 
 
 def test_agent_specific_models_and_thinking_settings_are_independent(monkeypatch) -> None:
