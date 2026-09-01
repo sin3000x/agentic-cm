@@ -1049,6 +1049,86 @@ def test_openai_adapter_repairs_invalid_output_once() -> None:
     assert attempts == 2
 
 
+@pytest.mark.parametrize(
+    ("opening", "closing"),
+    [("`json\n", "\n`"), ("```json\n", "\n```")],
+)
+def test_openai_adapter_accepts_fenced_json_without_repair(
+    opening: str,
+    closing: str,
+) -> None:
+    attempts = 0
+    payload = {
+        "paths": [
+            {
+                "definition": "MaterialSubstitution",
+                "rationale": "物料缺口与候选能力匹配",
+                "skills": [{"id": "review-bundle", "reason": "需要组合分析技术与供应证据。"}],
+            },
+            {
+                "definition": "OrderSplit",
+                "rationale": "可用数量支持分批交付探索",
+                "skills": [{"id": "standalone-review", "reason": "需要独立检查拆分风险。"}],
+            },
+        ]
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        content = f"{opening}{json.dumps(payload, ensure_ascii=False)}{closing}"
+        return chat_completion_response(content)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            adapter = OpenAICompatiblePlannerAdapter(
+                "secret-key",
+                model="vendor-model-42",
+                base_url="https://gateway.example/v1",
+                http_client=client,
+            )
+            return await adapter.propose(
+                {"case_id": "CM-1", "title": "延期", "orchestration_knowledge": []},
+                (
+                    {
+                        "definition": "MaterialSubstitution",
+                        "title": "物料替代",
+                        "description": "desc",
+                        "required_review_dimensions": ["技术可行性"],
+                    },
+                    {
+                        "definition": "OrderSplit",
+                        "title": "订单拆分",
+                        "description": "desc",
+                        "required_review_dimensions": ["交付可行性"],
+                    },
+                ),
+                (
+                    {
+                        "id": "review-bundle",
+                        "title": "组合评审",
+                        "description": "组合评审。",
+                        "kind": "bundle",
+                    },
+                    {
+                        "id": "standalone-review",
+                        "title": "独立评审",
+                        "description": "独立检查。",
+                        "kind": "atomic",
+                    },
+                ),
+                lambda *args, **kwargs: None,
+            )
+
+    result = asyncio.run(run())
+
+    assert [path.definition for path in result.paths] == [
+        "MaterialSubstitution",
+        "OrderSplit",
+    ]
+    assert attempts == 1
+
+
 def test_synthesis_repairs_paraphrased_artifact_refs(tmp_path: Path) -> None:
     attempts = 0
 

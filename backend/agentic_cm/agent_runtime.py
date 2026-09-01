@@ -19,6 +19,10 @@ from .llm import (
 
 
 _CHINESE_CHARACTER = re.compile(r"[一-鿿]")
+_JSON_FENCE = re.compile(
+    r"\s*(?P<fence>```|`)(?:json)?[ \t]*\r?\n(?P<body>.*)\r?\n(?P=fence)\s*",
+    re.IGNORECASE | re.DOTALL,
+)
 
 TResult = TypeVar("TResult")
 TPayload = TypeVar("TPayload", bound=BaseModel)
@@ -38,6 +42,11 @@ class AgentExecutionError(AgentError):
 
 def contains_chinese(value: str) -> bool:
     return bool(_CHINESE_CHARACTER.search(value))
+
+
+def _strip_json_fence(value: str) -> str:
+    match = _JSON_FENCE.fullmatch(value)
+    return match.group("body") if match else value
 
 
 class AgentTraceSink(Protocol):
@@ -219,7 +228,8 @@ async def request_structured_output(
             },
         )
         try:
-            return build_result(payload_model.model_validate_json(response.content))
+            content = _strip_json_fence(response.content)
+            return build_result(payload_model.model_validate_json(content))
         except validation_failures as exc:
             last_error = exc
             trace(
