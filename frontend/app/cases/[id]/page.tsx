@@ -5,7 +5,12 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import AppSidebar from "../../app-sidebar";
 import { apiGet, apiGetText, apiPost, apiUrl, isAbort } from "../../lib/api";
-import { demoIdentities } from "../../lib/identities";
+import {
+  demoIdentities,
+  setDemoIdentity,
+  useDemoIdentity,
+  type SidebarIdentity,
+} from "../../lib/identities";
 import { formatQuantity, formatThreadTime } from "../../lib/format";
 import {
   aiRunCopy,
@@ -86,12 +91,11 @@ export default function Home() {
   const [expandedPathTraces, setExpandedPathTraces] = useState<Record<string, boolean>>({});
   const [caseCreatedAt, setCaseCreatedAt] = useState<string | null>(null);
   const [canViewManifest, setCanViewManifest] = useState(true);
-  const [identityIndex, setIdentityIndex] = useState(0);
+  const { identity: currentIdentity } = useDemoIdentity();
   const [caseRefreshKey, setCaseRefreshKey] = useState(0);
-  const identityIndexRef = useRef(0);
+  const identityNameRef = useRef(currentIdentity.name);
   const automaticRunsRef = useRef(new Set<string>());
   const [approvalReview, setApprovalReview] = useState<ApprovalReview | null>(null);
-  const currentIdentity = demoIdentities[identityIndex];
   const startAutomaticManifest = useEffectEvent(() => {
     void generateManifest();
   });
@@ -136,8 +140,8 @@ export default function Home() {
     return () => window.clearInterval(timer);
   }, [aiRunKind, canViewManifest]);
 
-  function selectIdentity(nextIdentityIndex: number) {
-    identityIndexRef.current = nextIdentityIndex;
+  function selectIdentity(nextIdentity: SidebarIdentity) {
+    identityNameRef.current = nextIdentity.name;
     setCanViewManifest(false);
     setManifestPaths([]);
     setManifestVersion(null);
@@ -158,7 +162,6 @@ export default function Home() {
     setShowOrchestratorTrace(false);
     setExpandedPathTraces({});
     setApprovalReview(null);
-    setIdentityIndex(nextIdentityIndex);
   }
 
   function loadManifest(
@@ -179,7 +182,7 @@ export default function Home() {
 
   useEffect(() => {
     if (!activeCaseId) return;
-    const identity = demoIdentities[identityIndex];
+    const identity = currentIdentity;
     const identityQuery = { actor: identity.name, role: identity.role };
     const controller = new AbortController();
     Promise.all([
@@ -278,7 +281,7 @@ export default function Home() {
         setMessage("API 尚未连接，无法同步当前 Case 数据。");
       });
     return () => controller.abort();
-  }, [activeCaseId, identityIndex, caseRefreshKey]);
+  }, [activeCaseId, currentIdentity, caseRefreshKey]);
 
   async function refreshTimeline() {
     try {
@@ -525,8 +528,8 @@ export default function Home() {
       setCaseCreatedAt(new Date().toISOString());
       setCanViewManifest(true);
       setCaseStatus("OPEN");
-      identityIndexRef.current = 0;
-      setIdentityIndex(0);
+      identityNameRef.current = demoIdentities[0].name;
+      setDemoIdentity(demoIdentities[0].name);
       setApprovalReview(null);
       setFailedAiRun(null);
       automaticRunsRef.current.clear();
@@ -553,12 +556,12 @@ export default function Home() {
     setShowCapabilities(true);
     if (capabilities) return;
     try {
-      const requestIdentityIndex = identityIndex;
+      const requestIdentityName = currentIdentity.name;
       const data = await apiGet<CapabilityDetails>(`/api/cases/${activeCaseId}/capabilities`, {
         actor: currentIdentity.name,
         role: currentIdentity.role,
       });
-      if (identityIndexRef.current !== requestIdentityIndex) return;
+      if (identityNameRef.current !== requestIdentityName) return;
       setCapabilities(data);
     } catch {
       setShowCapabilities(false);
@@ -574,12 +577,12 @@ export default function Home() {
     setShowManifestYaml(true);
     if (manifestYaml) return;
     try {
-      const requestIdentityIndex = identityIndex;
+      const requestIdentityName = currentIdentity.name;
       const yaml = await apiGetText(`/api/cases/${activeCaseId}/manifest.yaml`, {
         actor: currentIdentity.name,
         role: currentIdentity.role,
       });
-      if (identityIndexRef.current !== requestIdentityIndex) return;
+      if (identityNameRef.current !== requestIdentityName) return;
       setManifestYaml(yaml);
     } catch {
       setShowManifestYaml(false);
@@ -1284,13 +1287,7 @@ export default function Home() {
 
   return (
     <main className="shell">
-      <AppSidebar
-        active="none"
-        identity={currentIdentity}
-        identities={demoIdentities}
-        busy={busy}
-        onIdentitySelect={selectIdentity}
-      />
+      <AppSidebar active="none" busy={busy} onIdentitySelect={selectIdentity} />
 
       <section className="workspace">
         <header className="topbar">

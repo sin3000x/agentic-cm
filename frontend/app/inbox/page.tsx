@@ -10,7 +10,7 @@ import {
   type CommitmentDecision,
   type CommitmentNode,
 } from "../lib/case";
-import { demoIdentities } from "../lib/identities";
+import { useDemoIdentity } from "../lib/identities";
 import "./inbox.css";
 
 type InboxItem = {
@@ -23,13 +23,12 @@ type InboxItem = {
 };
 
 export default function InboxPage() {
-  const [identityIndex, setIdentityIndex] = useState(0);
+  const { identity: currentIdentity } = useDemoIdentity();
   const [items, setItems] = useState<InboxItem[]>([]);
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [reviewItem, setReviewItem] = useState<InboxItem | null>(null);
-  const currentIdentity = demoIdentities[identityIndex];
 
   useEffect(() => {
     const controller = new AbortController();
@@ -46,12 +45,11 @@ export default function InboxPage() {
     return () => controller.abort();
   }, [currentIdentity.role]);
 
-  function selectIdentity(nextIdentityIndex: number) {
+  function selectIdentity() {
     setItems([]);
     setLoadState("loading");
     setMessage("");
     setReviewItem(null);
-    setIdentityIndex(nextIdentityIndex);
   }
 
   async function decide(item: InboxItem, decision: CommitmentDecision) {
@@ -98,8 +96,6 @@ export default function InboxPage() {
     <div className="appShell">
       <AppSidebar
         active="inbox"
-        identity={currentIdentity}
-        identities={demoIdentities}
         inboxCount={loadState === "ready" ? items.length : undefined}
         busy={busyKey !== null}
         onIdentitySelect={selectIdentity}

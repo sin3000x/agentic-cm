@@ -3,30 +3,29 @@
 import Link from "next/link";
 import Image from "next/image";
 import { useState } from "react";
+import { useDemoIdentity, type SidebarIdentity } from "./lib/identities";
 
-export type SidebarIdentity = { name: string; role: string; avatar: string; avatarUrl: string };
+export type { SidebarIdentity };
 
 type AppSidebarProps = {
   active: "none" | "overview" | "inbox" | "skills" | "policies" | "knowledge";
-  identity: SidebarIdentity;
-  identities: SidebarIdentity[];
   inboxCount?: number;
   busy?: boolean;
-  onIdentitySelect?: (index: number) => void;
+  onIdentitySelect?: (identity: SidebarIdentity) => void;
 };
 
 export default function AppSidebar({
   active,
-  identity,
-  identities,
   inboxCount,
   busy = false,
   onIdentitySelect,
 }: AppSidebarProps) {
+  const { identity, identities, selectIdentity: setIdentity } = useDemoIdentity();
   const [showIdentityMenu, setShowIdentityMenu] = useState(false);
 
-  function selectIdentity(index: number) {
-    onIdentitySelect?.(index);
+  function selectIdentity(item: SidebarIdentity) {
+    setIdentity(item);
+    onIdentitySelect?.(item);
     setShowIdentityMenu(false);
   }
 
@@ -95,11 +94,11 @@ export default function AppSidebar({
         {showIdentityMenu && (
           <div className="identityMenu">
             <small>Demo identity simulation</small>
-            {identities.map((item, index) => (
+            {identities.map((item) => (
               <button
                 type="button"
                 key={`${item.name}-${item.role}`}
-                onClick={() => selectIdentity(index)}
+                onClick={() => selectIdentity(item)}
                 aria-current={item.name === identity.name ? "true" : undefined}
               >
                 <span className="avatar">

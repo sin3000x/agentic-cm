@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import AppSidebar from "./app-sidebar";
 import { apiGet, isAbort } from "./lib/api";
-import { coreDemoIdentities as demoIdentities, personAvatars } from "./lib/identities";
+import { personAvatars, useDemoIdentity } from "./lib/identities";
 import { formatDay, formatDayTime } from "./lib/format";
 
 type CaseStatus = "处理中" | "暂缓" | "已关闭";
@@ -152,7 +152,7 @@ export default function Home() {
   const [activeFilter, setActiveFilter] = useState<(typeof filters)[number]>("全部");
   const [search, setSearch] = useState("");
   const [selectedCase, setSelectedCase] = useState<CaseSummary | null>(null);
-  const [identityIndex, setIdentityIndex] = useState(0);
+  const { identity } = useDemoIdentity();
   const [caseData, setCaseData] = useState<CaseSummary[]>([]);
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
   const visibleCases = useMemo(() => {
@@ -193,12 +193,7 @@ export default function Home() {
 
   return (
     <div className="appShell">
-      <AppSidebar
-        active="overview"
-        identity={demoIdentities[identityIndex]}
-        identities={demoIdentities}
-        onIdentitySelect={setIdentityIndex}
-      />
+      <AppSidebar active="overview" />
 
       <main className="mainArea">
         <header className="topbar">
@@ -229,7 +224,7 @@ export default function Home() {
           <section className="welcome">
             <div>
               <p className="eyebrow">CASE OPERATIONS · LIVE</p>
-              <h1>早上好，陈澄</h1>
+              <h1>早上好，{identity.name}</h1>
               <p className="welcomeCopy">
                 当前有 <strong>{attentionCases.length} 个事项</strong>需要你的判断，其中{" "}
                 {overdueCount} 个已超过承诺期限。

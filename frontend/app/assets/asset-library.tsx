@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import AppSidebar from "../app-sidebar";
 import { apiGet, isAbort } from "../lib/api";
-import { coreDemoIdentities as demoIdentities } from "../lib/identities";
 
 export type AssetGroup = "skills" | "policies" | "knowledge";
 
@@ -299,7 +298,6 @@ function SkillRoleLibrary({ skills, search }: { skills: CapabilityAsset[]; searc
 }
 
 export default function AssetLibrary({ group }: { group: AssetGroup }) {
-  const [identityIndex, setIdentityIndex] = useState(0);
   const [data, setData] = useState<LibraryResponse | null>(null);
   const [error, setError] = useState(false);
   const [search, setSearch] = useState("");
@@ -334,13 +332,7 @@ export default function AssetLibrary({ group }: { group: AssetGroup }) {
 
   return (
     <div className="appShell">
-      <AppSidebar
-        active={group}
-        identity={demoIdentities[identityIndex]}
-        identities={demoIdentities}
-        inboxCount={3}
-        onIdentitySelect={setIdentityIndex}
-      />
+      <AppSidebar active={group} inboxCount={3} />
       <main className="mainArea">
         <header className="topbar">
           <div className="breadcrumb">
