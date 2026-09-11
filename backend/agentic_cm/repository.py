@@ -27,6 +27,10 @@ class CaseRepository:
         with self._connect() as connection:
             connection.executescript(
                 """
+                CREATE TABLE IF NOT EXISTS runtime_settings (
+                    name TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS cases (
                     id TEXT PRIMARY KEY,
                     payload TEXT NOT NULL,
@@ -64,6 +68,21 @@ class CaseRepository:
                     FOREIGN KEY(run_id) REFERENCES agent_runs(id)
                 );
                 """
+            )
+
+    def get_adapter_selection(self) -> str | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT value FROM runtime_settings WHERE name = 'adapter'"
+            ).fetchone()
+        return row["value"] if row else None
+
+    def save_adapter_selection(self, adapter: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO runtime_settings (name, value) VALUES ('adapter', ?) "
+                "ON CONFLICT(name) DO UPDATE SET value = excluded.value",
+                (adapter,),
             )
 
     def create_agent_run(

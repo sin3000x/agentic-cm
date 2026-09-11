@@ -34,3 +34,23 @@ def test_cannot_switch_while_agent_is_running(client):
     )
     response = client.post("/api/runtime-config", json={"adapter": "deterministic"})
     assert response.status_code == 409
+
+
+def test_adapter_selection_survives_backend_restart(client, monkeypatch):
+    from agentic_cm.repository import CaseRepository
+    from agentic_cm.service import CaseService
+
+    monkeypatch.setenv("AGENTIC_CM_ADAPTER", "deterministic")
+    monkeypatch.setenv("AGENTIC_CM_LLM_BASE_URL", "https://model.example/v1")
+    monkeypatch.setenv("AGENTIC_CM_LLM_MODEL", "test-model")
+    response = client.post("/api/runtime-config", json={"adapter": "openai-compatible"})
+    assert response.status_code == 200
+    database_path = api.service.repository.database_path
+    restored = CaseService(CaseRepository(database_path))
+    monkeypatch.setattr(api, "service", restored)
+    response = client.get("/api/runtime-config")
+    assert response.json()["adapter"] == "openai-compatible"
+    assert response.headers["cache-control"] == "no-store"
+    assert isinstance(restored.orchestrator.planner, OpenAICompatiblePlannerAdapter)
+    assert client.post("/api/runtime-config", json={"adapter": "deterministic"}).status_code == 200
+    assert CaseService(CaseRepository(database_path)).adapter == "deterministic"

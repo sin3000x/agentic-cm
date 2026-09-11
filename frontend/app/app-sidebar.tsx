@@ -33,7 +33,7 @@ export default function AppSidebar({
 
   useEffect(() => {
     let cancelled = false;
-    apiGet<{ adapter: Adapter }>("/api/runtime-config")
+    apiGet<{ adapter: Adapter }>("/api/runtime-config", undefined, undefined, "no-store")
       .then((config) => { if (!cancelled) setAdapter(config.adapter); })
       .catch(() => { if (!cancelled) setAdapterError("无法读取运行模式，请刷新重试"); });
     return () => { cancelled = true; };

@@ -100,7 +100,8 @@ def health() -> dict[str, str]:
 
 
 @app.get("/api/runtime-config")
-def runtime_config() -> dict[str, str | int]:
+def runtime_config(response: Response) -> dict[str, str | int]:
+    response.headers["Cache-Control"] = "no-store"
     return {
         "adapter": service.adapter,
         "path_execution_mode": service.path_execution_mode,
@@ -109,14 +110,14 @@ def runtime_config() -> dict[str, str | int]:
 
 
 @app.post("/api/runtime-config")
-async def select_runtime_adapter(request: AdapterSelectionRequest):
+async def select_runtime_adapter(request: AdapterSelectionRequest, response: Response):
     try:
         service.select_adapter(request.adapter)
     except (AgentError, InvalidTransitionError):
         raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="模型环境变量配置无效，请检查后端配置") from exc
-    return runtime_config()
+    return runtime_config(response)
 
 
 @app.get("/api/cases")

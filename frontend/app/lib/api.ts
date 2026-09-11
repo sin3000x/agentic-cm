@@ -59,8 +59,9 @@ export function apiGet<T>(
   path: string,
   query?: Record<string, string | undefined>,
   signal?: AbortSignal,
+  cache?: RequestCache,
 ): Promise<T> {
-  return request<T>(path, { signal }, query);
+  return request<T>(path, { signal, cache }, query);
 }
 
 export async function apiGetText(

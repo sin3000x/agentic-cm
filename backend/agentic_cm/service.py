@@ -51,12 +51,12 @@ class CaseService:
         path_execution_mode: str | None = None,
         path_max_concurrency: int | None = None,
     ) -> None:
-        self.adapter = agent_adapter_from_environment()
+        self.adapter = repository.get_adapter_selection() or agent_adapter_from_environment()
         self.repository = repository
         self.capabilities = capabilities or default_registry()
-        self.orchestrator = Orchestrator(self.capabilities, planner or planner_from_environment())
-        self.path_agent = PathAgent(path_agent or path_agent_from_environment())
-        self.synthesis_agent = SynthesisAgent(synthesis_agent or synthesis_agent_from_environment())
+        self.orchestrator = Orchestrator(self.capabilities, planner or planner_from_environment(self.adapter))
+        self.path_agent = PathAgent(path_agent or path_agent_from_environment(self.adapter))
+        self.synthesis_agent = SynthesisAgent(synthesis_agent or synthesis_agent_from_environment(self.adapter))
         self.path_execution_mode = path_execution_mode or path_execution_mode_from_environment()
         if self.path_execution_mode not in {"parallel", "serial"}:
             raise ValueError("path_execution_mode must be 'parallel' or 'serial'")
@@ -82,6 +82,7 @@ class CaseService:
         orchestrator = Orchestrator(self.capabilities, planner_from_environment(adapter))
         path_agent = PathAgent(path_agent_from_environment(adapter))
         synthesis_agent = SynthesisAgent(synthesis_agent_from_environment(adapter))
+        self.repository.save_adapter_selection(adapter)
         self.orchestrator = orchestrator
         self.path_agent = path_agent
         self.synthesis_agent = synthesis_agent
