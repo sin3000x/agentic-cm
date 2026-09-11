@@ -464,7 +464,8 @@ def test_deep_agent_trace_records_internal_turns_and_tools() -> None:
     assert result.recommendation not in json.dumps(final[3], ensure_ascii=False)
 
 
-def test_manifest_function_tool_rejects_unauthorized_option() -> None:
+@pytest.mark.parametrize("failure", ["unauthorized", "missing_record"])
+def test_manifest_function_tool_returns_correctable_error(failure: str) -> None:
     class UnauthorizedToolModel(BaseChatModel):
         calls: int = 0
         tool_error: str = ""
@@ -490,10 +491,24 @@ def test_manifest_function_tool_rejects_unauthorized_option() -> None:
                         "type": "tool_call",
                     }],
                 )
-            else:
+            elif self.calls == 1:
                 self.tool_error = str(next(
                     item.content for item in reversed(messages) if isinstance(item, ToolMessage)
                 ))
+                assert "BGA-64" not in self.tool_error
+                message = AIMessage(
+                    content="",
+                    tool_calls=[{
+                        "name": "lookup_material_master",
+                        "args": {"option_id": "A"},
+                        "id": "lookup-corrected",
+                        "type": "tool_call",
+                    }],
+                )
+            else:
+                latest = next(item for item in reversed(messages) if isinstance(item, ToolMessage))
+                assert latest.status == "success"
+                assert "QFN-48" in str(latest.content)
                 message = AIMessage(
                     content="",
                     tool_calls=[{
@@ -512,7 +527,7 @@ def test_manifest_function_tool_rejects_unauthorized_option() -> None:
         path={"definition": "MaterialSubstitution"},
         execution_skills=(),
         knowledge=(),
-        authorized_options=({"id": "A"},),
+        authorized_options=({"id": "A"},) if failure == "unauthorized" else ({"id": "A"}, {"id": "B"}),
         tool_contracts=({
             "id": "lookup_material_master",
             "description": "查询冻结的物料主数据。",
@@ -520,7 +535,7 @@ def test_manifest_function_tool_rejects_unauthorized_option() -> None:
             "input_key": "option_id",
             "records": {
                 "A": {"package": "QFN-48"},
-                "B": {"package": "BGA-64"},
+                **({"B": {"package": "BGA-64"}} if failure == "unauthorized" else {}),
             },
         },),
         required_role_reports=(),
@@ -529,19 +544,23 @@ def test_manifest_function_tool_rejects_unauthorized_option() -> None:
     model = UnauthorizedToolModel()
     traces: list[tuple] = []
 
-    with pytest.raises(AgentExecutionError, match="unauthorized option 'B'"):
-        asyncio.run(
-            DeepAgentPathAdapter(model, profile="test/unauthorized-tool").generate(
-                context, lambda *args: traces.append(args)
-            )
+    result = asyncio.run(
+        DeepAgentPathAdapter(model, profile="test/unauthorized-tool").generate(
+            context, lambda *args: traces.append(args)
         )
+    )
+    assert result.recommendation == "未使用未授权候选。"
+    assert model.calls == 3
+    assert "未授权候选" in model.tool_error if failure == "unauthorized" else "冻结记录" in model.tool_error
+    assert not any(item[0] == "deepagent.runtime.failed" for item in traces)
 
     failed_tools = [
         item[3] for item in traces
         if item[0] == "deepagent.tool.failed" and item[3].get("tool") == "lookup_material_master"
     ]
     assert failed_tools[0]["input"] == {"option_id": "B"}
-    assert "unauthorized option 'B'" in failed_tools[0]["error"]
+    assert failed_tools[0]["recoverable"] is True
+    assert "BGA-64" not in failed_tools[0]["error"]
 
 
 def test_deep_agent_denies_reads_outside_manifest_context() -> None:
@@ -925,6 +944,11 @@ def test_path_agent_repairs_once_with_feedback(tmp_path: Path, repair_outcome: s
             assert self.calls == 2
             assert "English only" in context.repair_instruction
             assert "recommendation" in context.repair_instruction
+            feedback = json.loads(context.repair_instruction.split("\n", 1)[1])
+            assert feedback["required_role_reports"] == list(context.required_role_reports)
+            assert feedback["authorized_option_ids"] == [
+                str(option["id"]) for option in context.authorized_options
+            ]
             if repair_outcome == "execution_error":
                 raise AgentExecutionError("provider unavailable")
             if repair_outcome == "wrong_roles":
