@@ -1334,3 +1334,51 @@ def test_deep_agent_receives_repair_instruction() -> None:
     result = asyncio.run(adapter.generate(context, lambda *args: None))
     assert captured[0]["messages"] == [{"role": "user", "content": instruction}]
     assert result.recommendation == "修正后的中文建议。"
+
+
+@pytest.mark.parametrize("tool_name,arguments,expected", [
+    ("ls", {"path": "/skills"}, "demo"),
+    ("ls", {"path": "/case"}, "snapshot.json"),
+    ("ls", {"path": "/knowledge"}, "context.json"),
+    ("ls", {"path": "/evidence"}, "authorized-options.json"),
+    ("glob", {"path": "/evidence", "pattern": "*.json"}, "authorized-options.json"),
+    ("read_file", {"file_path": "/skills/demo/SKILL.md"}, "示例技能"),
+])
+def test_deep_agent_can_browse_authorized_directories(tool_name, arguments, expected) -> None:
+    class BrowsingModel(BaseChatModel):
+        calls: int = 0
+
+        @property
+        def _llm_type(self):
+            return "test-directory-browsing"
+
+        def _get_ls_params(self, **kwargs):
+            return {"ls_provider": "agentic-cm", "ls_model_name": "directory-browsing"}
+
+        def bind_tools(self, tools, *, tool_choice=None, **kwargs):
+            return self
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            if self.calls == 0:
+                name, args = tool_name, arguments
+            else:
+                reply = next(item for item in reversed(messages) if isinstance(item, ToolMessage))
+                assert reply.status == "success", reply.content
+                assert expected in str(reply.content)
+                name, args = "PathAgentResult", {"recommendation": "已读取授权上下文。", "role_reports": []}
+            self.calls += 1
+            return ChatResult(generations=[ChatGeneration(message=AIMessage(
+                content="", tool_calls=[{
+                    "name": name, "args": args, "id": f"browse-{self.calls}", "type": "tool_call",
+                }],
+            ))])
+
+    context = PathAgentContext(
+        case_snapshot={}, human_proposal=None, path={"definition": "OrderSplit"},
+        execution_skills=({"id": "demo", "description": "示例技能", "instructions_markdown": "示例技能"},),
+        knowledge=(), authorized_options=(), tool_contracts=(), required_role_reports=(),
+        previous_solution_revision=None,
+    )
+    model = BrowsingModel()
+    asyncio.run(DeepAgentPathAdapter(model, profile="test/browsing").generate(context, lambda *args: None))
+    assert model.calls == 2

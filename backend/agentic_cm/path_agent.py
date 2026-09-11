@@ -86,7 +86,11 @@ _PATH_AGENT_USER_TASK = (
 _PATH_FILESYSTEM_PERMISSIONS = [
     FilesystemPermission(
         operations=["read"],
-        paths=["/skills/**", "/case/**", "/knowledge/**", "/evidence/**"],
+        # Directory tools check the directory itself before listing its children.
+        paths=[
+            "/skills", "/skills/**", "/case", "/case/**",
+            "/knowledge", "/knowledge/**", "/evidence", "/evidence/**",
+        ],
         mode="allow",
     ),
     FilesystemPermission(operations=["read"], paths=["/**"], mode="deny"),
