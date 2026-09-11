@@ -38,7 +38,13 @@ test("every route server-renders without throwing", async () => {
 test("the global Sidebar exposes overview, inbox, and organization assets", async () => {
   const html = await renderHtml("/");
   assert.match(html, /<nav [^>]*aria-label="主导航"/);
-  for (const href of ['"/"', '"/inbox"', '"/assets/skills"', '"/assets/policies"', '"/assets/knowledge"']) {
+  for (const href of [
+    '"/"',
+    '"/inbox"',
+    '"/assets/skills"',
+    '"/assets/policies"',
+    '"/assets/knowledge"',
+  ]) {
     assert.match(html, new RegExp(`href=${href}`));
   }
   assert.match(html, /我的待办/);

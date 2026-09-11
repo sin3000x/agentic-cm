@@ -1,0 +1,13 @@
+node_modules
+dist
+.next
+.vinext
+out
+build
+coverage
+.wrangler
+.vite
+next-env.d.ts
+package-lock.json
+examples
+app/_sites-preview

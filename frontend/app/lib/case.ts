@@ -275,15 +275,23 @@ export function skillLabel(asset: ManifestAssetRef, fallback?: string | null) {
 export function isSolutionRevision(value: unknown): value is SolutionRevision {
   if (!value || typeof value !== "object") return false;
   const revision = value as Partial<SolutionRevision>;
-  return typeof revision.recommendation === "string"
-    && Array.isArray(revision.role_reports)
-    && revision.role_reports.every((item) => item
-      && typeof item.role === "string"
-      && typeof item.dimension === "string"
-      && typeof item.report === "string");
+  return (
+    typeof revision.recommendation === "string" &&
+    Array.isArray(revision.role_reports) &&
+    revision.role_reports.every(
+      (item) =>
+        item &&
+        typeof item.role === "string" &&
+        typeof item.dimension === "string" &&
+        typeof item.report === "string",
+    )
+  );
 }
 
-export function approvalContextFor(revision: SolutionRevision | null, role: string): ApprovalContext {
+export function approvalContextFor(
+  revision: SolutionRevision | null,
+  role: string,
+): ApprovalContext {
   return {
     revision: revision?.revision ?? null,
     recommendation: revision?.recommendation ?? "",

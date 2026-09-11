@@ -12,13 +12,29 @@ import {
   type PathRunUiStatus,
 } from "../../lib/case";
 
-export function PersonIcon({ name, fallback, className }: { name?: string; fallback: string; className: string }) {
+export function PersonIcon({
+  name,
+  fallback,
+  className,
+}: {
+  name?: string;
+  fallback: string;
+  className: string;
+}) {
   const src = name ? personAvatars[name] : undefined;
-  return <span className={className}>{src ? <Image src={src} alt="" width={80} height={80} /> : fallback}</span>;
+  return (
+    <span className={className}>
+      {src ? <Image src={src} alt="" width={80} height={80} /> : fallback}
+    </span>
+  );
 }
 
 export function BotIcon({ kind, className }: { kind: keyof typeof botAvatars; className: string }) {
-  return <span className={className}><Image src={botAvatars[kind]} alt="" width={80} height={80} /></span>;
+  return (
+    <span className={className}>
+      <Image src={botAvatars[kind]} alt="" width={80} height={80} />
+    </span>
+  );
 }
 
 export function AiWorkingCard({
@@ -37,7 +53,8 @@ export function AiWorkingCard({
   maxConcurrency?: number;
 }) {
   const copy = aiRunCopy[kind];
-  const agentType = kind === "manifest" ? "orchestrator" : kind === "alternatives" ? "path" : "synthesis";
+  const agentType =
+    kind === "manifest" ? "orchestrator" : kind === "alternatives" ? "path" : "synthesis";
   const pathRunStates = paths.map((path) => {
     const run = runs.find((item) => pathIdForRun(item) === path.id);
     return { path, run, status: (run?.status ?? "QUEUED") as PathRunUiStatus };
@@ -47,25 +64,84 @@ export function AiWorkingCard({
   const runningPathIndex = pathRunStates.findIndex((item) => item.status === "RUNNING");
   return (
     <section className="aiWorkingCard" aria-live="polite" aria-label={copy.title}>
-      <div className="aiOrb" aria-hidden="true"><i /><i /><b>AI</b></div>
+      <div className="aiOrb" aria-hidden="true">
+        <i />
+        <i />
+        <b>AI</b>
+      </div>
       <div className="aiWorkingBody">
         <small>{copy.eyebrow}</small>
-        <h3>{kind === "alternatives" ? `正在${executionMode === "parallel" ? "并行" : "逐条"}推演 ${paths.length} 条 Path` : copy.title}<span className="thinkingDots"><i /><i /><i /></span></h3>
+        <h3>
+          {kind === "alternatives"
+            ? `正在${executionMode === "parallel" ? "并行" : "逐条"}推演 ${paths.length} 条 Path`
+            : copy.title}
+          <span className="thinkingDots">
+            <i />
+            <i />
+            <i />
+          </span>
+        </h3>
         {kind === "alternatives" ? (
           <>
             <div className="pathRunSummary">
-              <span><small>执行方式</small><strong>{executionMode === "parallel" ? `并行执行 · 最多 ${Math.min(paths.length, maxConcurrency)} 条` : "串行队列 · 同一时间 1 条"}</strong></span>
-              <span><small>整体进度</small><strong>{completedPathCount} / {paths.length} 条已完成</strong></span>
-              <span><small>{executionMode === "parallel" ? "当前并发" : "当前位置"}</small><strong>{executionMode === "parallel" ? `${runningPathCount} 条运行中` : runningPathIndex >= 0 ? `第 ${runningPathIndex + 1} / ${paths.length} 条` : "正在建立运行记录"}</strong></span>
+              <span>
+                <small>执行方式</small>
+                <strong>
+                  {executionMode === "parallel"
+                    ? `并行执行 · 最多 ${Math.min(paths.length, maxConcurrency)} 条`
+                    : "串行队列 · 同一时间 1 条"}
+                </strong>
+              </span>
+              <span>
+                <small>整体进度</small>
+                <strong>
+                  {completedPathCount} / {paths.length} 条已完成
+                </strong>
+              </span>
+              <span>
+                <small>{executionMode === "parallel" ? "当前并发" : "当前位置"}</small>
+                <strong>
+                  {executionMode === "parallel"
+                    ? `${runningPathCount} 条运行中`
+                    : runningPathIndex >= 0
+                      ? `第 ${runningPathIndex + 1} / ${paths.length} 条`
+                      : "正在建立运行记录"}
+                </strong>
+              </span>
             </div>
-            <ol className="pathRunQueue" aria-label={`Path Agent ${executionMode === "parallel" ? "并行执行" : "串行执行"}状态`}>
+            <ol
+              className="pathRunQueue"
+              aria-label={`Path Agent ${executionMode === "parallel" ? "并行执行" : "串行执行"}状态`}
+            >
               {pathRunStates.map(({ path, run, status }, index) => {
                 const latestEvent = run?.events.at(-1);
-                const statusLabel = status === "RUNNING" ? "正在推演" : status === "SUCCEEDED" ? "已完成" : status === "FAILED" ? "失败" : executionMode === "parallel" ? "启动中" : "排队中";
+                const statusLabel =
+                  status === "RUNNING"
+                    ? "正在推演"
+                    : status === "SUCCEEDED"
+                      ? "已完成"
+                      : status === "FAILED"
+                        ? "失败"
+                        : executionMode === "parallel"
+                          ? "启动中"
+                          : "排队中";
                 return (
                   <li className={status.toLowerCase()} key={path.id}>
-                    <span className="pathRunIndex">{status === "SUCCEEDED" ? "✓" : String(index + 1).padStart(2, "0")}</span>
-                    <div><strong>{path.title}</strong><small>{latestEvent ? `${latestEvent.summary} · 已记录 ${run?.events.length ?? 0} 步` : status === "QUEUED" ? executionMode === "parallel" ? "正在启动并行运行" : "等待上一条 Path 完成" : "正在启动 Path Agent"}</small></div>
+                    <span className="pathRunIndex">
+                      {status === "SUCCEEDED" ? "✓" : String(index + 1).padStart(2, "0")}
+                    </span>
+                    <div>
+                      <strong>{path.title}</strong>
+                      <small>
+                        {latestEvent
+                          ? `${latestEvent.summary} · 已记录 ${run?.events.length ?? 0} 步`
+                          : status === "QUEUED"
+                            ? executionMode === "parallel"
+                              ? "正在启动并行运行"
+                              : "等待上一条 Path 完成"
+                            : "正在启动 Path Agent"}
+                      </small>
+                    </div>
                     <b>{statusLabel}</b>
                   </li>
                 );
@@ -77,16 +153,25 @@ export function AiWorkingCard({
             <div className="aiStepTrack">
               {copy.steps.map((item, index) => (
                 <span className={index < step ? "done" : index === step ? "active" : ""} key={item}>
-                  <i>{index < step ? "✓" : index + 1}</i>{item}
+                  <i>{index < step ? "✓" : index + 1}</i>
+                  {item}
                 </span>
               ))}
             </div>
-            <div className="aiProgress"><i style={{ width: `${Math.min(92, 18 + step * 24)}%` }} /></div>
+            <div className="aiProgress">
+              <i style={{ width: `${Math.min(92, 18 + step * 24)}%` }} />
+            </div>
           </>
         )}
         <p>你可以留在当前页面，结果完成后会自动出现；AI 只生成建议，不会替人批准业务承诺。</p>
         <section className="embeddedLiveTrace" aria-label="实时审计轨迹">
-          <header><span><small>LIVE TRACE</small><strong>实时审计轨迹</strong></span><em>每 600ms 刷新</em></header>
+          <header>
+            <span>
+              <small>LIVE TRACE</small>
+              <strong>实时审计轨迹</strong>
+            </span>
+            <em>每 600ms 刷新</em>
+          </header>
           <AgentTracePanel runs={runs} agentType={agentType} autoExpand embedded />
         </section>
       </div>
@@ -96,26 +181,56 @@ export function AiWorkingCard({
 
 export function CapabilityPanel({ details }: { details: CapabilityDetails }) {
   const groups = [
-    { key: "policies" as const, label: "POLICY · 强制责任", note: "由平台结构化匹配并编译为 CommitmentDAG 责任节点" },
-    { key: "skills" as const, label: "SKILL · 认知方法", note: "由 Agent Adapter 使用，不能代替业务审批" },
-    { key: "knowledge" as const, label: "KNOWLEDGE · 建议材料", note: "带来源的历史观察，不是当前 Case 事实" },
+    {
+      key: "policies" as const,
+      label: "POLICY · 强制责任",
+      note: "由平台结构化匹配并编译为 CommitmentDAG 责任节点",
+    },
+    {
+      key: "skills" as const,
+      label: "SKILL · 认知方法",
+      note: "由 Agent Adapter 使用，不能代替业务审批",
+    },
+    {
+      key: "knowledge" as const,
+      label: "KNOWLEDGE · 建议材料",
+      note: "带来源的历史观察，不是当前 Case 事实",
+    },
   ];
   return (
     <section className="capabilityPanel" aria-label="Manifest 能力快照">
       <div className="capabilityHeader">
-        <span><strong>能力快照</strong><small>{details.snapshot_status === "frozen" ? "已随 Manifest 冻结" : "当前预览"}</small></span>
+        <span>
+          <strong>能力快照</strong>
+          <small>{details.snapshot_status === "frozen" ? "已随 Manifest 冻结" : "当前预览"}</small>
+        </span>
         <em>版本 + SHA-256</em>
       </div>
       <div className="capabilityGroups">
         {groups.map((group) => (
           <div className="capabilityGroup" key={group.key}>
-            <div><strong>{group.label}</strong><small>{group.note}</small></div>
+            <div>
+              <strong>{group.label}</strong>
+              <small>{group.note}</small>
+            </div>
             {details.assets[group.key].map((asset) => (
               <article key={asset.resolved_ref.id}>
-                <span><b>{asset.title ?? asset.resolved_ref.id}</b><small>{asset.resolved_ref.id} · v{asset.resolved_ref.version}</small></span>
-                <span className={`assetSource ${asset.resolved_ref.source}`}>{asset.resolved_ref.source}</span>
+                <span>
+                  <b>{asset.title ?? asset.resolved_ref.id}</b>
+                  <small>
+                    {asset.resolved_ref.id} · v{asset.resolved_ref.version}
+                  </small>
+                </span>
+                <span className={`assetSource ${asset.resolved_ref.source}`}>
+                  {asset.resolved_ref.source}
+                </span>
                 <code>{asset.resolved_ref.digest.slice(7, 19)}</code>
-                <p>{asset.description ?? asset.content?.summary ?? asset.instructions?.[0] ?? `${asset.requirements?.commitments?.length ?? 0} 个强制责任节点`}</p>
+                <p>
+                  {asset.description ??
+                    asset.content?.summary ??
+                    asset.instructions?.[0] ??
+                    `${asset.requirements?.commitments?.length ?? 0} 个强制责任节点`}
+                </p>
               </article>
             ))}
           </div>
@@ -125,14 +240,29 @@ export function CapabilityPanel({ details }: { details: CapabilityDetails }) {
   );
 }
 
-export function ManifestYamlPanel({ yaml, downloadHref, onCopy }: { yaml: string; downloadHref: string; onCopy: () => void }) {
+export function ManifestYamlPanel({
+  yaml,
+  downloadHref,
+  onCopy,
+}: {
+  yaml: string;
+  downloadHref: string;
+  onCopy: () => void;
+}) {
   return (
     <section className="manifestYamlPanel" aria-label="完整 Manifest YAML">
       <header>
-        <span><strong>完整 Manifest YAML</strong><small>全局 Knowledge 与所有 Path 的 Skill / Policy / Knowledge</small></span>
         <span>
-          <button className="linkButton" onClick={onCopy}>复制 YAML</button>
-          <a className="linkButton" href={downloadHref} download>下载 YAML</a>
+          <strong>完整 Manifest YAML</strong>
+          <small>全局 Knowledge 与所有 Path 的 Skill / Policy / Knowledge</small>
+        </span>
+        <span>
+          <button className="linkButton" onClick={onCopy}>
+            复制 YAML
+          </button>
+          <a className="linkButton" href={downloadHref} download>
+            下载 YAML
+          </a>
         </span>
       </header>
       <pre>{yaml}</pre>
@@ -151,14 +281,25 @@ export function AgentTracePanel({
   autoExpand?: boolean;
   embedded?: boolean;
 }) {
-  const label = agentType === "orchestrator" ? "ORCHESTRATOR" : agentType === "path" ? "PATH AGENT" : "SYNTHESIS AGENT";
+  const label =
+    agentType === "orchestrator"
+      ? "ORCHESTRATOR"
+      : agentType === "path"
+        ? "PATH AGENT"
+        : "SYNTHESIS AGENT";
   const typedRuns = runs.filter((run) => run.agent_type === agentType);
   const statusLabel = { RUNNING: "运行中", SUCCEEDED: "已完成", FAILED: "失败" } as const;
   return (
-    <section className={`agentTracePanel${embedded ? " embedded" : ""}`} aria-label={`${label} Trace`}>
+    <section
+      className={`agentTracePanel${embedded ? " embedded" : ""}`}
+      aria-label={`${label} Trace`}
+    >
       {!embedded && (
         <header className="traceHeader">
-          <span><strong>{label} TRACE</strong><small>按 Run 展开审计步骤；不记录 API Key 或隐藏思维链</small></span>
+          <span>
+            <strong>{label} TRACE</strong>
+            <small>按 Run 展开审计步骤；不记录 API Key 或隐藏思维链</small>
+          </span>
           <em>{typedRuns.length} RUNS</em>
         </header>
       )}
@@ -167,26 +308,54 @@ export function AgentTracePanel({
       ) : (
         <div className="traceRuns">
           {typedRuns.map((run) => (
-            <details className={`traceRun ${run.status.toLowerCase()}`} open={autoExpand && (run.status === "RUNNING" || run.status === "FAILED")} key={run.id}>
+            <details
+              className={`traceRun ${run.status.toLowerCase()}`}
+              open={autoExpand && (run.status === "RUNNING" || run.status === "FAILED")}
+              key={run.id}
+            >
               <summary>
                 <span className="traceRunIdentity">
                   <i aria-hidden="true" />
-                  <span><strong>{run.adapter_profile}</strong><small>{formatThreadTime(run.started_at)} · {run.id.slice(0, 8)}</small></span>
+                  <span>
+                    <strong>{run.adapter_profile}</strong>
+                    <small>
+                      {formatThreadTime(run.started_at)} · {run.id.slice(0, 8)}
+                    </small>
+                  </span>
                 </span>
-                <span className="traceRunMeta"><b>{statusLabel[run.status]}</b><small>{run.events.length} 步</small></span>
+                <span className="traceRunMeta">
+                  <b>{statusLabel[run.status]}</b>
+                  <small>{run.events.length} 步</small>
+                </span>
               </summary>
               <div className="traceRunBody">
-                {run.error_message && <p className="traceError">{run.error_type}: {run.error_message}</p>}
+                {run.error_message && (
+                  <p className="traceError">
+                    {run.error_type}: {run.error_message}
+                  </p>
+                )}
                 <ol className="traceSteps">
                   {run.events.map((event) => (
                     <li className={event.status.toLowerCase()} key={event.id}>
-                      <span className="traceSequence">{String(event.sequence).padStart(2, "0")}</span>
+                      <span className="traceSequence">
+                        {String(event.sequence).padStart(2, "0")}
+                      </span>
                       <div>
-                        <header><code>{event.step}</code><b>{event.status}</b><time dateTime={event.created_at}>{formatThreadTime(event.created_at)}</time></header>
+                        <header>
+                          <code>{event.step}</code>
+                          <b>{event.status}</b>
+                          <time dateTime={event.created_at}>
+                            {formatThreadTime(event.created_at)}
+                          </time>
+                        </header>
                         <p>{event.summary}</p>
                         {Object.keys(event.details).length > 0 && (
                           <details className="tracePayload">
-                            <summary>{typeof event.details.manifest_yaml === "string" ? "完整 Manifest YAML" : "输入 / 输出详情"}</summary>
+                            <summary>
+                              {typeof event.details.manifest_yaml === "string"
+                                ? "完整 Manifest YAML"
+                                : "输入 / 输出详情"}
+                            </summary>
                             {typeof event.details.manifest_yaml === "string" ? (
                               <pre>{event.details.manifest_yaml}</pre>
                             ) : (

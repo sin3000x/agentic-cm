@@ -81,11 +81,7 @@ export function apiUrl(path: string, query?: Record<string, string | undefined>)
   return url(path, query);
 }
 
-export function apiPost<T>(
-  path: string,
-  body?: unknown,
-  signal?: AbortSignal,
-): Promise<T> {
+export function apiPost<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   return request<T>(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
