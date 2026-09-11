@@ -902,10 +902,56 @@ def test_path_agent_persists_rejected_chinese_output(tmp_path: Path, field: str)
         DEMO_CASE_ID, actor=OWNER_ACTOR, role=OWNER_ROLE, agent_type="path",
     )[0]
     assert run["status"] == "FAILED"
-    event = next(event for event in run["events"] if event["step"] == "agent.output.failed")
+    failures = [event for event in run["events"] if event["step"] == "agent.output.failed"]
+    assert len(failures) == 2
+    assert failures[-1]["details"]["will_repair"] is False
+    event = failures[0]
     assert location in event["details"]["error"]
     payload = event["details"]["rejected_result"]
     assert (payload[field] if field == "recommendation" else payload["role_reports"][0][field]) == "English only"
+
+
+@pytest.mark.parametrize("repair_outcome", ["valid", "wrong_roles", "execution_error"])
+def test_path_agent_repairs_once_with_feedback(tmp_path: Path, repair_outcome: str) -> None:
+    class RepairingAdapter(_CapturingFunctionToolPathAgent):
+        calls = 0
+
+        async def generate(self, context, trace):
+            self.calls += 1
+            result = await super().generate(context, trace)
+            if self.calls == 1:
+                assert context.repair_instruction is None
+                return result.model_copy(update={"recommendation": "English only"})
+            assert self.calls == 2
+            assert "English only" in context.repair_instruction
+            assert "recommendation" in context.repair_instruction
+            if repair_outcome == "execution_error":
+                raise AgentExecutionError("provider unavailable")
+            if repair_outcome == "wrong_roles":
+                return result.model_copy(update={"role_reports": []})
+            return result
+
+    adapter = RepairingAdapter()
+    service = make_service(tmp_path, path_agent=adapter)
+    orchestrate(service)
+    service.approve_manifest(DEMO_CASE_ID, ["PATH-01"], actor=OWNER_ACTOR, role=OWNER_ROLE)
+    async def execute():
+        return await service.execute_path(DEMO_CASE_ID, "PATH-01", actor=OWNER_ACTOR, role=OWNER_ROLE)
+    if repair_outcome == "valid":
+        asyncio.run(execute())
+    else:
+        with pytest.raises(AgentError):
+            asyncio.run(execute())
+    assert adapter.calls == 2
+    revision = service.get_case(DEMO_CASE_ID).path_attempts[0].solution_revision
+    assert (revision is not None) == (repair_outcome == "valid")
+    run = service.get_agent_runs(
+        DEMO_CASE_ID, actor=OWNER_ACTOR, role=OWNER_ROLE, agent_type="path",
+    )[0]
+    steps = [event["step"] for event in run["events"]]
+    assert steps.count("agent.repair_request") == 1
+    assert ("agent.repair_completed" in steps) == (repair_outcome == "valid")
+    assert (run["status"] == "FAILED") == (repair_outcome != "valid")
 
 
 def test_path_agent_registers_frozen_tools_without_precomputing_results(tmp_path: Path) -> None:
@@ -1239,3 +1285,28 @@ def test_failed_agent_run_is_kept_without_business_mutation(tmp_path: Path) -> N
     assert case.manifest is None
     runs = service.get_agent_runs(DEMO_CASE_ID, actor=OWNER_ACTOR, role=OWNER_ROLE, agent_type="orchestrator")
     assert runs[0]["status"] == "FAILED"
+
+
+def test_deep_agent_receives_repair_instruction() -> None:
+    instruction = '修正 recommendation：{"recommendation": "English only"}'
+    captured = []
+
+    class Graph:
+        async def ainvoke(self, state, **kwargs):
+            captured.append(state)
+            return {"structured_response": {"recommendation": "修正后的中文建议。", "role_reports": []}}
+
+    context = PathAgentContext(
+        case_snapshot={}, human_proposal=None,
+        path={"definition": "MaterialSubstitution", "title": "物料替代"},
+        execution_skills=(), knowledge=(), authorized_options=(),
+        tool_contracts=(), required_role_reports=(), previous_solution_revision=None,
+        repair_instruction=instruction,
+    )
+    adapter = DeepAgentPathAdapter(
+        FakeMessagesListChatModel(responses=[]), profile="test/repair",
+        graph_factory=lambda **kwargs: Graph(),
+    )
+    result = asyncio.run(adapter.generate(context, lambda *args: None))
+    assert captured[0]["messages"] == [{"role": "user", "content": instruction}]
+    assert result.recommendation == "修正后的中文建议。"
