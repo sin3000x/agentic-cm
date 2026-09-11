@@ -88,13 +88,16 @@
   gap: 14px;
 }
 .inboxItem {
-  padding: 18px;
+  min-width: 0;
+  padding: 22px;
   border: 1px solid #dce5e3;
   border-radius: 10px;
   background: #fff;
   box-shadow: 0 2px 9px rgba(17, 49, 48, 0.025);
 }
 .inboxItem > header {
+  flex-wrap: wrap;
+  gap: 8px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -117,6 +120,7 @@
   font-size: var(--text-base);
 }
 .inboxItem > p {
+  line-height: 1.7;
   margin: 0;
   color: #71817f;
   font-size: var(--text-xs);
@@ -127,7 +131,7 @@
 }
 .inboxItem dl div {
   display: grid;
-  grid-template-columns: 62px minmax(0, 1fr);
+  grid-template-columns: 5em minmax(0, 1fr);
   gap: 12px;
   padding: 9px 0;
   border-bottom: 1px solid #edf1f0;
@@ -137,6 +141,7 @@
   color: #889694;
 }
 .inboxItem dd {
+  overflow-wrap: anywhere;
   margin: 0;
   color: #42595a;
 }

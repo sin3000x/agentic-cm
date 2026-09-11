@@ -12,6 +12,8 @@
   border-bottom: 1px solid var(--line);
 }
 .issueHeader h1 {
+  line-height: 1.35;
+  text-wrap: balance;
   margin: 7px 0 8px;
   font-size: var(--text-7xl);
 }
@@ -20,6 +22,7 @@
   font-weight: 400;
 }
 .issueHeader p {
+  flex-wrap: wrap;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -104,7 +107,8 @@
   align-items: center;
   gap: 7px;
   min-height: 40px;
-  padding: 0 13px;
+  padding: 10px 16px;
+  flex-wrap: wrap;
   background: #f7f9f8;
   border-bottom: 1px solid #e1e8e6;
   font-size: var(--text-xs);
@@ -124,7 +128,7 @@
   font-size: var(--text-xs);
 }
 .commentBody {
-  padding: 16px 17px;
+  padding: 20px;
 }
 .commentBody > p {
   margin: 0;
@@ -192,6 +196,7 @@
   color: #245b55;
 }
 .threadEvent p {
+  flex-wrap: wrap;
   display: flex;
   align-items: baseline;
   gap: 7px;
@@ -351,9 +356,12 @@
     flex-direction: column;
   }
   .issueHeader h1 {
+    line-height: 1.35;
+    text-wrap: balance;
     font-size: var(--text-5xl);
   }
   .issueHeader p {
+    flex-wrap: wrap;
     align-items: flex-start;
     flex-wrap: wrap;
   }
@@ -379,6 +387,7 @@
     margin-left: 2px;
   }
   .threadEvent p {
+    flex-wrap: wrap;
     align-items: flex-start;
     flex-direction: column;
     gap: 2px;
@@ -1538,7 +1547,7 @@ button:disabled {
   grid-template-columns: minmax(0, 2fr) minmax(245px, 0.68fr);
   gap: 26px;
 }
-@media (max-width: 900px) {
+@media (max-width: 1120px) {
   .mainGrid.threadLayout {
     grid-template-columns: 1fr;
   }
