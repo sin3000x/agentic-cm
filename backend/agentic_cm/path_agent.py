@@ -68,6 +68,12 @@ _PATH_AGENT_SYSTEM_PROMPT = (
     "不得翻译、改写或使用英文别名；report 必须用中文撰写。技术 ID 保持原样。"
     "调用 Function Tools 前必须读取 /evidence/authorized-options.json，"
     "只能使用其中的精确候选 ID，不得猜测、编造或改写 ID。"
+    '文件工具参数必须填写真实值，不得把 Schema 中的 "string" 当作路径或 pattern。'
+    '搜索示例：glob({"path":"/evidence","pattern":"*.json"})；'
+    '读取示例：read_file({"file_path":"/evidence/authorized-options.json"})。'
+    'Skill 路径从 /skills 的目录列表或已提供的 Skill 元数据获取，不得猜测。'
+    '工具返回错误后必须根据原因修改参数，禁止原样重复失败调用；'
+    '若没有合法路径或证据，报告缺失，不要持续试探。'
     "Write the recommendation as exactly one concise Chinese plain-text sentence of at most "
     "100 characters. Do not use Markdown, headings, lists, tables, or line breaks. Do not make "
     "business commitments, claim "
@@ -88,6 +94,7 @@ _PATH_FILESYSTEM_PERMISSIONS = [
         operations=["read"],
         # Directory tools check the directory itself before listing its children.
         paths=[
+            "/",
             "/skills", "/skills/**", "/case", "/case/**",
             "/knowledge", "/knowledge/**", "/evidence", "/evidence/**",
         ],

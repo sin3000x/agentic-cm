@@ -563,7 +563,8 @@ def test_manifest_function_tool_returns_correctable_error(failure: str) -> None:
     assert "BGA-64" not in failed_tools[0]["error"]
 
 
-def test_deep_agent_denies_reads_outside_manifest_context() -> None:
+@pytest.mark.parametrize("file_path", ["/outside.txt", "string"])
+def test_deep_agent_denies_reads_outside_manifest_context(file_path: str) -> None:
     class OutsideReadModel(BaseChatModel):
         calls: int = 0
         read_result: str = ""
@@ -584,7 +585,7 @@ def test_deep_agent_denies_reads_outside_manifest_context() -> None:
                     content="",
                     tool_calls=[{
                         "name": "read_file",
-                        "args": {"file_path": "/outside.txt"},
+                        "args": {"file_path": file_path},
                         "id": "read-1",
                         "type": "tool_call",
                     }],
@@ -624,7 +625,7 @@ def test_deep_agent_denies_reads_outside_manifest_context() -> None:
         )
     )
 
-    assert "permission denied for read on /outside.txt" in model.read_result
+    assert f"permission denied for read on /{file_path.lstrip('/')}" in model.read_result
 
 
 def test_deep_agent_reuses_graph_without_reusing_frozen_tool_records() -> None:
@@ -1337,6 +1338,12 @@ def test_deep_agent_receives_repair_instruction() -> None:
 
 
 @pytest.mark.parametrize("tool_name,arguments,expected", [
+    ("ls", {"path": "/"}, "/evidence"),
+    ("glob", {"pattern": "/evidence/**/*"}, "authorized-options.json"),
+    ("glob", {"pattern": "/case/***"}, "snapshot.json"),
+    ("glob", {"pattern": "/knowledge/**/*"}, "context.json"),
+    ("glob", {"path": None, "pattern": "/evidence/**/*"}, "authorized-options.json"),
+    ("glob", {"path": None, "pattern": "**/*"}, "snapshot.json"),
     ("ls", {"path": "/skills"}, "demo"),
     ("ls", {"path": "/case"}, "snapshot.json"),
     ("ls", {"path": "/knowledge"}, "context.json"),
@@ -1344,7 +1351,15 @@ def test_deep_agent_receives_repair_instruction() -> None:
     ("glob", {"path": "/evidence", "pattern": "*.json"}, "authorized-options.json"),
     ("read_file", {"file_path": "/skills/demo/SKILL.md"}, "示例技能"),
 ])
-def test_deep_agent_can_browse_authorized_directories(tool_name, arguments, expected) -> None:
+def test_deep_agent_can_browse_authorized_directories(tool_name, arguments, expected, monkeypatch) -> None:
+    from agentic_cm import path_agent as module
+
+    original_files = module._context_files
+
+    def files_with_private_record(context):
+        return {**original_files(context), "/private/secret.txt": "PRIVATE_RECORD"}
+
+    monkeypatch.setattr(module, "_context_files", files_with_private_record)
     class BrowsingModel(BaseChatModel):
         calls: int = 0
 
@@ -1365,6 +1380,8 @@ def test_deep_agent_can_browse_authorized_directories(tool_name, arguments, expe
                 reply = next(item for item in reversed(messages) if isinstance(item, ToolMessage))
                 assert reply.status == "success", reply.content
                 assert expected in str(reply.content)
+                assert "private" not in str(reply.content)
+                assert "PRIVATE_RECORD" not in str(reply.content)
                 name, args = "PathAgentResult", {"recommendation": "已读取授权上下文。", "role_reports": []}
             self.calls += 1
             return ChatResult(generations=[ChatGeneration(message=AIMessage(
