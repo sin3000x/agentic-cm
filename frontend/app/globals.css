@@ -8,6 +8,20 @@
   --teal-dark: #075b53;
   --nav: #102c30;
   --nav-line: #234247;
+  --text-2xs: 0.75rem;
+  --text-xs: 0.8125rem;
+  --text-sm: 0.875rem;
+  --text-md: 0.9375rem;
+  --text-base: 1rem;
+  --text-lg: 1.0625rem;
+  --text-xl: 1.125rem;
+  --text-2xl: 1.25rem;
+  --text-3xl: 1.375rem;
+  --text-4xl: 1.5rem;
+  --text-5xl: 1.625rem;
+  --text-6xl: 1.75rem;
+  --text-7xl: 1.875rem;
+  --text-8xl: 2rem;
 }
 * {
   box-sizing: border-box;
@@ -15,12 +29,16 @@
 html {
   background: var(--canvas);
   scroll-behavior: smooth;
+  /* Fluid root so rem type tokens scale with the viewport. */
+  font-size: clamp(1rem, 0.45vw + 0.72rem, 1.125rem);
 }
 body {
   margin: 0;
   color: var(--ink);
   background: var(--canvas);
   font-family: var(--font-geist-sans), "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: var(--text-sm);
+  line-height: 1.45;
   -webkit-font-smoothing: antialiased;
 }
 button,
@@ -78,7 +96,7 @@ button {
   border-radius: 10px;
   color: #d9f3ee;
   background: #173a3d;
-  font-size: 11px;
+  font-size: var(--text-sm);
   font-weight: 850;
   letter-spacing: 0.06em;
 }
@@ -87,12 +105,12 @@ button {
   flex-direction: column;
 }
 .brand strong {
-  font-size: 14px;
+  font-size: var(--text-base);
 }
 .brand small {
   margin-top: 2px;
   color: #76979a;
-  font-size: 8px;
+  font-size: var(--text-xs);
   text-transform: uppercase;
   letter-spacing: 0.15em;
 }
@@ -102,7 +120,7 @@ button {
 .primaryNav p {
   margin: 14px 10px 7px;
   color: #5f8587;
-  font-size: 9px;
+  font-size: var(--text-xs);
   font-weight: 750;
   letter-spacing: 0.13em;
   text-transform: uppercase;
@@ -111,7 +129,7 @@ button {
   margin-top: 0;
 }
 .navLink {
-  height: 39px;
+  height: 42px;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -120,7 +138,7 @@ button {
   color: #a9bec0;
   border-radius: 7px;
   text-decoration: none;
-  font-size: 11px;
+  font-size: var(--text-sm);
   font-weight: 540;
 }
 .navLink:hover {
@@ -135,7 +153,7 @@ button {
 .navIcon {
   width: 17px;
   color: #78a5a4;
-  font-size: 14px;
+  font-size: var(--text-base);
   text-align: center;
 }
 .navLink.active .navIcon {
@@ -149,7 +167,7 @@ button {
   color: #b9e2da;
   background: #285154;
   text-align: center;
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 .sidebarFoot {
   position: relative;
@@ -162,7 +180,7 @@ button {
   padding: 10px 5px;
   color: #63888a;
   border-bottom: 1px solid var(--nav-line);
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 .systemStatus i {
   width: 6px;
@@ -196,7 +214,7 @@ button {
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.5);
   border-radius: 50%;
-  font-size: 10px;
+  font-size: var(--text-sm);
   font-weight: 780;
 }
 .avatar img {
@@ -210,12 +228,12 @@ button {
   flex-direction: column;
 }
 .identityButton strong {
-  font-size: 10px;
+  font-size: var(--text-sm);
 }
 .identityButton small {
   margin-top: 3px;
   color: #6f9294;
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 .identityButton b {
   color: #6f9294;
@@ -258,7 +276,7 @@ button {
   display: block;
   padding: 3px 5px 8px;
   color: #6f9697;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
@@ -280,18 +298,18 @@ button {
 .identityMenu button > span:last-child {
   display: flex;
   flex-direction: column;
-  font-size: 9px;
+  font-size: var(--text-xs);
 }
 .identityMenu button small {
   color: #77999b;
-  font-size: 7px;
+  font-size: var(--text-2xs);
 }
 .identityMenu p {
   margin: 8px 4px 2px;
   padding-top: 8px;
   color: #759496;
   border-top: 1px solid #2a4d50;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   line-height: 1.5;
 }
 .mainArea {
@@ -309,7 +327,7 @@ button {
 }
 .breadcrumb {
   color: #31474a;
-  font-size: 10px;
+  font-size: var(--text-sm);
 }
 .breadcrumb span {
   color: #879698;
@@ -324,7 +342,7 @@ button {
   gap: 8px;
 }
 .globalSearch {
-  height: 32px;
+  height: 34px;
   width: 242px;
   display: flex;
   align-items: center;
@@ -343,7 +361,7 @@ button {
   border: 0;
   outline: 0;
   background: transparent;
-  font-size: 9px;
+  font-size: var(--text-xs);
 }
 .globalSearch input::placeholder,
 .tableSearch input::placeholder {
@@ -355,13 +373,13 @@ button {
   border: 1px solid #e0e6e5;
   border-radius: 4px;
   background: #fff;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   white-space: nowrap;
 }
 .iconButton {
   position: relative;
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
   color: #607376;
   border: 1px solid #d8e1df;
   border-radius: 7px;
@@ -378,7 +396,7 @@ button {
   background: #d05c4d;
 }
 .createButton {
-  height: 32px;
+  height: 34px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -389,14 +407,14 @@ button {
   border-radius: 7px;
   background: var(--teal);
   box-shadow: 0 1px 2px rgba(7, 63, 57, 0.18);
-  font-size: 9px;
+  font-size: var(--text-xs);
   font-weight: 720;
 }
 .createButton:hover {
   background: var(--teal-dark);
 }
 .createButton span {
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 .pageContent {
   max-width: 1500px;
@@ -413,19 +431,19 @@ button {
   margin: 0;
   color: #839391;
   font-family: var(--font-geist-mono), monospace;
-  font-size: 8px;
+  font-size: var(--text-xs);
   font-weight: 700;
   letter-spacing: 0.11em;
 }
 .welcome h1 {
   margin: 6px 0 7px;
-  font-size: 27px;
+  font-size: var(--text-6xl);
   letter-spacing: -0.04em;
 }
 .welcomeCopy {
   margin: 0;
   color: #718083;
-  font-size: 10px;
+  font-size: var(--text-sm);
 }
 .welcomeCopy strong {
   color: var(--teal);
@@ -440,7 +458,7 @@ button {
   border: 1px solid #cbe0db;
   border-radius: 10px;
   background: #edf6f4;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   font-weight: 750;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -448,7 +466,7 @@ button {
 .governanceNote p {
   margin: 6px 0 0;
   color: #8a9998;
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 .metrics {
   display: grid;
@@ -477,7 +495,7 @@ button {
   place-items: center;
   flex: 0 0 auto;
   border-radius: 9px;
-  font-size: 14px;
+  font-size: var(--text-base);
   font-weight: 750;
 }
 .metricTeal {
@@ -505,24 +523,24 @@ button {
 .metrics article span {
   grid-column: 1/-1;
   color: #758483;
-  font-size: 8px;
+  font-size: var(--text-xs);
   font-weight: 650;
   letter-spacing: 0.03em;
 }
 .metrics article strong {
   margin-top: 4px;
-  font-size: 23px;
+  font-size: var(--text-4xl);
   line-height: 1;
 }
 .metrics article strong em {
   margin-left: 2px;
-  font-size: 9px;
+  font-size: var(--text-xs);
   font-style: normal;
   font-weight: 650;
 }
 .metrics article small {
   color: #8b9897;
-  font-size: 7px;
+  font-size: var(--text-2xs);
 }
 .metrics article small b {
   color: #2d8977;
@@ -549,19 +567,19 @@ button {
 .panelHeader h2,
 .railHeader h2 {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 .panelHeader p {
   margin: 4px 0 0;
   color: #8a9796;
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 .panelHeader > button,
 .railHeader > button {
   color: var(--teal);
   border: 0;
   background: transparent;
-  font-size: 8px;
+  font-size: var(--text-xs);
   font-weight: 700;
 }
 .panelHeader > button span {
@@ -580,13 +598,13 @@ button {
   gap: 4px;
 }
 .filterTabs button {
-  height: 28px;
-  padding: 0 9px;
+  height: 32px;
+  padding: 0 10px;
   color: #768584;
   border: 0;
   border-radius: 6px;
   background: transparent;
-  font-size: 8px;
+  font-size: var(--text-xs);
   font-weight: 640;
 }
 .filterTabs button:hover {
@@ -602,11 +620,11 @@ button {
   color: #497c75;
   border-radius: 8px;
   background: #d5e9e5;
-  font-size: 7px;
+  font-size: var(--text-2xs);
 }
 .tableSearch {
-  width: 148px;
-  height: 27px;
+  width: 168px;
+  height: 32px;
   display: flex;
   align-items: center;
   gap: 5px;
@@ -624,13 +642,13 @@ button {
   border-collapse: collapse;
 }
 .caseTable th {
-  height: 34px;
+  height: 38px;
   padding: 0 9px;
   color: #919e9d;
   border-bottom: 1px solid #e8edec;
   background: #fafcfb;
   text-align: left;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   letter-spacing: 0.08em;
   font-weight: 750;
   white-space: nowrap;
@@ -648,7 +666,7 @@ button {
   padding: 9px;
   color: #32484a;
   border-bottom: 1px solid #edf1f0;
-  font-size: 8px;
+  font-size: var(--text-xs);
   vertical-align: middle;
 }
 .caseTable tbody tr {
@@ -673,7 +691,7 @@ button {
   place-items: center;
   flex: 0 0 auto;
   border-radius: 8px;
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 .glyph-高 {
   color: #ad5042;
@@ -693,12 +711,12 @@ button {
   flex-direction: column;
 }
 .caseTitle b {
-  font-size: 9px;
+  font-size: var(--text-xs);
 }
 .caseTitle small {
   margin-top: 4px;
   color: #899796;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   white-space: nowrap;
 }
 .statusPill {
@@ -706,7 +724,7 @@ button {
   align-items: center;
   padding: 3px 6px;
   border-radius: 9px;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   font-weight: 720;
   white-space: nowrap;
 }
@@ -736,7 +754,7 @@ button {
   gap: 4px;
   margin-top: 5px;
   color: #859392;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   white-space: nowrap;
 }
 .riskMark i {
@@ -773,7 +791,7 @@ button {
   display: block;
   margin-top: 6px;
   color: #647674;
-  font-size: 7px;
+  font-size: var(--text-2xs);
 }
 .ownerCell {
   min-width: 92px;
@@ -784,18 +802,18 @@ button {
 .ownerCell .avatar {
   width: 25px;
   height: 25px;
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 .ownerCell b {
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 .ownerCell small {
   margin-top: 3px;
   color: #8a9796;
-  font-size: 7px;
+  font-size: var(--text-2xs);
 }
 .due {
-  font-size: 8px;
+  font-size: var(--text-xs);
   font-weight: 680;
   white-space: nowrap;
 }
@@ -813,7 +831,7 @@ button {
 }
 .updated {
   color: #849291;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   white-space: nowrap;
 }
 .rowAction {
@@ -823,7 +841,7 @@ button {
   border: 1px solid transparent;
   border-radius: 5px;
   background: transparent;
-  font-size: 16px;
+  font-size: var(--text-xl);
 }
 .caseTable tr:hover .rowAction {
   color: var(--teal);
@@ -839,15 +857,15 @@ button {
   color: #859391;
 }
 .emptyState > span {
-  font-size: 23px;
+  font-size: var(--text-4xl);
 }
 .emptyState strong {
   margin-top: 8px;
-  font-size: 10px;
+  font-size: var(--text-sm);
 }
 .emptyState p {
   margin: 5px 0 0;
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 .tableFooter {
   height: 43px;
@@ -856,7 +874,7 @@ button {
   justify-content: space-between;
   padding: 0 20px;
   color: #899695;
-  font-size: 7px;
+  font-size: var(--text-2xs);
 }
 .tableFooter > div {
   display: flex;
@@ -869,7 +887,7 @@ button {
   border: 1px solid #e0e6e5;
   border-radius: 5px;
   background: #fff;
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 .tableFooter button.active {
   color: #fff;
@@ -887,7 +905,7 @@ button {
   border: 1px solid #f0d2cd;
   border-radius: 6px;
   background: #fff5f3;
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 .rightRail {
   display: grid;
@@ -928,7 +946,7 @@ button {
   flex: 0 0 auto;
   overflow: hidden;
   border-radius: 7px;
-  font-size: 8px;
+  font-size: var(--text-xs);
   font-weight: 750;
 }
 .activityAgent {
@@ -952,7 +970,7 @@ button {
 .activityList p {
   margin: 1px 0 6px;
   color: #526669;
-  font-size: 8px;
+  font-size: var(--text-xs);
   line-height: 1.45;
 }
 .activityList p b {
@@ -964,7 +982,7 @@ button {
   justify-content: space-between;
   gap: 8px;
   color: #98a3a2;
-  font-size: 7px;
+  font-size: var(--text-2xs);
 }
 .activityList small b {
   overflow: hidden;
@@ -1007,13 +1025,13 @@ button {
 .caseDrawer header small {
   color: var(--teal);
   font-family: var(--font-geist-mono), monospace;
-  font-size: 8px;
+  font-size: var(--text-xs);
   font-weight: 700;
   letter-spacing: 0.08em;
 }
 .caseDrawer h2 {
   margin: 6px 0 0;
-  font-size: 21px;
+  font-size: var(--text-3xl);
 }
 .caseDrawer header button {
   width: 28px;
@@ -1022,7 +1040,7 @@ button {
   border: 1px solid #dae2e0;
   border-radius: 6px;
   background: #fff;
-  font-size: 17px;
+  font-size: var(--text-xl);
 }
 .drawerBody {
   padding: 22px 25px;
@@ -1039,7 +1057,7 @@ button {
 .drawerDescription {
   margin: 18px 0;
   color: #566a6c;
-  font-size: 10px;
+  font-size: var(--text-sm);
   line-height: 1.7;
 }
 .drawerBody dl {
@@ -1052,7 +1070,7 @@ button {
   justify-content: space-between;
   padding: 12px 0;
   border-bottom: 1px solid var(--line);
-  font-size: 9px;
+  font-size: var(--text-xs);
 }
 .drawerBody dt {
   color: #82908f;
@@ -1073,7 +1091,7 @@ button {
   display: block;
   margin-bottom: 12px;
   color: #5b6f6f;
-  font-size: 8px;
+  font-size: var(--text-xs);
   font-weight: 720;
 }
 .drawerStage .stageProgress {
@@ -1109,16 +1127,16 @@ button {
   color: #9a651a;
   border-radius: 50%;
   background: #f5e4c7;
-  font-size: 9px;
+  font-size: var(--text-xs);
   font-weight: 800;
 }
 .drawerNotice strong {
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 .drawerNotice p {
   margin: 4px 0 0;
   color: #765a31;
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 .caseDrawer > footer {
   display: flex;
@@ -1132,12 +1150,12 @@ button {
   flex: 1;
 }
 .secondaryButton {
-  height: 32px;
+  height: 34px;
   color: #4f6465;
   border: 1px solid #d6e0de;
   border-radius: 7px;
   background: #fff;
-  font-size: 9px;
+  font-size: var(--text-xs);
   font-weight: 650;
 }
 @keyframes drawerIn {
@@ -1175,7 +1193,7 @@ button {
     padding: 0;
   }
   .navIcon {
-    font-size: 16px;
+    font-size: var(--text-xl);
   }
   .sidebarFoot {
     padding: 0 19px 17px;
@@ -1192,6 +1210,16 @@ button {
   }
   .rightRail {
     grid-template-columns: 1fr;
+  }
+  .metrics {
+    grid-template-columns: 1fr 1fr;
+  }
+  .metrics article:nth-child(3) {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+  .metrics article:nth-child(4) {
+    border-top: 1px solid var(--line);
   }
   .caseTable th:nth-child(6),
   .caseTable td:nth-child(6) {
@@ -1294,7 +1322,7 @@ button {
     height: 31px;
   }
   .metrics article strong {
-    font-size: 20px;
+    font-size: var(--text-3xl);
   }
   .caseDrawer {
     width: 100%;
@@ -1339,7 +1367,7 @@ button {
   align-items: center;
   gap: 7px;
   color: #738583;
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 .assetTopStatus i {
   width: 6px;
@@ -1360,14 +1388,14 @@ button {
 }
 .assetHero h1 {
   margin: 6px 0 9px;
-  font-size: 31px;
+  font-size: var(--text-8xl);
   letter-spacing: -0.04em;
 }
 .assetHero > div > p:last-child {
   max-width: 670px;
   margin: 0;
   color: #6e8080;
-  font-size: 10px;
+  font-size: var(--text-sm);
   line-height: 1.7;
 }
 .assetSearch {
@@ -1387,7 +1415,7 @@ button {
   border: 0;
   outline: 0;
   background: transparent;
-  font-size: 9px;
+  font-size: var(--text-xs);
 }
 .assetStats {
   display: grid;
@@ -1407,7 +1435,7 @@ button {
   color: #748584;
   border-left: 1px solid var(--line);
   text-decoration: none;
-  font-size: 9px;
+  font-size: var(--text-xs);
 }
 .assetStats a:first-child {
   border-left: 0;
@@ -1422,7 +1450,7 @@ button {
 }
 .assetStats strong {
   color: var(--ink);
-  font-size: 21px;
+  font-size: var(--text-3xl);
 }
 .assetGrid {
   display: grid;
@@ -1449,7 +1477,7 @@ button {
   display: grid;
   place-items: center;
   border-radius: 9px;
-  font-size: 12px;
+  font-size: var(--text-md);
   font-weight: 820;
 }
 .kind-skills {
@@ -1466,18 +1494,18 @@ button {
 }
 .assetCard h2 {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 .assetCard header p {
   margin: 4px 0 0;
   color: #899796;
   font-family: var(--font-geist-mono), monospace;
-  font-size: 7px;
+  font-size: var(--text-2xs);
 }
 .assetOrigin {
   padding: 3px 7px;
   border-radius: 9px;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   font-weight: 700;
 }
 .assetOrigin.builtin {
@@ -1503,7 +1531,7 @@ button {
   border-radius: 5px;
   background: #f8fbfa;
   font-family: var(--font-geist-mono), monospace;
-  font-size: 7px;
+  font-size: var(--text-2xs);
 }
 .assetSelector {
   margin: 15px 0 13px;
@@ -1511,7 +1539,7 @@ button {
 .assetSummary {
   margin: 0 0 12px;
   color: #4f6465;
-  font-size: 9px;
+  font-size: var(--text-xs);
   line-height: 1.7;
 }
 .assetPathList {
@@ -1521,7 +1549,7 @@ button {
 }
 .assetPathList > strong {
   color: #80908e;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -1533,12 +1561,12 @@ button {
   background: #f5f9f8;
 }
 .assetPathList b {
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 .assetPathList small {
   margin-top: 3px;
   color: #7f8e8d;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   line-height: 1.5;
 }
 .assetCard details {
@@ -1548,7 +1576,7 @@ button {
 .assetCard summary {
   padding: 12px 0 2px;
   color: var(--teal);
-  font-size: 8px;
+  font-size: var(--text-xs);
   font-weight: 700;
   cursor: pointer;
 }
@@ -1567,7 +1595,7 @@ button {
 }
 .assetFiles {
   color: #8a9896;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   line-height: 1.6;
 }
 .commitmentList {
@@ -1588,25 +1616,25 @@ button {
   color: #6a568e;
   border-radius: 4px;
   background: #eee9f7;
-  font-size: 6px;
+  font-size: var(--text-2xs);
 }
 .commitmentList strong {
-  font-size: 9px;
+  font-size: var(--text-xs);
 }
 .commitmentList p {
   margin: 4px 0;
   color: #526768;
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 .commitmentList small {
   color: #8a9796;
-  font-size: 7px;
+  font-size: var(--text-2xs);
 }
 .knowledgeObservations {
   margin: 0;
   padding-left: 17px;
   color: #526768;
-  font-size: 8px;
+  font-size: var(--text-xs);
   line-height: 1.65;
 }
 .knowledgeObservations li + li {
@@ -1624,7 +1652,7 @@ button {
   gap: 8px;
   padding: 8px 0;
   border-bottom: 1px solid #edf1f0;
-  font-size: 7px;
+  font-size: var(--text-2xs);
 }
 .knowledgeSource div:nth-child(odd) {
   padding-right: 12px;
@@ -1645,11 +1673,11 @@ button {
   padding-top: 12px;
   color: #9aa5a4;
   border-top: 1px solid #e8edec;
-  font-size: 6px;
+  font-size: var(--text-2xs);
 }
 .assetCard > footer code {
   color: #647876;
-  font-size: 7px;
+  font-size: var(--text-2xs);
 }
 .assetMessage {
   padding: 42px;
@@ -1662,11 +1690,11 @@ button {
 }
 .assetMessage strong {
   color: #354c4e;
-  font-size: 11px;
+  font-size: var(--text-sm);
 }
 .assetMessage p {
   margin: 6px 0 0;
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 .assetMessage.error {
   border-color: #e8c8c3;
@@ -1714,7 +1742,7 @@ button {
   display: block;
   margin-bottom: 4px;
   color: #6b8581;
-  font-size: 6px;
+  font-size: var(--text-2xs);
   font-weight: 800;
   letter-spacing: 0.12em;
 }
@@ -1733,11 +1761,11 @@ button {
 }
 .skillRoleHeader h2 {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 .skillRoleHeader small {
   color: #6d817e;
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 .skillRoleGrid {
   display: grid;
@@ -1755,7 +1783,7 @@ button {
 .skillMemberRefs > p {
   margin: 0;
   color: #607a76;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   font-weight: 750;
   letter-spacing: 0.04em;
 }
@@ -1775,17 +1803,17 @@ button {
   gap: 2px;
 }
 .skillMemberRef strong {
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 .skillMemberRef small {
   color: #7a8c89;
   font-family: var(--font-geist-mono), monospace;
-  font-size: 7px;
+  font-size: var(--text-2xs);
 }
 .skillMemberRef em {
   flex: 0 0 auto;
   color: #176f64;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   font-style: normal;
   font-weight: 750;
 }

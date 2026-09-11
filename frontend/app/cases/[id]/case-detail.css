@@ -13,7 +13,7 @@
 }
 .issueHeader h1 {
   margin: 7px 0 8px;
-  font-size: 29px;
+  font-size: var(--text-7xl);
 }
 .issueHeader h1 span {
   color: #83908f;
@@ -25,7 +25,7 @@
   gap: 6px;
   margin: 0;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--text-sm);
 }
 .openBadge {
   display: inline-flex;
@@ -34,7 +34,7 @@
   border-radius: 14px;
   background: #1f8b66;
   color: #fff;
-  font-size: 9px;
+  font-size: var(--text-xs);
   font-weight: 800;
   text-transform: uppercase;
 }
@@ -73,7 +73,7 @@
   overflow: hidden;
   border-radius: 50%;
   border: 3px solid var(--canvas);
-  font-size: 10px;
+  font-size: var(--text-sm);
   font-weight: 800;
 }
 .threadAvatar img,
@@ -107,10 +107,10 @@
   padding: 0 13px;
   background: #f7f9f8;
   border-bottom: 1px solid #e1e8e6;
-  font-size: 9px;
+  font-size: var(--text-xs);
 }
 .commentBox > header strong {
-  font-size: 11px;
+  font-size: var(--text-sm);
 }
 .commentBox > header span {
   color: #7b8988;
@@ -121,7 +121,7 @@
   border: 1px solid #d7e0de;
   border-radius: 10px;
   color: #667876;
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 .commentBody {
   padding: 16px 17px;
@@ -129,12 +129,12 @@
 .commentBody > p {
   margin: 0;
   color: #415657;
-  font-size: 12px;
+  font-size: var(--text-md);
   line-height: 1.7;
 }
 .commentBody > h3 {
   margin: 16px 0 7px;
-  font-size: 10px;
+  font-size: var(--text-sm);
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
@@ -144,7 +144,7 @@
   border-left: 3px solid #71a99f;
   background: #f3f8f6;
   color: #314c4d;
-  font-size: 11px;
+  font-size: var(--text-sm);
   line-height: 1.65;
 }
 .factChips {
@@ -159,7 +159,7 @@
   border-radius: 12px;
   color: #657775;
   background: #fbfcfc;
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 .threadEvent {
   position: relative;
@@ -181,7 +181,7 @@
   border-radius: 50%;
   background: #1d8d72;
   color: #fff;
-  font-size: 9px;
+  font-size: var(--text-xs);
   font-weight: 800;
 }
 .eventIcon.botEvent {
@@ -196,11 +196,11 @@
   align-items: baseline;
   gap: 7px;
   margin: 0;
-  font-size: 10px;
+  font-size: var(--text-sm);
 }
 .threadEvent p span {
   color: #7d8d8b;
-  font-size: 9px;
+  font-size: var(--text-xs);
 }
 .currentThreadItem {
   margin-top: 9px;
@@ -235,7 +235,7 @@
   display: block;
   margin-bottom: 10px;
   color: #7c8b89;
-  font-size: 8px;
+  font-size: var(--text-xs);
   font-weight: 800;
   letter-spacing: 0.1em;
 }
@@ -258,7 +258,7 @@
   border-radius: 50%;
   background: #f5f7f6;
   color: #80908d;
-  font-size: 8px;
+  font-size: var(--text-xs);
   font-weight: 800;
 }
 .futureFlow p {
@@ -269,11 +269,11 @@
 }
 .futureFlow strong {
   color: #586b6a;
-  font-size: 10px;
+  font-size: var(--text-sm);
 }
 .futureFlow small {
   color: #879492;
-  font-size: 9px;
+  font-size: var(--text-xs);
   line-height: 1.45;
 }
 .flowSummary ol {
@@ -308,7 +308,7 @@
   border: 1px solid #d1dbd9;
   border-radius: 50%;
   background: #fff;
-  font-size: 8px;
+  font-size: var(--text-xs);
   font-weight: 800;
 }
 .flowSummary li > div {
@@ -318,10 +318,10 @@
   padding-top: 2px;
 }
 .flowSummary li strong {
-  font-size: 10px;
+  font-size: var(--text-sm);
 }
 .flowSummary li small {
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 .flowSummary li.complete {
   color: #317369;
@@ -351,7 +351,7 @@
     flex-direction: column;
   }
   .issueHeader h1 {
-    font-size: 24px;
+    font-size: var(--text-5xl);
   }
   .issueHeader p {
     align-items: flex-start;
@@ -419,7 +419,7 @@
 }
 .breadcrumbs {
   color: #516467;
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 .breadcrumbs span {
   color: #a8b5b4;
@@ -435,7 +435,7 @@
   border: 1px solid #d4dfdd;
   border-radius: 7px;
   padding: 7px 12px;
-  font-size: 11px;
+  font-size: var(--text-sm);
 }
 .content {
   max-width: 1240px;
@@ -453,7 +453,7 @@
   align-items: center;
   gap: 7px;
   color: var(--teal);
-  font-size: 10px;
+  font-size: var(--text-sm);
   letter-spacing: 0.08em;
   font-weight: 800;
 }
@@ -468,13 +468,13 @@
 }
 h1 {
   margin: 8px 0 7px;
-  font-size: 30px;
+  font-size: var(--text-7xl);
   letter-spacing: -0.035em;
 }
 .caseHeader p {
   margin: 0;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 .primary {
   border: 0;
@@ -483,7 +483,7 @@ h1 {
   background: var(--teal);
   color: #fff;
   box-shadow: 0 1px 2px rgba(3, 55, 49, 0.2);
-  font-size: 12px;
+  font-size: var(--text-md);
   font-weight: 700;
 }
 .primary:hover {
@@ -513,19 +513,19 @@ h1 {
 .metaRow small,
 .panelTitle small {
   color: #829291;
-  font-size: 9px;
+  font-size: var(--text-xs);
   letter-spacing: 0.1em;
   text-transform: uppercase;
   font-weight: 800;
 }
 .metaRow strong {
   margin-top: 5px;
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 .metaRow span {
   margin-top: 3px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--text-sm);
 }
 .metaRow .danger {
   color: #b34f3d;
@@ -543,7 +543,7 @@ h1 {
   align-items: center;
   gap: 8px;
   color: #8b9998;
-  font-size: 10px;
+  font-size: var(--text-sm);
 }
 .stageBar li:after {
   content: "";
@@ -565,7 +565,7 @@ h1 {
   border: 1px solid #cbd7d5;
   border-radius: 50%;
   background: var(--canvas);
-  font-size: 9px;
+  font-size: var(--text-xs);
 }
 .stageBar li.done {
   color: var(--teal);
@@ -614,7 +614,7 @@ h1 {
 .panelTitle h2,
 .compactTitle h2 {
   margin: 4px 0 0;
-  font-size: 16px;
+  font-size: var(--text-xl);
   letter-spacing: -0.02em;
 }
 .version {
@@ -623,13 +623,13 @@ h1 {
   padding: 4px 8px;
   background: #f0f7f5;
   color: var(--teal);
-  font-size: 9px;
+  font-size: var(--text-xs);
   font-weight: 700;
 }
 .lead {
   margin: 16px 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--text-md);
   line-height: 1.7;
 }
 .pathChoices {
@@ -654,7 +654,7 @@ h1 {
 .pathBadge {
   color: var(--teal);
   font-family: var(--font-geist-mono), monospace;
-  font-size: 9px;
+  font-size: var(--text-xs);
   font-weight: 800;
   letter-spacing: 0.1em;
 }
@@ -663,7 +663,7 @@ h1 {
   border-radius: 4px;
   background: #e8f4ed;
   color: #287756;
-  font-size: 8px;
+  font-size: var(--text-xs);
   font-weight: 700;
 }
 .pathSelector {
@@ -672,7 +672,7 @@ h1 {
   gap: 6px;
   margin-left: auto;
   color: #58706e;
-  font-size: 9px;
+  font-size: var(--text-xs);
   font-weight: 700;
   cursor: pointer;
 }
@@ -681,18 +681,18 @@ h1 {
 }
 .pathCard h3 {
   margin: 11px 0 8px;
-  font-size: 15px;
+  font-size: var(--text-lg);
 }
 .pathCard h3 span {
   margin-left: 5px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--text-md);
   font-weight: 500;
 }
 .pathCard > p {
   margin: 0;
   color: #586c6e;
-  font-size: 11px;
+  font-size: var(--text-sm);
   line-height: 1.7;
 }
 .manifestSkillChoices {
@@ -719,7 +719,7 @@ h1 {
 }
 .manifestSkillChoice > summary strong {
   min-width: 0;
-  font-size: 12px;
+  font-size: var(--text-md);
   font-weight: 700;
   line-height: 1.4;
 }
@@ -729,7 +729,7 @@ h1 {
   border-radius: 4px;
   background: #dff1ed;
   color: #176f64;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   font-weight: 800;
   letter-spacing: 0.08em;
 }
@@ -737,14 +737,14 @@ h1 {
 .manifestSkillChoice > div {
   margin: 8px 0 0;
   color: #4e6461;
-  font-size: 9px;
+  font-size: var(--text-xs);
   line-height: 1.55;
 }
 .manifestSkillChoice b {
   display: block;
   margin-bottom: 3px;
   color: #176f64;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   letter-spacing: 0.08em;
 }
 .manifestSkillChoice code {
@@ -755,7 +755,7 @@ h1 {
   background: #eef6f4;
   color: #274e4a;
   font-family: var(--font-geist-mono), monospace;
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 .pathStats {
   display: grid;
@@ -776,18 +776,18 @@ h1 {
 }
 .pathStats small {
   color: #879694;
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 .pathStats strong {
   margin-top: 4px;
-  font-size: 15px;
+  font-size: var(--text-lg);
 }
 .linkButton {
   padding: 0;
   border: 0;
   background: transparent;
   color: var(--teal);
-  font-size: 10px;
+  font-size: var(--text-sm);
   font-weight: 700;
 }
 .approvalBox {
@@ -804,11 +804,11 @@ h1 {
   gap: 3px;
 }
 .approvalBox strong {
-  font-size: 10px;
+  font-size: var(--text-sm);
 }
 .approvalBox small {
   color: var(--muted);
-  font-size: 9px;
+  font-size: var(--text-xs);
 }
 .rightRail {
   display: grid;
@@ -824,17 +824,17 @@ h1 {
 }
 .compactTitle h2 {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 .compactTitle button {
   border: 0;
   background: transparent;
   color: var(--teal);
-  font-size: 9px;
+  font-size: var(--text-xs);
 }
 .compactTitle span {
   color: var(--teal);
-  font-size: 9px;
+  font-size: var(--text-xs);
   font-weight: 700;
 }
 .facts dl {
@@ -845,7 +845,7 @@ h1 {
   justify-content: space-between;
   padding: 8px 0;
   border-top: 1px solid #edf1f0;
-  font-size: 10px;
+  font-size: var(--text-sm);
 }
 .facts dt {
   color: var(--muted);
@@ -860,13 +860,13 @@ h1 {
   padding-left: 12px;
   border-left: 2px solid #89beb5;
   color: #415b5d;
-  font-size: 10px;
+  font-size: var(--text-sm);
   line-height: 1.65;
 }
 .proposal p {
   margin: 0;
   color: var(--muted);
-  font-size: 9px;
+  font-size: var(--text-xs);
 }
 .proposal p span {
   float: right;
@@ -879,11 +879,11 @@ h1 {
   color: #72562f;
 }
 .notice strong {
-  font-size: 10px;
+  font-size: var(--text-sm);
 }
 .notice p {
   margin: 5px 0 0;
-  font-size: 9px;
+  font-size: var(--text-xs);
   line-height: 1.55;
 }
 .toast {
@@ -892,7 +892,7 @@ h1 {
   border-radius: 7px;
   background: #edf6f3;
   color: #285e57;
-  font-size: 10px;
+  font-size: var(--text-sm);
 }
 .dag {
   display: grid;
@@ -907,18 +907,18 @@ h1 {
   background: #fbfdfc;
 }
 .dagNode > span {
-  font-size: 8px;
+  font-size: var(--text-xs);
   letter-spacing: 0.1em;
   font-weight: 800;
 }
 .dagNode h3 {
   margin: 8px 0 5px;
-  font-size: 14px;
+  font-size: var(--text-base);
 }
 .dagNode p {
   margin: 0;
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--text-sm);
 }
 .dagNode.ready {
   border-color: #86bdb4;
@@ -979,13 +979,13 @@ h1 {
   border: 0;
 }
 .metricStrip strong {
-  font-size: 18px;
+  font-size: var(--text-2xl);
   color: var(--teal);
 }
 .metricStrip small {
   margin-top: 3px;
   color: var(--muted);
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 button:disabled {
   cursor: not-allowed;
@@ -1015,16 +1015,16 @@ button:disabled {
   gap: 3px;
 }
 .capabilityHeader strong {
-  font-size: 10px;
+  font-size: var(--text-sm);
 }
 .capabilityHeader small {
   color: var(--muted);
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 .capabilityHeader em {
   color: #718481;
   font-family: var(--font-geist-mono), monospace;
-  font-size: 8px;
+  font-size: var(--text-xs);
   font-style: normal;
 }
 .capabilityGroups {
@@ -1040,12 +1040,12 @@ button:disabled {
 }
 .capabilityGroup > div strong {
   color: #46605f;
-  font-size: 8px;
+  font-size: var(--text-xs);
   letter-spacing: 0.08em;
 }
 .capabilityGroup > div small {
   color: #84928f;
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 .capabilityGroup article {
   display: grid;
@@ -1065,15 +1065,15 @@ button:disabled {
   gap: 2px;
 }
 .capabilityGroup article b {
-  font-size: 9px;
+  font-size: var(--text-xs);
 }
 .capabilityGroup article small {
   color: #7b8c89;
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 .capabilityGroup article code {
   color: #879591;
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 .capabilityGroup article p {
   grid-column: 1/-1;
@@ -1081,7 +1081,7 @@ button:disabled {
   padding-top: 6px;
   border-top: 1px solid #edf1f0;
   color: #526866;
-  font-size: 8px;
+  font-size: var(--text-xs);
   line-height: 1.5;
 }
 .assetSource {
@@ -1089,7 +1089,7 @@ button:disabled {
   border-radius: 8px;
   background: #e8f2ef;
   color: #317267;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   font-weight: 800;
   text-transform: uppercase;
 }
@@ -1119,11 +1119,11 @@ button:disabled {
   gap: 3px;
 }
 .manifestYamlPanel > header strong {
-  font-size: 10px;
+  font-size: var(--text-sm);
 }
 .manifestYamlPanel > header small {
   color: #718481;
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 .manifestYamlPanel > header > span:last-child {
   display: flex;
@@ -1141,7 +1141,7 @@ button:disabled {
   background: #142a2b;
   color: #dceceb;
   font-family: var(--font-geist-mono), monospace;
-  font-size: 8px;
+  font-size: var(--text-xs);
   line-height: 1.55;
   white-space: pre;
   tab-size: 2;
@@ -1153,7 +1153,7 @@ button:disabled {
   }
   .manifestYamlPanel pre {
     max-height: 380px;
-    font-size: 7px;
+    font-size: var(--text-2xs);
   }
 }
 .traceToggle {
@@ -1179,25 +1179,25 @@ button:disabled {
 }
 .traceHeader strong {
   color: #345b58;
-  font-size: 9px;
+  font-size: var(--text-xs);
   letter-spacing: 0.09em;
 }
 .traceHeader small {
   color: #7b8c89;
-  font-size: 8px;
+  font-size: var(--text-xs);
   line-height: 1.45;
 }
 .traceHeader em {
   flex: 0 0 auto;
   color: #47706c;
   font-family: var(--font-geist-mono), monospace;
-  font-size: 8px;
+  font-size: var(--text-xs);
   font-style: normal;
 }
 .emptyTrace {
   margin: 10px 0 0;
   color: #728481;
-  font-size: 9px;
+  font-size: var(--text-xs);
   line-height: 1.6;
 }
 .traceRuns {
@@ -1230,7 +1230,7 @@ button:disabled {
   grid-column: 3;
   grid-row: 1;
   color: #8a9996;
-  font-size: 14px;
+  font-size: var(--text-base);
   line-height: 1;
   transform: rotate(90deg);
   transition: transform 0.15s ease;
@@ -1263,14 +1263,14 @@ button:disabled {
 .traceRunIdentity strong {
   overflow: hidden;
   color: #304b49;
-  font-size: 9px;
+  font-size: var(--text-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .traceRunIdentity small {
   color: #879592;
   font-family: var(--font-geist-mono), monospace;
-  font-size: 7px;
+  font-size: var(--text-2xs);
 }
 .traceRunMeta {
   grid-column: 2;
@@ -1281,11 +1281,11 @@ button:disabled {
 }
 .traceRunMeta b {
   color: #267568;
-  font-size: 7px;
+  font-size: var(--text-2xs);
 }
 .traceRunMeta small {
   color: #879592;
-  font-size: 7px;
+  font-size: var(--text-2xs);
 }
 .traceRun.failed .traceRunIdentity > i {
   background: #c55948;
@@ -1310,7 +1310,7 @@ button:disabled {
   border-left: 2px solid #c95e4d;
   background: #fff3f0;
   color: #963b2e;
-  font-size: 8px;
+  font-size: var(--text-xs);
   line-height: 1.5;
 }
 .traceSteps {
@@ -1345,7 +1345,7 @@ button:disabled {
   background: #fff;
   color: #39756c;
   font-family: var(--font-geist-mono), monospace;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   font-weight: 800;
 }
 .traceSteps > li.failed .traceSequence {
@@ -1362,7 +1362,7 @@ button:disabled {
 }
 .traceSteps header code {
   color: #315b58;
-  font-size: 8px;
+  font-size: var(--text-xs);
   font-weight: 700;
 }
 .traceSteps header b {
@@ -1370,7 +1370,7 @@ button:disabled {
   border-radius: 7px;
   background: #eef4f2;
   color: #58736f;
-  font-size: 6px;
+  font-size: var(--text-2xs);
 }
 .traceSteps > li.failed header b {
   background: #fae9e5;
@@ -1379,12 +1379,12 @@ button:disabled {
 .traceSteps header time {
   margin-left: auto;
   color: #92a09e;
-  font-size: 7px;
+  font-size: var(--text-2xs);
 }
 .traceSteps p {
   margin: 3px 0 0;
   color: #536a68;
-  font-size: 9px;
+  font-size: var(--text-xs);
   line-height: 1.55;
 }
 .tracePayload {
@@ -1396,7 +1396,7 @@ button:disabled {
   width: max-content;
   max-width: 100%;
   color: #16766a;
-  font-size: 8px;
+  font-size: var(--text-xs);
   font-weight: 700;
   cursor: pointer;
 }
@@ -1409,7 +1409,7 @@ button:disabled {
   background: #142a2b;
   color: #dceceb;
   font-family: var(--font-geist-mono), monospace;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -1433,17 +1433,17 @@ button:disabled {
 }
 .failedAgentTraces > header small {
   color: #a34132;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   font-weight: 850;
   letter-spacing: 0.12em;
 }
 .failedAgentTraces > header strong {
-  font-size: 10px;
+  font-size: var(--text-sm);
 }
 .failedAgentTraces > header em {
   color: #a34132;
   font-family: var(--font-geist-mono), monospace;
-  font-size: 8px;
+  font-size: var(--text-xs);
   font-style: normal;
 }
 .failedAgentTraces .traceHeader,
@@ -1575,18 +1575,18 @@ button:disabled {
 .pathApprovalHeader small {
   color: var(--teal);
   font-family: var(--font-geist-mono), monospace;
-  font-size: 8px;
+  font-size: var(--text-xs);
   font-weight: 800;
 }
 .pathApprovalHeader strong {
-  font-size: 15px;
+  font-size: var(--text-lg);
 }
 .pathApprovalHeader em {
   padding: 4px 7px;
   border-radius: 10px;
   background: #eaf4f1;
   color: #397068;
-  font-size: 8px;
+  font-size: var(--text-xs);
   font-style: normal;
   font-weight: 750;
 }
@@ -1633,7 +1633,7 @@ button:disabled {
   min-height: 31px;
   border-radius: 6px;
   background: #fff;
-  font-size: 9px;
+  font-size: var(--text-xs);
   font-weight: 750;
 }
 .decisionApprove {
@@ -1692,24 +1692,24 @@ button:disabled {
 }
 .inboxDrawer > header small {
   color: var(--teal);
-  font-size: 8px;
+  font-size: var(--text-xs);
   font-weight: 800;
   letter-spacing: 0.12em;
 }
 .inboxDrawer > header h2 {
   margin: 5px 0 4px;
-  font-size: 22px;
+  font-size: var(--text-4xl);
 }
 .inboxDrawer > header p {
   margin: 0;
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--text-sm);
 }
 .inboxDrawer > header button {
   border: 0;
   background: transparent;
   color: #71817f;
-  font-size: 24px;
+  font-size: var(--text-5xl);
 }
 .inboxHint {
   margin: 16px 20px 0;
@@ -1718,7 +1718,7 @@ button:disabled {
   border-radius: 8px;
   background: #eef5f3;
   color: #4c6663;
-  font-size: 9px;
+  font-size: var(--text-xs);
   line-height: 1.6;
 }
 .inboxList {
@@ -1738,21 +1738,21 @@ button:disabled {
 }
 .inboxList article > div span {
   color: #9a6716;
-  font-size: 8px;
+  font-size: var(--text-xs);
   font-weight: 800;
 }
 .inboxList article > div small {
   color: #879492;
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 .inboxList h3 {
   margin: 12px 0 5px;
-  font-size: 14px;
+  font-size: var(--text-base);
 }
 .inboxList p {
   margin: 0 0 15px;
   color: var(--muted);
-  font-size: 9px;
+  font-size: var(--text-xs);
 }
 .inboxList .primary {
   width: 100%;
@@ -1763,13 +1763,13 @@ button:disabled {
   color: #617371;
 }
 .emptyInbox strong {
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 .emptyInbox p {
   margin: 7px auto 0;
   max-width: 260px;
   color: #879492;
-  font-size: 9px;
+  font-size: var(--text-xs);
   line-height: 1.6;
 }
 .pathAgentLaunch {
@@ -1799,23 +1799,23 @@ button:disabled {
 }
 .solutionHeader small {
   color: var(--teal);
-  font-size: 8px;
+  font-size: var(--text-xs);
   font-weight: 800;
   letter-spacing: 0.1em;
 }
 .solutionHeader strong {
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 .solutionHeader em {
   color: #6d817e;
   font-family: var(--font-geist-mono), monospace;
-  font-size: 8px;
+  font-size: var(--text-xs);
   font-style: normal;
 }
 .solutionRevision > p {
   margin: 12px 0;
   color: #455f5d;
-  font-size: 10px;
+  font-size: var(--text-sm);
   line-height: 1.65;
 }
 .solutionOptions {
@@ -1832,17 +1832,17 @@ button:disabled {
 .solutionOptions article > span {
   color: var(--teal);
   font-family: var(--font-geist-mono), monospace;
-  font-size: 8px;
+  font-size: var(--text-xs);
   font-weight: 800;
 }
 .solutionOptions h3 {
   margin: 7px 0 5px;
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 .solutionOptions p {
   margin: 0;
   color: #5d706e;
-  font-size: 9px;
+  font-size: var(--text-xs);
   line-height: 1.55;
 }
 .solutionOptions dl {
@@ -1854,13 +1854,13 @@ button:disabled {
 }
 .solutionOptions dt {
   color: #7a8c89;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   font-weight: 800;
 }
 .solutionOptions dd {
   margin: 3px 0 0;
   color: #405856;
-  font-size: 8px;
+  font-size: var(--text-xs);
   line-height: 1.5;
 }
 .solutionRecommendation {
@@ -1870,16 +1870,16 @@ button:disabled {
   background: #eef6f4;
 }
 .solutionRecommendation strong {
-  font-size: 9px;
+  font-size: var(--text-xs);
 }
 .solutionRecommendation p {
   margin: 4px 0;
   color: #425c59;
-  font-size: 9px;
+  font-size: var(--text-xs);
 }
 .solutionRecommendation small {
   color: #728481;
-  font-size: 8px;
+  font-size: var(--text-xs);
   line-height: 1.5;
 }
 @media (max-width: 640px) {
@@ -1905,18 +1905,18 @@ button:disabled {
 .roleReports span {
   display: block;
   color: var(--teal);
-  font-size: 8px;
+  font-size: var(--text-xs);
   font-weight: 800;
 }
 .roleReports strong {
   display: block;
   margin-top: 3px;
-  font-size: 9px;
+  font-size: var(--text-xs);
 }
 .roleReports p {
   margin: 7px 0 0;
   color: #465f5c;
-  font-size: 8px;
+  font-size: var(--text-xs);
   line-height: 1.65;
 }
 @media (max-width: 760px) {
@@ -1933,7 +1933,7 @@ button:disabled {
   border: 0;
   background: transparent;
   color: #176f64;
-  font-size: 9px;
+  font-size: var(--text-xs);
   font-weight: 800;
   text-align: left;
 }
@@ -1974,24 +1974,24 @@ button:disabled {
 .evidenceSection > small,
 .approvalScope > small {
   color: var(--teal);
-  font-size: 8px;
+  font-size: var(--text-xs);
   font-weight: 850;
   letter-spacing: 0.1em;
 }
 .approvalReviewPanel > header h2 {
   margin: 6px 0 5px;
-  font-size: 22px;
+  font-size: var(--text-4xl);
 }
 .approvalReviewPanel > header p {
   margin: 0;
   color: #748582;
-  font-size: 9px;
+  font-size: var(--text-xs);
 }
 .approvalReviewPanel > header button {
   border: 0;
   background: transparent;
   color: #71817f;
-  font-size: 25px;
+  font-size: var(--text-6xl);
 }
 .approvalReviewBody {
   display: grid;
@@ -2013,13 +2013,13 @@ button:disabled {
 .approvalScope strong {
   display: block;
   margin-top: 7px;
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 .approvalScope p,
 .evidenceSection > p {
   margin: 7px 0 0;
   color: #506864;
-  font-size: 9px;
+  font-size: var(--text-xs);
   line-height: 1.65;
 }
 .roleEvidence {
@@ -2028,10 +2028,10 @@ button:disabled {
 }
 .roleEvidence h3 {
   margin: 8px 0 0;
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 .roleEvidence > p {
-  font-size: 10px;
+  font-size: var(--text-sm);
 }
 .evidenceOptions {
   display: grid;
@@ -2056,7 +2056,7 @@ button:disabled {
   background: #e2f0ed;
   color: #176f64;
   font-family: var(--font-geist-mono), monospace;
-  font-size: 8px;
+  font-size: var(--text-xs);
   font-weight: 850;
 }
 .evidenceOptions article > div {
@@ -2065,12 +2065,12 @@ button:disabled {
   gap: 3px;
 }
 .evidenceOptions strong {
-  font-size: 9px;
+  font-size: var(--text-xs);
 }
 .evidenceOptions p {
   margin: 0;
   color: #697b78;
-  font-size: 8px;
+  font-size: var(--text-xs);
   line-height: 1.5;
 }
 .evidenceRecommendation {
@@ -2080,12 +2080,12 @@ button:disabled {
   background: #eef6f4;
 }
 .evidenceRecommendation strong {
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 .evidenceRecommendation p {
   margin: 4px 0 0;
   color: #425c59;
-  font-size: 9px;
+  font-size: var(--text-xs);
   line-height: 1.55;
 }
 .roleEvidenceBoundary {
@@ -2094,7 +2094,7 @@ button:disabled {
   border-left: 3px solid #9aadaa;
   background: #edf3f2;
   color: #617471;
-  font-size: 8px;
+  font-size: var(--text-xs);
   line-height: 1.55;
 }
 .approvalReviewPanel > footer {
@@ -2113,10 +2113,10 @@ button:disabled {
 }
 .approvalReviewPanel > footer > span small {
   color: #84928f;
-  font-size: 7px;
+  font-size: var(--text-2xs);
 }
 .approvalReviewPanel > footer > span strong {
-  font-size: 9px;
+  font-size: var(--text-xs);
 }
 .approvalReviewPanel > footer .approvalActions {
   flex: 1;
@@ -2219,7 +2219,7 @@ button:disabled {
   z-index: 1;
   color: #baf7ec;
   font-family: var(--font-geist-mono), monospace;
-  font-size: 13px;
+  font-size: var(--text-base);
   letter-spacing: 0.12em;
 }
 .aiWorkingBody {
@@ -2229,7 +2229,7 @@ button:disabled {
 }
 .aiWorkingBody > small {
   color: #71dfcc;
-  font-size: 8px;
+  font-size: var(--text-xs);
   font-weight: 850;
   letter-spacing: 0.18em;
 }
@@ -2238,7 +2238,7 @@ button:disabled {
   align-items: center;
   gap: 7px;
   margin: 8px 0 21px;
-  font-size: 18px;
+  font-size: var(--text-2xl);
   letter-spacing: -0.02em;
 }
 .thinkingDots {
@@ -2270,7 +2270,7 @@ button:disabled {
   gap: 6px;
   min-width: 0;
   color: #769b98;
-  font-size: 8px;
+  font-size: var(--text-xs);
   white-space: nowrap;
   transition: color 0.35s ease;
 }
@@ -2283,7 +2283,7 @@ button:disabled {
   border: 1px solid rgba(132, 178, 173, 0.3);
   border-radius: 50%;
   font-family: var(--font-geist-mono), monospace;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   font-style: normal;
 }
 .aiStepTrack > span.done {
@@ -2325,7 +2325,7 @@ button:disabled {
 .aiWorkingBody > p {
   margin: 0;
   color: #91b2af;
-  font-size: 8px;
+  font-size: var(--text-xs);
   line-height: 1.6;
 }
 .autoRunNote {
@@ -2334,7 +2334,7 @@ button:disabled {
   border-radius: 7px;
   background: #eef6f4;
   color: #397068 !important;
-  font-size: 9px !important;
+  font-size: var(--text-xs) !important;
 }
 .pathRunSummary {
   display: grid;
@@ -2353,12 +2353,12 @@ button:disabled {
 }
 .pathRunSummary small {
   color: #78aaa4;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   letter-spacing: 0.08em;
 }
 .pathRunSummary strong {
   color: #dff8f3;
-  font-size: 9px;
+  font-size: var(--text-xs);
 }
 .pathRunQueue {
   display: grid;
@@ -2386,7 +2386,7 @@ button:disabled {
   border-radius: 50%;
   color: #83aaa5;
   font-family: var(--font-geist-mono), monospace;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   font-weight: 800;
 }
 .pathRunQueue li > div {
@@ -2398,14 +2398,14 @@ button:disabled {
 .pathRunQueue li > div strong {
   overflow: hidden;
   color: #bfd4d1;
-  font-size: 9px;
+  font-size: var(--text-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .pathRunQueue li > div small {
   overflow: hidden;
   color: #789d98;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2414,7 +2414,7 @@ button:disabled {
   border-radius: 9px;
   background: rgba(116, 150, 146, 0.12);
   color: #789d98;
-  font-size: 7px;
+  font-size: var(--text-2xs);
 }
 .pathRunQueue li.running {
   border-color: rgba(112, 226, 206, 0.48);
@@ -2471,18 +2471,18 @@ button:disabled {
 }
 .embeddedLiveTrace > header small {
   color: #71dfcc;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   font-weight: 850;
   letter-spacing: 0.14em;
 }
 .embeddedLiveTrace > header strong {
   color: #e8faf6;
-  font-size: 10px;
+  font-size: var(--text-sm);
 }
 .embeddedLiveTrace > header em {
   color: #7da39e;
   font-family: var(--font-geist-mono), monospace;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   font-style: normal;
 }
 .embeddedLiveTrace .agentTracePanel {
@@ -2629,7 +2629,7 @@ button:disabled {
     gap: 8px;
   }
   .aiWorkingBody h3 {
-    font-size: 16px;
+    font-size: var(--text-xl);
   }
   .pathRunQueue li {
     grid-template-columns: 25px minmax(0, 1fr);
@@ -2698,7 +2698,7 @@ button:disabled {
   height: 27px;
   border-radius: 50%;
   font-family: var(--font-geist-mono), monospace;
-  font-size: 8px;
+  font-size: var(--text-xs);
   font-weight: 800;
 }
 .pathExplorationProgress article > div {
@@ -2707,11 +2707,11 @@ button:disabled {
   gap: 3px;
 }
 .pathExplorationProgress strong {
-  font-size: 10px;
+  font-size: var(--text-sm);
 }
 .pathExplorationProgress small {
   color: #7b8d8a;
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 .pathExplorationProgress article.complete {
   border-color: #bcd8d2;
@@ -2735,13 +2735,13 @@ button:disabled {
 }
 .explorationGate strong {
   color: #27675f;
-  font-size: 8px;
+  font-size: var(--text-xs);
   letter-spacing: 0.08em;
 }
 .explorationGate p {
   margin: 4px 0 0;
   color: #55716d;
-  font-size: 9px;
+  font-size: var(--text-xs);
   line-height: 1.55;
 }
 .explorationRetry {
@@ -2772,18 +2772,18 @@ button:disabled {
 }
 .synthesisHeader small {
   color: var(--teal);
-  font-size: 8px;
+  font-size: var(--text-xs);
   font-weight: 850;
   letter-spacing: 0.1em;
 }
 .synthesisHeader strong {
-  font-size: 12px;
+  font-size: var(--text-md);
   line-height: 1.55;
 }
 .synthesisHeader em {
   color: #6f817f;
   font-family: var(--font-geist-mono), monospace;
-  font-size: 8px;
+  font-size: var(--text-xs);
   font-style: normal;
 }
 .pathAssessmentGrid {
@@ -2811,7 +2811,7 @@ button:disabled {
   border-radius: 8px;
   background: #e4f1ed;
   color: #207366;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   font-weight: 800;
 }
 .pathAssessmentGrid article.failed > span {
@@ -2820,19 +2820,19 @@ button:disabled {
 }
 .pathAssessmentGrid h3 {
   margin: 9px 0 5px;
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 .pathAssessmentGrid p {
   margin: 0 0 9px;
   color: #4e6663;
-  font-size: 9px;
+  font-size: var(--text-xs);
   line-height: 1.6;
 }
 .pathAssessmentGrid small {
   display: block;
   margin-top: 4px;
   color: #7a8b88;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   line-height: 1.55;
   overflow-wrap: anywhere;
 }
@@ -2848,12 +2848,12 @@ button:disabled {
   background: #f2f7f5;
 }
 .synthesisFindings strong {
-  font-size: 9px;
+  font-size: var(--text-xs);
 }
 .synthesisFindings p {
   margin: 5px 0 0;
   color: #4d6562;
-  font-size: 8px;
+  font-size: var(--text-xs);
   line-height: 1.6;
 }
 .ownerDecisionBrief {
@@ -2874,16 +2874,16 @@ button:disabled {
 }
 .ownerDecisionBrief small {
   color: var(--teal);
-  font-size: 7px;
+  font-size: var(--text-2xs);
   font-weight: 800;
 }
 .ownerDecisionBrief strong {
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 .ownerDecisionBrief p {
   margin: 0;
   color: #4b6360;
-  font-size: 9px;
+  font-size: var(--text-xs);
   line-height: 1.6;
 }
 .ownerDecisionActions {
@@ -2896,7 +2896,7 @@ button:disabled {
   min-height: 36px;
   border-radius: 7px;
   background: #fff;
-  font-size: 9px;
+  font-size: var(--text-xs);
   font-weight: 800;
 }
 .decisionClose {
@@ -2917,7 +2917,7 @@ button:disabled {
   border-radius: 6px;
   background: #eef6f4;
   color: #356a62;
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 .openBadge.closed {
   background: #edf0ef;
@@ -2948,7 +2948,7 @@ button:disabled {
 .modifyGuidance label {
   display: block;
   color: #6f531f;
-  font-size: 10px;
+  font-size: var(--text-sm);
   font-weight: 800;
 }
 .modifyGuidance textarea {
@@ -2963,7 +2963,7 @@ button:disabled {
   background: #fff;
   color: #243f3e;
   font: inherit;
-  font-size: 10px;
+  font-size: var(--text-sm);
   line-height: 1.6;
 }
 .modifyGuidance textarea:focus {
@@ -2974,7 +2974,7 @@ button:disabled {
   display: block;
   margin-top: 6px;
   color: #7d6a48;
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 .modifyGuidance > div {
   display: flex;
@@ -3014,7 +3014,7 @@ button:disabled {
   background: #176f64;
   color: #fff;
   font-family: var(--font-geist-mono), monospace;
-  font-size: 11px;
+  font-size: var(--text-sm);
   font-weight: 850;
 }
 .approvedManifestArchive > header > span:nth-child(2) {
@@ -3025,17 +3025,17 @@ button:disabled {
 }
 .approvedManifestArchive > header small {
   color: #176f64;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   font-weight: 850;
   letter-spacing: 0.1em;
 }
 .approvedManifestArchive > header strong {
-  font-size: 11px;
+  font-size: var(--text-sm);
 }
 .approvedManifestArchive > header p {
   margin: 0;
   color: #6a7d7a;
-  font-size: 8px;
+  font-size: var(--text-xs);
   line-height: 1.45;
 }
 .approvedManifestArchive > header button {
@@ -3045,7 +3045,7 @@ button:disabled {
   border-radius: 7px;
   background: #fff;
   color: #176f64;
-  font-size: 8px;
+  font-size: var(--text-xs);
   font-weight: 800;
 }
 .approvedManifestBody {
@@ -3057,7 +3057,7 @@ button:disabled {
   border-left: 3px solid #68a69b;
   background: #eaf4f1;
   color: #4f6a66;
-  font-size: 8px;
+  font-size: var(--text-xs);
   line-height: 1.55;
 }
 .approvedManifestPaths {
@@ -3084,7 +3084,7 @@ button:disabled {
 .approvedManifestPaths article > div:first-child span {
   color: #176f64;
   font-family: var(--font-geist-mono), monospace;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   font-weight: 850;
 }
 .approvedManifestPaths article > div:first-child em {
@@ -3092,7 +3092,7 @@ button:disabled {
   border-radius: 9px;
   background: #dfeeea;
   color: #176f64;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   font-style: normal;
   font-weight: 800;
 }
@@ -3102,18 +3102,18 @@ button:disabled {
 }
 .approvedManifestPaths h3 {
   margin: 9px 0 3px;
-  font-size: 11px;
+  font-size: var(--text-sm);
 }
 .approvedManifestPaths article > small {
   color: #7a8a88;
   font-family: var(--font-geist-mono), monospace;
-  font-size: 7px;
+  font-size: var(--text-2xs);
   overflow-wrap: anywhere;
 }
 .approvedManifestPaths article > p {
   margin: 8px 0;
   color: #4e6461;
-  font-size: 8px;
+  font-size: var(--text-xs);
   line-height: 1.55;
 }
 .approvedManifestPaths dl {
@@ -3129,13 +3129,13 @@ button:disabled {
 }
 .approvedManifestPaths dt {
   color: #7d8d8a;
-  font-size: 6px;
+  font-size: var(--text-2xs);
   font-weight: 800;
 }
 .approvedManifestPaths dd {
   margin: 2px 0 0;
   color: #274e4a;
-  font-size: 9px;
+  font-size: var(--text-xs);
   font-weight: 800;
 }
 .approvedManifestBody > .capabilityToggle {
