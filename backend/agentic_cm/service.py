@@ -5,7 +5,7 @@ import asyncio
 from .agent_run import agent_run
 from .agent_runtime import AgentError
 from .capabilities import CapabilityConfigurationError, CapabilityRegistry, default_registry
-from .config import path_execution_mode_from_environment, path_max_concurrency_from_environment
+from .config import agent_adapter_from_environment, path_execution_mode_from_environment, path_max_concurrency_from_environment
 from .demo import DEMO_DATASET_ID, demo_cases
 from .domain import (
     CaseEvent,
@@ -51,6 +51,7 @@ class CaseService:
         path_execution_mode: str | None = None,
         path_max_concurrency: int | None = None,
     ) -> None:
+        self.adapter = agent_adapter_from_environment()
         self.repository = repository
         self.capabilities = capabilities or default_registry()
         self.orchestrator = Orchestrator(self.capabilities, planner or planner_from_environment())
@@ -67,6 +68,24 @@ class CaseService:
         if self.path_max_concurrency < 1:
             raise ValueError("path_max_concurrency must be a positive integer")
         self._path_commit_locks: dict[str, asyncio.Lock] = {}
+
+    def select_adapter(self, adapter: str) -> None:
+        if adapter not in {"deterministic", "openai-compatible"}:
+            raise ValueError("不支持的 Agent 适配器")
+        if any(
+            run["status"] == "RUNNING"
+            for case in self.list_cases()
+            for run in self.repository.list_agent_runs(case.id)
+        ):
+            raise InvalidTransitionError("Agent 正在运行，请完成后再切换")
+        # Build all three before publishing the selection: failure keeps the old runtime.
+        orchestrator = Orchestrator(self.capabilities, planner_from_environment(adapter))
+        path_agent = PathAgent(path_agent_from_environment(adapter))
+        synthesis_agent = SynthesisAgent(synthesis_agent_from_environment(adapter))
+        self.orchestrator = orchestrator
+        self.path_agent = path_agent
+        self.synthesis_agent = synthesis_agent
+        self.adapter = adapter
 
     def ensure_demo_data(self) -> None:
         if not self.repository.list_cases():

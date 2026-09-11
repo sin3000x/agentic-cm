@@ -333,8 +333,8 @@ def _validate_result(result: SynthesisResult, context: SynthesisContext) -> None
         raise AgentOutputError(f"Synthesis references unknown artifacts: {sorted(unknown)}")
 
 
-def synthesis_agent_from_environment() -> SynthesisAgentAdapter:
-    adapter = agent_adapter_from_environment()
+def synthesis_agent_from_environment(adapter: str | None = None) -> SynthesisAgentAdapter:
+    adapter = adapter or agent_adapter_from_environment()
     if adapter == "deterministic":
         return DeterministicSynthesisAgentAdapter(
             delay_seconds=deterministic_delay_seconds_from_environment()

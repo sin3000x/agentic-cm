@@ -940,8 +940,8 @@ def _validate_result_against_context(result: PathAgentResult, context: PathAgent
         )
 
 
-def path_agent_from_environment() -> PathAgentAdapter:
-    adapter = agent_adapter_from_environment()
+def path_agent_from_environment(adapter: str | None = None) -> PathAgentAdapter:
+    adapter = adapter or agent_adapter_from_environment()
     if adapter == "deterministic":
         return DeepAgentPathAdapter(
             _DeterministicPathChatModel(

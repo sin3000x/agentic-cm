@@ -2,8 +2,12 @@
 
 import Link from "next/link";
 import Image from "next/image";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useDemoIdentity, type SidebarIdentity } from "./lib/identities";
+
+import { apiGet, apiPost } from "./lib/api";
+
+type Adapter = "deterministic" | "openai-compatible";
 
 export type { SidebarIdentity };
 
@@ -22,6 +26,31 @@ export default function AppSidebar({
 }: AppSidebarProps) {
   const { identity, identities, selectIdentity: setIdentity } = useDemoIdentity();
   const [showIdentityMenu, setShowIdentityMenu] = useState(false);
+
+  const [adapter, setAdapter] = useState<Adapter | "">("");
+  const [savingAdapter, setSavingAdapter] = useState(false);
+  const [adapterError, setAdapterError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    apiGet<{ adapter: Adapter }>("/api/runtime-config")
+      .then((config) => { if (!cancelled) setAdapter(config.adapter); })
+      .catch(() => { if (!cancelled) setAdapterError("无法读取运行模式，请刷新重试"); });
+    return () => { cancelled = true; };
+  }, []);
+
+  async function selectAdapter(value: Adapter) {
+    setSavingAdapter(true);
+    setAdapterError("");
+    try {
+      const config = await apiPost<{ adapter: Adapter }>("/api/runtime-config", { adapter: value });
+      setAdapter(config.adapter);
+    } catch (error) {
+      setAdapterError(error instanceof Error ? error.message : "切换失败，请重试");
+    } finally {
+      setSavingAdapter(false);
+    }
+  }
 
   function selectIdentity(item: SidebarIdentity) {
     setIdentity(item);
@@ -71,6 +100,21 @@ export default function AppSidebar({
       </nav>
 
       <div className="sidebarFoot">
+        <div className="adapterSelector">
+          <label htmlFor="agent-adapter">Agent 运行模式</label>
+          <select
+            id="agent-adapter"
+            value={adapter}
+            disabled={busy || savingAdapter || !adapter}
+            onChange={(event) => void selectAdapter(event.target.value as Adapter)}
+          >
+            <option value="" disabled>读取中…</option>
+            <option value="deterministic">deterministic</option>
+            <option value="openai-compatible">openai-compatible</option>
+          </select>
+          <small>{savingAdapter ? "切换中…" : "全局生效；模型配置来自后端环境变量"}</small>
+          {adapterError && <small role="alert">{adapterError}</small>}
+        </div>
         <div className="systemStatus">
           <i />
           系统运行正常 <span>v0.1</span>

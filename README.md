@@ -89,6 +89,9 @@ AGENTIC_CM_PATH_MAX_OUTPUT_TOKENS=6000
 AGENTIC_CM_SYNTHESIS_MAX_OUTPUT_TOKENS=4000
 ```
 
+左侧栏的「Agent 运行模式」可统一切换三个 Agent 的 `deterministic` / `openai-compatible` 模式。初始值来自 `AGENTIC_CM_ADAPTER`，选择在当前后端进程中全局生效，重启后恢复环境变量设置。OpenAI-compatible 模式使用后端的 `AGENTIC_CM_LLM_BASE_URL`、`AGENTIC_CM_LLM_MODEL` 和 `AGENTIC_CM_LLM_API_KEY`（保留各 Agent 的 model 覆盖配置）；密钥不会返回前端。Agent 运行期间不能切换。
+
+
 多条已选 Path 默认并行推演。若模型服务需要限流或本地调试需要确定顺序，可在同一个 `.env` 中切换为串行：
 
 ```dotenv

@@ -1851,3 +1851,9 @@ button {
 .commitmentList > div {
   padding-left: 11px;
 }
+
+.adapterSelector { display: grid; gap: 8px; margin-bottom: 16px; }
+.adapterSelector label { font-size: 12px; font-weight: 600; }
+.adapterSelector select { width: 100%; padding: 8px; border: 1px solid #d7dce2; border-radius: 6px; background: white; color: #263445; }
+.adapterSelector small { font-size: 11px; color: #697586; line-height: 1.5; }
+.adapterSelector [role="alert"] { color: #b42318; }

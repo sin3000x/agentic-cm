@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,6 +30,10 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type"],
 )
+
+
+class AdapterSelectionRequest(BaseModel):
+    adapter: Literal["deterministic", "openai-compatible"]
 
 
 class ResetRequest(BaseModel):
@@ -97,9 +102,21 @@ def health() -> dict[str, str]:
 @app.get("/api/runtime-config")
 def runtime_config() -> dict[str, str | int]:
     return {
+        "adapter": service.adapter,
         "path_execution_mode": service.path_execution_mode,
         "path_max_concurrency": service.path_max_concurrency,
     }
+
+
+@app.post("/api/runtime-config")
+async def select_runtime_adapter(request: AdapterSelectionRequest):
+    try:
+        service.select_adapter(request.adapter)
+    except (AgentError, InvalidTransitionError):
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="模型环境变量配置无效，请检查后端配置") from exc
+    return runtime_config()
 
 
 @app.get("/api/cases")

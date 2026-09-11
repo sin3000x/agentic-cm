@@ -508,8 +508,8 @@ class Orchestrator:
         return manifest, result.planner_profile
 
 
-def planner_from_environment() -> PlannerAdapter:
-    adapter = agent_adapter_from_environment()
+def planner_from_environment(adapter: str | None = None) -> PlannerAdapter:
+    adapter = adapter or agent_adapter_from_environment()
     if adapter == "deterministic":
         return DeterministicPlannerAdapter(
             delay_seconds=deterministic_delay_seconds_from_environment()
