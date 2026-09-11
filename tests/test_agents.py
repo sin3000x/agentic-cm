@@ -879,6 +879,35 @@ def test_path_agent_cannot_omit_required_role_reports(tmp_path: Path) -> None:
     assert case.path_attempts[0].solution_revision is None
 
 
+@pytest.mark.parametrize("field", ["recommendation", "role", "dimension", "report"])
+def test_path_agent_persists_rejected_chinese_output(tmp_path: Path, field: str) -> None:
+    class NonChineseAdapter(_CapturingFunctionToolPathAgent):
+        async def generate(self, context, trace):
+            result = await super().generate(context, trace)
+            if field == "recommendation":
+                return result.model_copy(update={field: "English only"})
+            reports = list(result.role_reports)
+            reports[0] = reports[0].model_copy(update={field: "English only"})
+            return result.model_copy(update={"role_reports": reports})
+
+    service = make_service(tmp_path, path_agent=NonChineseAdapter())
+    orchestrate(service)
+    service.approve_manifest(DEMO_CASE_ID, ["PATH-01"], actor=OWNER_ACTOR, role=OWNER_ROLE)
+    location = "recommendation" if field == "recommendation" else f"role_reports[0].{field}"
+    with pytest.raises(AgentOutputError) as error:
+        asyncio.run(service.execute_path(DEMO_CASE_ID, "PATH-01", actor=OWNER_ACTOR, role=OWNER_ROLE))
+    assert location in str(error.value)
+    assert service.get_case(DEMO_CASE_ID).path_attempts[0].solution_revision is None
+    run = service.get_agent_runs(
+        DEMO_CASE_ID, actor=OWNER_ACTOR, role=OWNER_ROLE, agent_type="path",
+    )[0]
+    assert run["status"] == "FAILED"
+    event = next(event for event in run["events"] if event["step"] == "agent.output.failed")
+    assert location in event["details"]["error"]
+    payload = event["details"]["rejected_result"]
+    assert (payload[field] if field == "recommendation" else payload["role_reports"][0][field]) == "English only"
+
+
 def test_path_agent_registers_frozen_tools_without_precomputing_results(tmp_path: Path) -> None:
     adapter = _CapturingFunctionToolPathAgent()
     service = make_service(

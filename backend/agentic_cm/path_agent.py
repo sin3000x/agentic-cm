@@ -899,8 +899,20 @@ class PathAgent:
             },
         )
         result = await self.adapter.generate(context, trace)
-        _require_chinese(result)
-        _validate_result_against_context(result, context)
+        try:
+            _require_chinese(result)
+            _validate_result_against_context(result, context)
+        except AgentOutputError as exc:
+            trace(
+                "agent.output.failed",
+                "FAILED",
+                "Path Agent 输出未通过平台校验",
+                {
+                    **_exception_trace_details(exc),
+                    "rejected_result": result.model_dump(mode="json"),
+                },
+            )
+            raise
         revision = SolutionRevision(
             **result.model_dump(),
             revision=(previous.revision if previous else 0) + 1,
@@ -921,12 +933,16 @@ def _safe_ref(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _require_chinese(result: PathAgentResult) -> None:
-    values = [
-        result.recommendation,
-        *(value for report in result.role_reports for value in (report.role, report.dimension, report.report)),
-    ]
-    if any(not contains_chinese(value) for value in values):
-        raise AgentOutputError("Path Agent 的全部面向人字段必须使用中文")
+    values = {"recommendation": result.recommendation}
+    for index, report in enumerate(result.role_reports):
+        for field in ("role", "dimension", "report"):
+            values[f"role_reports[{index}].{field}"] = getattr(report, field)
+    invalid_fields = [field for field, value in values.items() if not contains_chinese(value)]
+    if invalid_fields:
+        raise AgentOutputError(
+            "Path Agent 的全部面向人字段必须使用中文；不合格字段："
+            + ", ".join(invalid_fields)
+        )
 
 
 def _validate_result_against_context(result: PathAgentResult, context: PathAgentContext) -> None:
