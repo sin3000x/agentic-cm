@@ -340,10 +340,8 @@ def test_deep_agent_invokes_manifest_function_tool() -> None:
 
     assert result.recommendation == "建议优先评审封装为 QFN-48 的候选 A。"
     assert '"package":"QFN-48"' in model.observed_tool_result.replace(" ", "")
-    assert model.observed_user_message == (
-        "分析当前已批准 Path。先读取 Manifest 授权的 Skill 和只读上下文文件，"
-        "按需调用可用 Function Tools，最后返回 PathAgentResult。"
-    )
+    assert "/evidence/authorized-options.json" in model.observed_user_message
+    assert "QFN-48" not in model.observed_user_message
     assert "**Manifest Skills**" in model.observed_system_message
     assert "**Skills Skills**" not in model.observed_system_message
 
@@ -1333,7 +1331,8 @@ def test_deep_agent_receives_repair_instruction() -> None:
         graph_factory=lambda **kwargs: Graph(),
     )
     result = asyncio.run(adapter.generate(context, lambda *args: None))
-    assert captured[0]["messages"] == [{"role": "user", "content": instruction}]
+    assert captured[0]["messages"][0]["content"].startswith(instruction)
+    assert "/evidence/authorized-options.json" in captured[0]["messages"][0]["content"]
     assert result.recommendation == "修正后的中文建议。"
 
 
@@ -1399,3 +1398,63 @@ def test_deep_agent_can_browse_authorized_directories(tool_name, arguments, expe
     model = BrowsingModel()
     asyncio.run(DeepAgentPathAdapter(model, profile="test/browsing").generate(context, lambda *args: None))
     assert model.calls == 2
+
+
+@pytest.mark.parametrize("correct_after_feedback", [True, False])
+def test_path_tool_feedback_corrects_or_stops_repeated_errors(correct_after_feedback):
+    class Model(BaseChatModel):
+        calls: int = 0
+
+        @property
+        def _llm_type(self):
+            return "test-feedback"
+
+        def _get_ls_params(self, **kwargs):
+            return {"ls_provider": "agentic-cm", "ls_model_name": "feedback"}
+
+        def bind_tools(self, tools, *, tool_choice=None, **kwargs):
+            return self
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            replies = [m for m in messages if isinstance(m, ToolMessage)]
+            if not replies:
+                user = next(m for m in messages if isinstance(m, HumanMessage))
+                assert "/case/snapshot.json" in user.content
+            elif self.calls < 3:
+                assert replies[-1].status == "error"
+                assert "/evidence/authorized-options.json" in replies[-1].content
+            if self.calls == 2:
+                assert "失败两次" in replies[-1].content
+            if correct_after_feedback and self.calls == 2:
+                name, args = "read_file", {"file_path": "/evidence/authorized-options.json"}
+            elif correct_after_feedback and self.calls == 3:
+                assert replies[-1].status == "success"
+                name, args = "PathAgentResult", {"recommendation": "已核验授权候选。", "role_reports": []}
+            else:
+                name, args = "read_file", {"file_path": "string"}
+            self.calls += 1
+            return ChatResult(generations=[ChatGeneration(message=AIMessage(
+                content="", tool_calls=[{"name": name, "args": args, "id": str(self.calls), "type": "tool_call"}],
+            ))])
+
+    context = PathAgentContext(
+        case_snapshot={}, human_proposal=None, path={"definition": "OrderSplit"},
+        execution_skills=(), knowledge=(), authorized_options=(), tool_contracts=(),
+        required_role_reports=(), previous_solution_revision=None,
+    )
+    model = Model()
+    adapter = DeepAgentPathAdapter(model, profile="test/feedback")
+    # Reuse the cached graph: error counts must stay isolated to each invocation.
+    for _ in range(2):
+        model.calls = 0
+        events = []
+        if correct_after_feedback:
+            asyncio.run(adapter.generate(context, lambda *args: events.append(args)))
+            assert model.calls == 4
+        else:
+            with pytest.raises(AgentOutputError, match="3 次"):
+                asyncio.run(adapter.generate(context, lambda *args: events.append(args)))
+            assert model.calls == 3
+            assert any(event[0] == "deepagent.tool.loop_aborted" for event in events)
+        feedback = [event for event in events if event[0] == "deepagent.tool.feedback"]
+        assert [event[3]["failure_count"] for event in feedback] == [1, 2]
