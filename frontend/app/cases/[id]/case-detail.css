@@ -2613,7 +2613,7 @@ button:disabled {
   font-size: var(--text-sm);
 }
 .embeddedLiveTrace > header em {
-  color: #7da39e;
+  color: #bed5d0;
   font-family: var(--font-geist-mono), monospace;
   font-size: var(--text-2xs);
   font-style: normal;
@@ -2639,13 +2639,13 @@ button:disabled {
 }
 .embeddedLiveTrace .traceRunIdentity small,
 .embeddedLiveTrace .traceRunMeta small {
-  color: #719b96;
+  color: #bed5d0;
 }
 .embeddedLiveTrace .traceRunMeta b {
   color: #83d8ca;
 }
 .embeddedLiveTrace .traceRun > summary:after {
-  color: #79a39e;
+  color: #bed5d0;
 }
 .embeddedLiveTrace .traceRunBody {
   padding-left: 17px;
@@ -2657,24 +2657,49 @@ button:disabled {
   background: #153938;
   color: #76ccbd;
 }
-.embeddedLiveTrace .traceSteps header code {
-  color: #b8e7df;
+/* Live activities share the dark surface, including tool and failure cards. */
+.embeddedLiveTrace .traceActivity.isTool {
+  background: #153938;
+  border-color: #416561;
+  box-shadow: none;
 }
-.embeddedLiveTrace .traceSteps header b {
-  background: rgba(142, 204, 194, 0.12);
-  color: #83aaa5;
+.embeddedLiveTrace .traceSteps > li.failed .traceActivity {
+  background: #422d2a;
+  border-color: #a86d61;
 }
-.embeddedLiveTrace .traceSteps header time {
-  color: #678e89;
+.embeddedLiveTrace .traceActivity > summary:hover {
+  background: rgba(158, 219, 209, 0.08);
 }
-.embeddedLiveTrace .traceSteps p {
-  color: #9cb8b4;
+.embeddedLiveTrace .traceActivityTitle strong,
+.embeddedLiveTrace .traceActivityTitle code {
+  color: #e8faf6;
 }
-.embeddedLiveTrace .tracePayload {
-  border-color: rgba(151, 214, 204, 0.25);
+.embeddedLiveTrace .traceKind {
+  background: #284d47;
+  color: #d4eee7;
+}
+.embeddedLiveTrace .traceRunOverview,
+.embeddedLiveTrace .traceActivityMeta time,
+.embeddedLiveTrace .traceChevron,
+.embeddedLiveTrace .traceActivity .traceActivityDescription,
+.embeddedLiveTrace .traceActivityBody h4 {
+  color: #bed5d0;
+}
+.embeddedLiveTrace .traceActivityMeta b,
+.embeddedLiveTrace .traceSteps > li.running .traceActivityMeta b {
+  color: #8ee6d4;
+}
+.embeddedLiveTrace .traceSteps > li.failed .traceActivityMeta b,
+.embeddedLiveTrace .traceFailure h4 {
+  color: #ffc0b3;
+}
+.embeddedLiveTrace .traceActivityBody pre {
+  background: #102c2b;
+  border-color: #416561;
+  color: #e8faf6;
 }
 .embeddedLiveTrace .tracePayload > summary {
-  color: #78d7c6;
+  color: #8ee6d4;
 }
 .embeddedLiveTrace .traceError {
   background: rgba(127, 42, 31, 0.28);

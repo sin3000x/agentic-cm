@@ -1399,7 +1399,8 @@ def test_deep_agent_can_browse_authorized_directories(tool_name, arguments, expe
 
 
 @pytest.mark.parametrize("correct_after_feedback", [True, False])
-def test_path_tool_feedback_corrects_or_stops_repeated_errors(correct_after_feedback):
+@pytest.mark.parametrize("rotate_tools", [True, False])
+def test_path_tool_feedback_corrects_or_stops_repeated_errors(correct_after_feedback, rotate_tools):
     class Model(BaseChatModel):
         calls: int = 0
 
@@ -1430,6 +1431,12 @@ def test_path_tool_feedback_corrects_or_stops_repeated_errors(correct_after_feed
                 name, args = "PathAgentResult", {"recommendation": "已核验授权候选。", "role_reports": []}
             else:
                 name, args = "read_file", {"file_path": "string"}
+                if rotate_tools:
+                    name, args = [
+                        ("glob", {"path": "string", "pattern": "string"}),
+                        ("ls", {"path": "string"}),
+                        ("grep", {"path": "string", "pattern": "string"}),
+                    ][self.calls]
             self.calls += 1
             return ChatResult(generations=[ChatGeneration(message=AIMessage(
                 content="", tool_calls=[{"name": name, "args": args, "id": str(self.calls), "type": "tool_call"}],

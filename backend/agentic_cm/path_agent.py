@@ -170,6 +170,15 @@ class _PathToolFeedbackMiddleware(AgentMiddleware):
         if result.status != "error":
             context.tool_failures.pop(key, None)
             return result
+        # Switching filesystem tools does not correct the same placeholder path.
+        path = arguments.get("file_path" if name == "read_file" else "path")
+        placeholder_path = (
+            name in _FILESYSTEM_TOOLS
+            and isinstance(path, str)
+            and path.strip().strip("/") == "string"
+        )
+        if placeholder_path:
+            key = "filesystem:placeholder-path:string"
         count = context.tool_failures.get(key, 0) + 1
         context.tool_failures[key] = count
         feedback = str(result.content)
@@ -181,15 +190,16 @@ class _PathToolFeedbackMiddleware(AgentMiddleware):
                 + '\n示例：read_file({"file_path":"/case/snapshot.json"})；'
                 'glob({"path":"/evidence","pattern":"*.json"})。'
             )
+        failure_subject = "占位路径 string（跨文件工具累计）" if placeholder_path else "同一工具和参数"
         if count >= 2:
-            feedback += "\n同一工具和参数已失败两次。必须修改参数或报告证据缺失；再次失败将终止运行。"
+            feedback += f"\n{failure_subject}已失败两次。必须修改参数或报告证据缺失；再次失败将终止运行。"
         details = {
             "tool": name, "input": arguments, "failure_count": count,
             "feedback": feedback,
         }
         if count >= 3:
             context.trace("deepagent.tool.loop_aborted", "FAILED", "重复失败调用，提前终止 Path Agent", details)
-            raise AgentOutputError(f"工具 {name} 相同参数连续失败 3 次，已终止运行：{arguments}")
+            raise AgentOutputError(f"{failure_subject}失败 3 次，已终止运行：{name} {arguments}")
         context.trace("deepagent.tool.feedback", "COMPLETED", "向 Path Agent 返回工具纠正提示", details)
         return result.model_copy(update={"content": feedback})
 
