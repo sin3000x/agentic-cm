@@ -96,7 +96,7 @@ export default function InboxPage() {
     <div className="appShell">
       <AppSidebar
         active="inbox"
-        inboxCount={loadState === "ready" ? items.length : undefined}
+        inboxCount={loadState === "ready" ? items.length : null}
         busy={busyKey !== null}
         onIdentitySelect={selectIdentity}
       />

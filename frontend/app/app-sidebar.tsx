@@ -13,7 +13,7 @@ export type { SidebarIdentity };
 
 type AppSidebarProps = {
   active: "none" | "overview" | "inbox" | "skills" | "policies" | "knowledge";
-  inboxCount?: number;
+  inboxCount?: number | null;
   busy?: boolean;
   onIdentitySelect?: (identity: SidebarIdentity) => void;
 };
@@ -26,6 +26,24 @@ export default function AppSidebar({
 }: AppSidebarProps) {
   const { identity, identities, selectIdentity: setIdentity } = useDemoIdentity();
   const [showIdentityMenu, setShowIdentityMenu] = useState(false);
+  const [inbox, setInbox] = useState<{ role: string; count: number } | null>(null);
+  const displayedInboxCount = inboxCount !== undefined
+    ? inboxCount
+    : inbox?.role === identity.role ? inbox.count : null;
+
+  useEffect(() => {
+    if (inboxCount !== undefined) return;
+    const controller = new AbortController();
+    apiGet<unknown[]>("/api/inbox", { role: identity.role }, controller.signal, "no-store")
+      .then((items) => {
+        if (!controller.signal.aborted) setInbox({ role: identity.role, count: items.length });
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setInbox(null);
+      });
+    return () => controller.abort();
+  }, [identity.role, active, busy, inboxCount]);
+
 
   const [adapter, setAdapter] = useState<Adapter | "">("");
   const [savingAdapter, setSavingAdapter] = useState(false);
@@ -75,7 +93,7 @@ export default function AppSidebar({
         </Link>
         <Link className={`navLink ${active === "inbox" ? "active" : ""}`} href="/inbox">
           <span className="navIcon">✓</span>我的待办
-          {inboxCount !== undefined && <b>{inboxCount}</b>}
+          {displayedInboxCount !== null && <b>{displayedInboxCount}</b>}
         </Link>
 
         <p>组织资产</p>
