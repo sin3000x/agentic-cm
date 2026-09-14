@@ -15,6 +15,7 @@ import { formatQuantity, formatThreadTime } from "../../lib/format";
 import {
   aiRunCopy,
   approvalContextFor,
+  type ApprovalContext,
   commitmentCopy,
   initialHumanProposal,
   isSolutionRevision,
@@ -246,8 +247,8 @@ export default function Home() {
         }
         if (data.permissions?.can_view_manifest === true && data.phase === "PATH_EXPLORATION") {
           const pendingPathIds = (data.manifest?.paths ?? [])
-            .filter((path: ManifestPath) => path.selected)
-            .filter((path: ManifestPath) => {
+            .filter((path) => path.selected)
+            .filter((path) => {
               const attempt = (data.path_attempts ?? []).find(
                 (item: PathAttempt) => item.path_id === path.id,
               );
@@ -257,7 +258,7 @@ export default function Home() {
                 !isSolutionRevision(attempt.solution_revision)
               );
             })
-            .map((path: ManifestPath) => path.id);
+            .map((path) => path.id);
           const runKey = `${identity.name}:alternatives:${pendingPathIds.join(",")}`;
           if (pendingPathIds.length > 0 && !automaticRunsRef.current.has(runKey)) {
             automaticRunsRef.current.add(runKey);

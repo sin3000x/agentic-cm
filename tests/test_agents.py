@@ -121,7 +121,6 @@ def test_deep_agent_projects_only_authorized_skills() -> None:
             },
         ),
         knowledge=(),
-        authorized_options=({"id": "A", "title": "候选方案甲"},),
         tool_contracts=(),
         required_role_reports=(),
         previous_solution_revision=None,
@@ -173,7 +172,6 @@ def test_deep_agent_projects_complete_read_only_context_files() -> None:
             "instructions_markdown": "读取冻结 Bundle 和证据。",
         },),
         knowledge=({"title": "历史案例", "content": {"summary": "认证可能返工"}},),
-        authorized_options=({"id": "A", "material_id": "MCU-X7A"},),
         tool_contracts=(),
         required_role_reports=({"role": "研发", "dimension": "技术可行性"},),
         previous_solution_revision=SolutionRevision(
@@ -194,7 +192,6 @@ def test_deep_agent_projects_complete_read_only_context_files() -> None:
         "/case/human-proposal.json",
         "/case/previous-solution-revision.json",
         "/knowledge/context.json",
-        "/evidence/authorized-options.json",
         "/evidence/required-role-reports.json",
     }
     assert json.loads(files["/skills/material-substitution-analysis/bundle.json"])["members"] == [
@@ -203,7 +200,6 @@ def test_deep_agent_projects_complete_read_only_context_files() -> None:
     ]
     assert json.loads(files["/case/snapshot.json"])["business_payload"]["gap_quantity"] == 18400
     assert json.loads(files["/knowledge/context.json"])[0]["title"] == "历史案例"
-    assert json.loads(files["/evidence/authorized-options.json"])[0]["id"] == "A"
 
 
 def test_deep_agent_returns_existing_path_result_contract() -> None:
@@ -232,7 +228,6 @@ def test_deep_agent_returns_existing_path_result_contract() -> None:
             "instructions_markdown": "只分析 Manifest 授权的候选。",
         },),
         knowledge=(),
-        authorized_options=({"id": "A", "title": "候选方案甲"},),
         tool_contracts=(),
         required_role_reports=(),
         previous_solution_revision=None,
@@ -316,7 +311,6 @@ def test_deep_agent_invokes_manifest_function_tool() -> None:
         path={"definition": "MaterialSubstitution", "skill_selections": []},
         execution_skills=(),
         knowledge=(),
-        authorized_options=({"id": "A"},),
         tool_contracts=({
             "id": "lookup_material_master",
             "description": "查询冻结的物料主数据。",
@@ -340,7 +334,7 @@ def test_deep_agent_invokes_manifest_function_tool() -> None:
 
     assert result.recommendation == "建议优先评审封装为 QFN-48 的候选 A。"
     assert '"package":"QFN-48"' in model.observed_tool_result.replace(" ", "")
-    assert "/evidence/authorized-options.json" in model.observed_user_message
+    assert "/evidence/required-role-reports.json" in model.observed_user_message
     assert "QFN-48" not in model.observed_user_message
     assert "**Manifest Skills**" in model.observed_system_message
     assert "**Skills Skills**" not in model.observed_system_message
@@ -404,7 +398,6 @@ def test_deep_agent_trace_records_internal_turns_and_tools() -> None:
             "instructions_markdown": skill_body,
         },),
         knowledge=(),
-        authorized_options=({"id": "A"},),
         tool_contracts=({
             "id": "lookup_material_master",
             "description": "查询冻结的物料主数据。",
@@ -443,7 +436,13 @@ def test_deep_agent_trace_records_internal_turns_and_tools() -> None:
         item[3] for item in traces
         if item[0] == "deepagent.tool.completed" and item[3].get("tool") == "lookup_material_master"
     ]
+    lookup_started = next(
+        item[3] for item in traces
+        if item[0] == "deepagent.tool.started"
+        and item[3].get("tool") == "lookup_material_master"
+    )
     assert lookup_events == [{
+        "call_id": lookup_started["call_id"],
         "tool": "lookup_material_master",
         "input": {"option_id": "A"},
         "output": {"package": "QFN-48"},
@@ -462,7 +461,7 @@ def test_deep_agent_trace_records_internal_turns_and_tools() -> None:
     assert result.recommendation not in json.dumps(final[3], ensure_ascii=False)
 
 
-@pytest.mark.parametrize("failure", ["unauthorized", "missing_record"])
+@pytest.mark.parametrize("failure", ["invalid_input", "missing_record"])
 def test_manifest_function_tool_returns_correctable_error(failure: str) -> None:
     class UnauthorizedToolModel(BaseChatModel):
         calls: int = 0
@@ -484,7 +483,7 @@ def test_manifest_function_tool_returns_correctable_error(failure: str) -> None:
                     content="",
                     tool_calls=[{
                         "name": "lookup_material_master",
-                        "args": {"option_id": "B"},
+                        "args": {"option_id": "" if failure == "invalid_input" else "B"},
                         "id": "lookup-unauthorized",
                         "type": "tool_call",
                     }],
@@ -525,7 +524,6 @@ def test_manifest_function_tool_returns_correctable_error(failure: str) -> None:
         path={"definition": "MaterialSubstitution"},
         execution_skills=(),
         knowledge=(),
-        authorized_options=({"id": "A"},) if failure == "unauthorized" else ({"id": "A"}, {"id": "B"}),
         tool_contracts=({
             "id": "lookup_material_master",
             "description": "查询冻结的物料主数据。",
@@ -533,7 +531,6 @@ def test_manifest_function_tool_returns_correctable_error(failure: str) -> None:
             "input_key": "option_id",
             "records": {
                 "A": {"package": "QFN-48"},
-                **({"B": {"package": "BGA-64"}} if failure == "unauthorized" else {}),
             },
         },),
         required_role_reports=(),
@@ -549,16 +546,23 @@ def test_manifest_function_tool_returns_correctable_error(failure: str) -> None:
     )
     assert result.recommendation == "未使用未授权候选。"
     assert model.calls == 3
-    assert "未授权候选" in model.tool_error if failure == "unauthorized" else "冻结记录" in model.tool_error
+    if failure == "invalid_input":
+        assert "非空字符串" in model.tool_error
+    else:
+        assert json.loads(model.tool_error)["status"] == "not_found"
     assert not any(item[0] == "deepagent.runtime.failed" for item in traces)
 
     failed_tools = [
         item[3] for item in traces
         if item[0] == "deepagent.tool.failed" and item[3].get("tool") == "lookup_material_master"
     ]
-    assert failed_tools[0]["input"] == {"option_id": "B"}
-    assert failed_tools[0]["recoverable"] is True
-    assert "BGA-64" not in failed_tools[0]["error"]
+    if failure == "invalid_input":
+        assert failed_tools[0]["input"] == {"option_id": ""}
+        assert failed_tools[0]["recoverable"] is True
+    else:
+        assert not failed_tools
+        outputs = [item[3]["output"] for item in traces if item[0] == "deepagent.tool.completed"]
+        assert outputs[0]["status"] == "not_found"
 
 
 @pytest.mark.parametrize("file_path", ["/outside.txt", "string"])
@@ -610,7 +614,6 @@ def test_deep_agent_denies_reads_outside_manifest_context(file_path: str) -> Non
         path={"definition": "OrderSplit"},
         execution_skills=(),
         knowledge=(),
-        authorized_options=(),
         tool_contracts=(),
         required_role_reports=(),
         previous_solution_revision=None,
@@ -672,7 +675,7 @@ def test_deep_agent_reuses_graph_without_reusing_frozen_tool_records() -> None:
             path={"definition": "MaterialSubstitution"},
             execution_skills=(),
             knowledge=(),
-            authorized_options=({"id": "A"},),
+
             tool_contracts=({
                 "id": "lookup_material_master",
                 "description": "查询冻结的物料主数据。",
@@ -723,7 +726,6 @@ def test_deep_agent_maps_model_failure_to_execution_error() -> None:
         path={"definition": "MaterialSubstitution", "title": "物料替代"},
         execution_skills=(),
         knowledge=(),
-        authorized_options=({"id": "A", "title": "候选方案甲"},),
         tool_contracts=(),
         required_role_reports=(),
         previous_solution_revision=None,
@@ -758,7 +760,6 @@ def test_deep_agent_rejects_missing_structured_response() -> None:
         path={"definition": "MaterialSubstitution", "title": "物料替代"},
         execution_skills=(),
         knowledge=(),
-        authorized_options=({"id": "A", "title": "候选方案甲"},),
         tool_contracts=(),
         required_role_reports=(),
         previous_solution_revision=None,
@@ -791,7 +792,6 @@ def test_deep_agent_leaves_semantic_output_validation_to_path_agent() -> None:
         path={"definition": "MaterialSubstitution", "title": "物料替代"},
         execution_skills=(),
         knowledge=(),
-        authorized_options=({"id": "A"}, {"id": "B"}),
         tool_contracts=(),
         required_role_reports=({
             "role": "主计划",
@@ -945,9 +945,7 @@ def test_path_agent_repairs_once_with_feedback(tmp_path: Path, repair_outcome: s
             assert "recommendation" in context.repair_instruction
             feedback = json.loads(context.repair_instruction.split("\n", 1)[1])
             assert feedback["required_role_reports"] == list(context.required_role_reports)
-            assert feedback["authorized_option_ids"] == [
-                str(option["id"]) for option in context.authorized_options
-            ]
+            assert feedback["rejected_result"]["recommendation"] == "English only"
             if repair_outcome == "execution_error":
                 raise AgentExecutionError("provider unavailable")
             if repair_outcome == "wrong_roles":
@@ -997,6 +995,7 @@ def test_path_agent_registers_frozen_tools_without_precomputing_results(tmp_path
 
     assert adapter.context is not None
     assert {tool["id"] for tool in adapter.context.tool_contracts} == {
+        "lookup_material_substitutes",
         "lookup_material_master",
         "lookup_supply_snapshot",
         "lookup_customer_acceptance",
@@ -1050,7 +1049,6 @@ def test_path_agent_context_files_project_only_generation_inputs() -> None:
             "confidence": "medium",
             "content": {"summary": "客户认证可能造成返工。"},
         },),
-        authorized_options=({"id": "A", "material_id": "MCU-X7A"},),
         tool_contracts=({
             "id": "lookup_supply_snapshot",
             "description": "查询冻结快照。",
@@ -1322,7 +1320,7 @@ def test_deep_agent_receives_repair_instruction() -> None:
     context = PathAgentContext(
         case_snapshot={}, human_proposal=None,
         path={"definition": "MaterialSubstitution", "title": "物料替代"},
-        execution_skills=(), knowledge=(), authorized_options=(),
+        execution_skills=(), knowledge=(),
         tool_contracts=(), required_role_reports=(), previous_solution_revision=None,
         repair_instruction=instruction,
     )
@@ -1332,22 +1330,22 @@ def test_deep_agent_receives_repair_instruction() -> None:
     )
     result = asyncio.run(adapter.generate(context, lambda *args: None))
     assert captured[0]["messages"][0]["content"].startswith(instruction)
-    assert "/evidence/authorized-options.json" in captured[0]["messages"][0]["content"]
+    assert "/evidence/required-role-reports.json" in captured[0]["messages"][0]["content"]
     assert result.recommendation == "修正后的中文建议。"
 
 
 @pytest.mark.parametrize("tool_name,arguments,expected", [
     ("ls", {"path": "/"}, "/evidence"),
-    ("glob", {"pattern": "/evidence/**/*"}, "authorized-options.json"),
+    ("glob", {"pattern": "/evidence/**/*"}, "required-role-reports.json"),
     ("glob", {"pattern": "/case/***"}, "snapshot.json"),
     ("glob", {"pattern": "/knowledge/**/*"}, "context.json"),
-    ("glob", {"path": None, "pattern": "/evidence/**/*"}, "authorized-options.json"),
+    ("glob", {"path": None, "pattern": "/evidence/**/*"}, "required-role-reports.json"),
     ("glob", {"path": None, "pattern": "**/*"}, "snapshot.json"),
     ("ls", {"path": "/skills"}, "demo"),
     ("ls", {"path": "/case"}, "snapshot.json"),
     ("ls", {"path": "/knowledge"}, "context.json"),
-    ("ls", {"path": "/evidence"}, "authorized-options.json"),
-    ("glob", {"path": "/evidence", "pattern": "*.json"}, "authorized-options.json"),
+    ("ls", {"path": "/evidence"}, "required-role-reports.json"),
+    ("glob", {"path": "/evidence", "pattern": "*.json"}, "required-role-reports.json"),
     ("read_file", {"file_path": "/skills/demo/SKILL.md"}, "示例技能"),
 ])
 def test_deep_agent_can_browse_authorized_directories(tool_name, arguments, expected, monkeypatch) -> None:
@@ -1392,7 +1390,7 @@ def test_deep_agent_can_browse_authorized_directories(tool_name, arguments, expe
     context = PathAgentContext(
         case_snapshot={}, human_proposal=None, path={"definition": "OrderSplit"},
         execution_skills=({"id": "demo", "description": "示例技能", "instructions_markdown": "示例技能"},),
-        knowledge=(), authorized_options=(), tool_contracts=(), required_role_reports=(),
+        knowledge=(), tool_contracts=(), required_role_reports=(),
         previous_solution_revision=None,
     )
     model = BrowsingModel()
@@ -1422,11 +1420,11 @@ def test_path_tool_feedback_corrects_or_stops_repeated_errors(correct_after_feed
                 assert "/case/snapshot.json" in user.content
             elif self.calls < 3:
                 assert replies[-1].status == "error"
-                assert "/evidence/authorized-options.json" in replies[-1].content
+                assert "/evidence/required-role-reports.json" in replies[-1].content
             if self.calls == 2:
                 assert "失败两次" in replies[-1].content
             if correct_after_feedback and self.calls == 2:
-                name, args = "read_file", {"file_path": "/evidence/authorized-options.json"}
+                name, args = "read_file", {"file_path": "/evidence/required-role-reports.json"}
             elif correct_after_feedback and self.calls == 3:
                 assert replies[-1].status == "success"
                 name, args = "PathAgentResult", {"recommendation": "已核验授权候选。", "role_reports": []}
@@ -1439,7 +1437,7 @@ def test_path_tool_feedback_corrects_or_stops_repeated_errors(correct_after_feed
 
     context = PathAgentContext(
         case_snapshot={}, human_proposal=None, path={"definition": "OrderSplit"},
-        execution_skills=(), knowledge=(), authorized_options=(), tool_contracts=(),
+        execution_skills=(), knowledge=(), tool_contracts=(),
         required_role_reports=(), previous_solution_revision=None,
     )
     model = Model()

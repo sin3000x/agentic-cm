@@ -1,6 +1,6 @@
 import { sites } from "@openai/sites-vite-plugin";
 import vinext from "vinext";
-import { defineConfig, loadEnv } from "vite";
+import { defineConfig, loadEnv, type UserConfig } from "vite";
 import hostingConfig from "./.openai/hosting.json";
 
 const SITE_CREATOR_PLACEHOLDER_DATABASE_ID = "00000000-0000-4000-8000-000000000000";
@@ -40,7 +40,7 @@ const localBindingConfig = {
     : [],
 };
 
-export default defineConfig(async ({ mode }) => {
+export default defineConfig(async ({ mode }): Promise<UserConfig> => {
   const env = loadEnv(mode, process.cwd(), "AGENTIC_CM_");
   const host = env.AGENTIC_CM_WEB_HOST || "127.0.0.1";
   const port = parsePort(env.AGENTIC_CM_WEB_PORT, 3000, "AGENTIC_CM_WEB_PORT");

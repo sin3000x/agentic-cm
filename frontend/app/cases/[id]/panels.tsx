@@ -5,6 +5,7 @@ import {
   aiRunCopy,
   pathIdForRun,
   type AgentRun,
+  type AgentTraceEvent,
   type AiRunKind,
   type CapabilityDetails,
   type ManifestPath,
@@ -270,6 +271,73 @@ export function ManifestYamlPanel({
   );
 }
 
+function traceDuration(start: string, end: string | null) {
+  if (!end) return null;
+  const seconds = (Date.parse(end) - Date.parse(start)) / 1000;
+  if (!Number.isFinite(seconds) || seconds < 0) return null;
+  return seconds < 60 ? `${seconds.toFixed(1)} 秒` : `${Math.floor(seconds / 60)} 分 ${Math.round(seconds % 60)} 秒`;
+}
+
+function traceActivities(events: AgentTraceEvent[]) {
+  const activities: { start: AgentTraceEvent; end?: AgentTraceEvent }[] = [];
+  for (const event of events) {
+    if (/^deepagent\.tool\.(completed|failed)$/.test(event.step)) {
+      const candidates = activities.filter(({ start, end }) =>
+        !end && start.step === "deepagent.tool.started" &&
+        start.details.tool === event.details.tool &&
+        (typeof event.details.call_id === "string"
+          ? start.details.call_id === event.details.call_id
+          : event.details.input !== undefined && JSON.stringify(start.details.input) === JSON.stringify(event.details.input)),
+      );
+      // Older traces have no call ID. Only combine an unambiguous match.
+      if (candidates.length === 1) {
+        candidates[0].end = event;
+        continue;
+      }
+    }
+    activities.push({ start: event });
+  }
+  return activities;
+}
+
+function TraceActivity({ start, end, running }: {
+  start: AgentTraceEvent; end?: AgentTraceEvent; running: boolean;
+}) {
+  const event = end ?? start;
+  const tool = typeof event.details.tool === "string" ? event.details.tool : null;
+  const failed = event.status === "FAILED";
+  const pending = !end && start.step === "deepagent.tool.started";
+  const state = failed ? "failed" : pending && running ? "running" : pending ? "unknown" : "completed";
+  const status = failed ? "失败" : pending ? (running ? "执行中" : "未记录结果") : event.status === "STARTED" ? "已发起" : "已完成";
+  const duration = end ? traceDuration(start.created_at, end.created_at) : null;
+  const input = start.details.input ?? event.details.input;
+  const output = event.details.output;
+  return (
+    <li className={state}>
+      <span className="traceSequence" aria-hidden="true">{failed ? "!" : tool ? "⌘" : "·"}</span>
+      <details className={`traceActivity${tool ? " isTool" : ""}`} open={failed}>
+        <summary>
+          <span className="traceActivityTitle">
+            {tool ? <><span className="traceKind">工具</span><code>{tool}</code></> : <strong>{event.summary}</strong>}
+          </span>
+          <span className="traceActivityMeta"><b>{status}</b>{duration && <time>{duration}</time>}<span className="traceChevron" aria-hidden="true">›</span></span>
+        </summary>
+        {tool && <p className="traceActivityDescription">{event.summary}</p>}
+        <div className="traceActivityBody">
+          {input !== undefined && <section><h4>输入参数</h4><pre>{typeof input === "string" ? input : JSON.stringify(input, null, 2)}</pre></section>}
+          {output !== undefined && <section><h4>返回结果</h4><pre>{typeof output === "string" ? output : JSON.stringify(output, null, 2)}</pre></section>}
+          {failed && <section className="traceFailure"><h4>错误详情</h4><pre>{JSON.stringify(event.details.error ?? event.details, null, 2)}</pre></section>}
+          {typeof event.details.manifest_yaml === "string" && <section><h4>完整 Manifest YAML</h4><pre>{event.details.manifest_yaml}</pre></section>}
+          <details className="tracePayload">
+            <summary>原始审计记录 · {end ? "2 条" : `#${start.sequence}`}</summary>
+            <pre>{JSON.stringify(end ? [start, end] : start, null, 2)}</pre>
+          </details>
+        </div>
+      </details>
+    </li>
+  );
+}
+
 export function AgentTracePanel({
   runs,
   agentType,
@@ -298,9 +366,9 @@ export function AgentTracePanel({
         <header className="traceHeader">
           <span>
             <strong>{label} TRACE</strong>
-            <small>按 Run 展开审计步骤；不记录 API Key 或隐藏思维链</small>
+            <small>查看执行过程、工具调用与返回结果</small>
           </span>
-          <em>{typedRuns.length} RUNS</em>
+          <em>{typedRuns.length} 次运行</em>
         </header>
       )}
       {typedRuns.length === 0 ? (
@@ -325,46 +393,19 @@ export function AgentTracePanel({
                 </span>
                 <span className="traceRunMeta">
                   <b>{statusLabel[run.status]}</b>
-                  <small>{run.events.length} 步</small>
+                  <small>{run.events.filter((event) => event.step === "deepagent.tool.started").length} 次工具调用 · {run.events.length} 条记录</small>
                 </span>
               </summary>
               <div className="traceRunBody">
+                <div className="traceRunOverview"><span>执行活动</span><span>{traceDuration(run.started_at, run.completed_at) ?? (run.status === "RUNNING" ? "实时更新" : "耗时未知")}</span></div>
                 {run.error_message && (
                   <p className="traceError">
                     {run.error_type}: {run.error_message}
                   </p>
                 )}
                 <ol className="traceSteps">
-                  {run.events.map((event) => (
-                    <li className={event.status.toLowerCase()} key={event.id}>
-                      <span className="traceSequence">
-                        {String(event.sequence).padStart(2, "0")}
-                      </span>
-                      <div>
-                        <header>
-                          <code>{event.step}</code>
-                          <b>{event.status}</b>
-                          <time dateTime={event.created_at}>
-                            {formatThreadTime(event.created_at)}
-                          </time>
-                        </header>
-                        <p>{event.summary}</p>
-                        {Object.keys(event.details).length > 0 && (
-                          <details className="tracePayload">
-                            <summary>
-                              {typeof event.details.manifest_yaml === "string"
-                                ? "完整 Manifest YAML"
-                                : "输入 / 输出详情"}
-                            </summary>
-                            {typeof event.details.manifest_yaml === "string" ? (
-                              <pre>{event.details.manifest_yaml}</pre>
-                            ) : (
-                              <pre>{JSON.stringify(event.details, null, 2)}</pre>
-                            )}
-                          </details>
-                        )}
-                      </div>
-                    </li>
+                  {traceActivities(run.events).map(({ start, end }) => (
+                    <TraceActivity key={start.id} start={start} end={end} running={run.status === "RUNNING"} />
                   ))}
                 </ol>
               </div>

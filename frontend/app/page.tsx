@@ -117,7 +117,6 @@ function attentionFor(apiCase: ApiCase): string | undefined {
 function mapCase(apiCase: ApiCase): CaseSummary {
   const status: Record<ApiCase["status"], CaseStatus> = {
     OPEN: "处理中",
-    PENDING: "暂缓",
     CLOSED: "已关闭",
   };
   const phases: Record<ApiCase["phase"], { value: number; label: string }> = {

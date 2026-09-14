@@ -1363,65 +1363,189 @@ button:disabled {
 .traceSteps > li > div {
   min-width: 0;
 }
-.traceSteps header {
+
+.traceRunOverview {
+  display: flex;
+  justify-content: space-between;
+  padding: 14px 0 10px;
+  color: #7b8c89;
+  font-size: var(--text-2xs);
+}
+.traceActivity {
+  min-width: 0;
+  border: 1px solid transparent;
+  border-radius: 9px;
+}
+.traceActivity.isTool {
+  border-color: #dfe7e4;
+  background: #fff;
+  box-shadow: 0 2px 5px #193e3304;
+}
+.traceActivity > summary {
   display: flex;
   align-items: center;
-  gap: 6px;
-  min-height: 20px;
-}
-.traceSteps header code {
-  color: #315b58;
-  font-size: var(--text-xs);
-  font-weight: 700;
-}
-.traceSteps header b {
-  padding: 2px 5px;
-  border-radius: 7px;
-  background: #eef4f2;
-  color: #58736f;
-  font-size: var(--text-2xs);
-}
-.traceSteps > li.failed header b {
-  background: #fae9e5;
-  color: #a34132;
-}
-.traceSteps header time {
-  margin-left: auto;
-  color: #92a09e;
-  font-size: var(--text-2xs);
-}
-.traceSteps p {
-  margin: 3px 0 0;
-  color: #536a68;
-  font-size: var(--text-xs);
-  line-height: 1.55;
-}
-.tracePayload {
-  margin-top: 6px;
-  border-left: 1px solid #cbdad6;
-  padding-left: 9px;
-}
-.tracePayload > summary {
-  width: max-content;
-  max-width: 100%;
-  color: #16766a;
-  font-size: var(--text-xs);
-  font-weight: 700;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 11px;
   cursor: pointer;
+  list-style: none;
+  border-radius: 8px;
 }
-.tracePayload pre {
-  max-height: 310px;
+.traceActivity > summary::-webkit-details-marker {
+  display: none;
+}
+.traceActivity > summary:hover {
+  background: #edf3f180;
+}
+.traceActivity summary:focus-visible,
+.traceRun > summary:focus-visible {
+  outline: 2px solid #218c79;
+  outline-offset: 3px;
+}
+.traceActivityTitle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+.traceActivityTitle strong,
+.traceActivityTitle code {
+  color: #36514b;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.traceKind {
+  flex-shrink: 0;
+  padding: 3px 6px;
+  border-radius: 5px;
+  background: #edf4f1;
+  color: #678478;
+  font-size: var(--text-2xs);
+}
+.traceActivityMeta {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-shrink: 0;
+}
+.traceActivityMeta b {
+  color: #658276;
+  font-size: var(--text-2xs);
+  font-weight: 500;
+}
+.traceActivityMeta time {
+  color: #8a9791;
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+}
+.traceChevron {
+  color: #8a9993;
+  transition: transform 0.15s ease;
+}
+.traceActivity[open] > summary .traceChevron {
+  transform: rotate(90deg);
+}
+.traceActivity .traceActivityDescription {
+  margin: 0;
+  padding: 0 11px 10px;
+  color: #77867e;
+  font-size: var(--text-xs);
+}
+.traceActivityBody {
+  padding: 0 11px 12px;
+  min-width: 0;
+}
+.traceActivityBody h4 {
+  margin: 12px 0 6px;
+  color: #73857b;
+  font-size: var(--text-2xs);
+  font-weight: 500;
+}
+.traceActivityBody pre {
+  max-height: 320px;
   overflow: auto;
-  margin: 7px 0 0;
-  padding: 10px 11px;
-  border-radius: 3px;
-  background: #142a2b;
-  color: #dceceb;
+  margin: 0;
+  padding: 12px;
+  background: #f4f7f5;
+  border: 1px solid #e4eae6;
+  border-radius: 6px;
+  color: #3b554b;
   font-family: var(--font-geist-mono), monospace;
   font-size: var(--text-2xs);
-  line-height: 1.55;
+  line-height: 1.7;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+.tracePayload {
+  margin-top: 12px;
+}
+.tracePayload > summary {
+  color: #7b8c83;
+  font-size: var(--text-2xs);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.tracePayload pre {
+  margin-top: 8px;
+}
+.traceSteps > li.failed .traceActivity {
+  border-color: #e5b9ae;
+  background: #fffaf8;
+}
+.traceSteps > li.failed .traceActivityMeta b,
+.traceFailure h4 {
+  color: #b14c3e;
+}
+.traceSteps > li.running .traceSequence {
+  animation: tracePulse 1.6s ease-in-out infinite;
+}
+.traceSteps > li.running .traceActivityMeta b {
+  color: #138775;
+}
+.traceError {
+  overflow-wrap: anywhere;
+}
+@keyframes tracePulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .traceSteps > li.running .traceSequence {
+    animation: none;
+  }
+}
+@media (max-width: 640px) {
+  .traceRun > summary {
+    gap: 6px;
+  }
+  .traceRunMeta {
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+  }
+  .traceRunMeta small {
+    max-width: 125px;
+    text-align: right;
+  }
+  .traceRunBody {
+    padding-left: 0;
+  }
+  .traceSteps > li {
+    gap: 5px;
+  }
+  .traceActivity > summary {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .traceActivityMeta {
+    width: 100%;
+  }
+  .traceChevron {
+    margin-left: auto;
+  }
 }
 .failedAgentTraces {
   margin-top: 16px;

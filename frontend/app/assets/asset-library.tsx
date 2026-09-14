@@ -338,7 +338,7 @@ export default function AssetLibrary({ group }: { group: AssetGroup }) {
   );
   const skillHasMatch =
     group === "skills" &&
-    Boolean(data) &&
+    data !== null &&
     (!search.trim() ||
       data.assets.skills.some((asset) =>
         skillMatchesSearch(asset, search.trim().toLowerCase(), skillById),

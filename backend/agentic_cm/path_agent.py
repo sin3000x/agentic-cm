@@ -540,7 +540,7 @@ class _DeepAgentTraceCallback(BaseCallbackHandler):
             "deepagent.tool.started",
             "STARTED",
             "Deep Agents 调用只读工具",
-            {"tool": name, "input": tool_input},
+            {"tool": name, "input": tool_input, "call_id": str(run_id)},
         )
 
     def on_tool_end(
@@ -558,6 +558,7 @@ class _DeepAgentTraceCallback(BaseCallbackHandler):
             return
         details: dict[str, Any] = {
             "tool": name,
+            "call_id": str(run_id),
             "output": _summarize_tool_output(name, output),
         }
         if "input" in pending:
@@ -590,7 +591,7 @@ class _DeepAgentTraceCallback(BaseCallbackHandler):
         name = str(pending.get("name") or _tool_name(None, kwargs))
         if name in _STRUCTURED_OUTPUT_TOOLS:
             return
-        details = {"tool": name, **_exception_trace_details(error)}
+        details = {"tool": name, "call_id": str(run_id), **_exception_trace_details(error)}
         if "input" in pending:
             details["input"] = pending["input"]
         self._trace(

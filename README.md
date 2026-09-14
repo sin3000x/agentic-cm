@@ -26,6 +26,16 @@
 
 首个可运行切片覆盖：从 `INTAKE` 的订单延期 Case 触发 Orchestrator、按 Case Type Catalog 展开提拉/替代/拆分三条 Path、按 `case_type + path_definition` 确定性匹配 Policy，并由 Orchestrator 从轻量 Skill Catalog 自主选择入口后冻结 Bundle 展开结果。Owner 在前端单选或多选本轮探索子集。Skill 不再绑定 Case Type 或 Path；组织资产页按维护 Role 分组。Demo 默认只勾选“替代”，批准后平台只为获批 Path 创建 PathAttempt 与 Commitment 节点。
 
+### 本地验证
+
+安装后端开发依赖和前端依赖后，在仓库根目录运行：
+
+```bash
+make check
+```
+
+依次执行后端测试、能力目录校验、前端 lint、TypeScript 检查，以及一次构建和页面渲染测试；任何一步失败即停止。验证使用本地测试模型，不调用真实 LLM。
+
 ### 本地启动
 
 ```bash
