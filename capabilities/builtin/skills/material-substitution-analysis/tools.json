@@ -2,19 +2,41 @@
   "schema_version": 1,
   "tools": [
     {
-      "id": "lookup_material_master",
-      "description": "按替代候选 id 查询冻结的物料主数据与研发验证快照。",
+      "id": "lookup_material_substitutes",
+      "description": "按 Case business_payload.material 中的缺料编码查询替代关系，返回候选的实际物料编码；输入原料编码，不是 A/B 标签。当前为演示冻结数据，查无记录表示证据缺失，不代表不存在替代料。",
       "read_only": true,
-      "input_key": "option_id",
+      "input_key": "material_id",
       "records": {
-        "A": {
+        "MCU-X7": {
+          "material_id": "MCU-X7",
+          "candidates": [
+            {
+              "material_id": "MCU-X7A",
+              "description": "与 MCU-X7 封装和引脚兼容、无需固件改动的优先替代候选。"
+            },
+            {
+              "material_id": "MCU-X7B",
+              "description": "可覆盖完整缺口但需要固件配置与客户 AVL 评审的备选替代候选。"
+            }
+          ],
+          "source": "演示冻结替代关系；候选仍需技术、供应和客户确认，不代表批准替代。"
+        }
+      }
+    },
+    {
+      "id": "lookup_material_master",
+      "description": "按实际物料编码 material_id（来自替代关系查询结果） 查询冻结的物料主数据与研发验证快照。",
+      "read_only": true,
+      "input_key": "material_id",
+      "records": {
+        "MCU-X7A": {
           "material_id": "MCU-X7A",
           "package": "QFN-48",
           "pin_compatible": true,
           "firmware_change": "none",
           "qualification": "基础功能与热循环已通过，EMC 差异测试待研发确认"
         },
-        "B": {
+        "MCU-X7B": {
           "material_id": "MCU-X7B",
           "package": "QFN-48",
           "pin_compatible": true,
@@ -25,18 +47,18 @@
     },
     {
       "id": "lookup_supply_snapshot",
-      "description": "按替代候选 id 查询冻结的库存、调拨和补货快照。",
+      "description": "按实际物料编码 material_id（来自替代关系查询结果） 查询冻结的库存、调拨和补货快照。",
       "read_only": true,
-      "input_key": "option_id",
+      "input_key": "material_id",
       "records": {
-        "A": {
+        "MCU-X7A": {
           "available_quantity": 12000,
           "transfer_lead_days": 2,
           "additional_quantity": 6400,
           "additional_lead_days": 5,
           "snapshot_status": "冻结供应快照，待主计划确认"
         },
-        "B": {
+        "MCU-X7B": {
           "available_quantity": 18400,
           "transfer_lead_days": 3,
           "additional_quantity": 0,
@@ -47,18 +69,18 @@
     },
     {
       "id": "lookup_customer_acceptance",
-      "description": "按替代候选 id 查询冻结的客户 AVL、认证和偏差放行快照。",
+      "description": "按实际物料编码 material_id（来自替代关系查询结果） 查询冻结的客户 AVL、认证和偏差放行快照。",
       "read_only": true,
-      "input_key": "option_id",
+      "input_key": "material_id",
       "records": {
-        "A": {
+        "MCU-X7A": {
           "customer": "Northstar Mobility",
           "avl_status": "同系列已在 AVL，具体料号需偏差放行",
           "approval_route": "供应经理提交差异包并取得客户书面确认",
           "estimated_review_days": 2,
           "snapshot_status": "历史与冻结查询，不代表当前客户承诺"
         },
-        "B": {
+        "MCU-X7B": {
           "customer": "Northstar Mobility",
           "avl_status": "不在当前 AVL",
           "approval_route": "供应经理发起正式替代认证与商务影响确认",

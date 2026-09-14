@@ -362,31 +362,6 @@ class CapabilityRegistry:
             if frontmatter["name"] in bundle_members:
                 raise CapabilityConfigurationError(f"Skill bundle cannot contain itself: {bundle_file}")
 
-        path_options: list[dict[str, str]] = []
-        options_file = skill_path / "path-options.json"
-        if options_file.is_file():
-            try:
-                options_payload = json.loads(options_file.read_text())
-            except (OSError, json.JSONDecodeError) as exc:
-                raise CapabilityConfigurationError(f"Cannot load Skill options {options_file}: {exc}") from exc
-            if (
-                not isinstance(options_payload, dict)
-                or set(options_payload) != {"schema_version", "options"}
-                or options_payload.get("schema_version") != 1
-                or not isinstance(options_payload.get("options"), list)
-                or not options_payload["options"]
-            ):
-                raise CapabilityConfigurationError(f"Invalid Skill path-options contract: {options_file}")
-            for item in options_payload["options"]:
-                if not isinstance(item, dict) or set(item) != {"id", "material_id", "title", "description"} or any(
-                    not isinstance(item[field], str) or not item[field].strip()
-                    for field in ("id", "material_id", "title", "description")
-                ):
-                    raise CapabilityConfigurationError(f"Invalid Skill path option: {options_file}")
-                path_options.append({field: item[field].strip() for field in item})
-            if len({item["id"] for item in path_options}) != len(path_options):
-                raise CapabilityConfigurationError(f"Skill path option ids must be unique: {options_file}")
-
         tools: list[dict[str, Any]] = []
         tools_file = skill_path / "tools.json"
         if tools_file.is_file():
@@ -438,7 +413,6 @@ class CapabilityRegistry:
             "id": frontmatter["name"],
             "version": digest_hex[:12],
             "title": display_title,
-            "path_options": deepcopy(path_options),
             "tools": deepcopy(tools),
             "description": frontmatter["description"],
             "instructions_markdown": body.strip(),
