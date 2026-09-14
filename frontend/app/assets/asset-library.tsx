@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import AppSidebar from "../app-sidebar";
 import { apiGet, isAbort } from "../lib/api";
+import { useDemoIdentity } from "../lib/identities";
 
 export type AssetGroup = "skills" | "policies" | "knowledge";
 
@@ -298,10 +299,24 @@ function SkillRoleLibrary({ skills, search }: { skills: CapabilityAsset[]; searc
 }
 
 export default function AssetLibrary({ group }: { group: AssetGroup }) {
+  const { identity } = useDemoIdentity();
+  const [inbox, setInbox] = useState<{ role: string; count: number } | null>(null);
   const [data, setData] = useState<LibraryResponse | null>(null);
   const [error, setError] = useState(false);
   const [search, setSearch] = useState("");
   const copy = groupCopy[group];
+
+  useEffect(() => {
+    const controller = new AbortController();
+    apiGet<unknown[]>("/api/inbox", { role: identity.role }, controller.signal, "no-store")
+      .then((items) => {
+        if (!controller.signal.aborted) setInbox({ role: identity.role, count: items.length });
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setInbox(null);
+      });
+    return () => controller.abort();
+  }, [identity.role, group]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -332,7 +347,7 @@ export default function AssetLibrary({ group }: { group: AssetGroup }) {
 
   return (
     <div className="appShell">
-      <AppSidebar active={group} inboxCount={3} />
+      <AppSidebar active={group} inboxCount={inbox?.role === identity.role ? inbox.count : undefined} />
       <main className="mainArea">
         <header className="topbar">
           <div className="breadcrumb">
