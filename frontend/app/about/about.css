@@ -1,0 +1,57 @@
+.aboutPage { background: #e9eeed; color: #173a36; min-height: 100vh; font-family: Arial, "PingFang SC", "Microsoft YaHei", sans-serif; }
+.aboutToolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 4vw; background: #fff; border-bottom: 1px solid #d0dbd7; }
+.aboutToolbar a { color: #245f54; text-decoration: none; font-weight: 600; }
+.aboutToolbar > span { color: #586f68; font-size: 14px; }
+.aboutToolbar button { border: 0; border-radius: 7px; background: #185c4e; color: white; padding: 12px 19px; cursor: pointer; font: inherit; font-size: 14px; }
+.aboutPage a:focus-visible, .aboutPage button:focus-visible { outline: 3px solid #b37c28; outline-offset: 4px; }
+.aboutGuide { max-width: 1200px; margin: 24px auto; padding: 0 20px; color: #52665f; font-size: 13px; }
+.aboutGuide nav { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 16px; }
+.aboutGuide a { color: #245f54; text-decoration: none; }
+.aboutDeck { max-width: 1240px; margin: auto; padding: 0 20px 48px; display: grid; gap: 28px; }
+.aboutSlide { container-type: inline-size; aspect-ratio: 16 / 9; background: #fcfcf8; border: 1px solid #d3ded7; box-shadow: 0 6px 28px #143e3210; display: flex; flex-direction: column; position: relative; scroll-margin-top: 20px; }
+.aboutSlideFooter { display: flex; justify-content: flex-end; align-items: center; margin: 0 4.8%; font-size: 1cqw; letter-spacing: .08em; color: #61786e; }
+.aboutSlideFooter { position: absolute; bottom: 2.3%; right: 0; padding: 0; }
+.aboutSlideBody { padding: 3.2% 4.8% 0; }
+.aboutSlide h1, .aboutSlide h2 { font-size: 3.2cqw; line-height: 1.25; letter-spacing: -.04em; margin: 0 0 2.2cqw; font-weight: 700; color: #123e34; }
+
+
+.aboutNote { font-size: 1cqw; line-height: 1.5; color: #6c7469; margin: 1.1cqw 0 0; }
+.aboutArchitectureCaption { font-size: 1.15cqw; color: #65796e; text-align: center; margin: .8cqw 0 0; }
+.aboutDiagramScroll { width: 100%; }
+.aboutDiagram { width: 100%; height: auto; display: block; overflow: visible; }
+.diagramPanel { fill: #f1f5ee; stroke: #d9e2d7; }
+.diagramBox rect { fill: #fcfcf8; stroke: #b9cec0; stroke-width: 1.4; }
+.diagramBox.green rect { fill: #1d5948; stroke: #1d5948; }
+.diagramBox.gold rect { fill: #f4ecd9; stroke: #c5ac79; }
+.boxTitle { fill: #214d3d; font-size: 19px; font-weight: 600; }
+.boxSub { fill: #536f60; font-size: 14px; }
+.diagramBox.green .boxTitle { fill: #fff; }
+.diagramBox.green .boxSub { fill: #e2eee6; }
+.diagramText { fill: #24533f; font-size: 20px; font-weight: 600; }
+.diagramSmall { fill: #647a69; font-size: 15px; }
+@media screen and (max-width: 700px) {
+  .aboutToolbar { flex-wrap: wrap; padding: 16px; }
+  .aboutToolbar > span { display: none; }
+  .aboutGuide { line-height: 1.8; }
+  .aboutDeck { padding: 0 12px 24px; gap: 18px; }
+  .aboutSlide { aspect-ratio: auto; min-width: 0; }
+  .aboutSlideFooter { position: static; font-size: 10px; padding: 0 0 16px; }
+  .aboutSlideBody { padding: 18px; min-width: 0; }
+  .aboutSlide h1, .aboutSlide h2 { font-size: 25px; }
+
+  .aboutDiagramScroll { overflow-x: auto; padding-bottom: 10px; }
+  .aboutDiagram { min-width: 820px; }
+  .aboutNote, .aboutArchitectureCaption { font-size: 12px; margin-top: 14px; }
+}
+@page { size: 320mm 180mm; margin: 0; }
+@media print {
+  html, body { margin: 0 !important; padding: 0 !important; background: white !important; }
+  .aboutPage { background: white; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  .aboutToolbar, .aboutGuide { display: none; }
+  .aboutDeck { display: block; max-width: none; margin: 0; padding: 0; }
+  .aboutSlide { display: block; position: relative; width: 320mm; height: 179.8mm; aspect-ratio: auto; border: 0; box-shadow: none; break-inside: avoid; break-after: page; margin: 0; overflow: hidden; }
+  .aboutSlide:last-child { break-after: auto; }
+
+  .aboutSlideFooter { position: absolute; right: 0; bottom: 2.3%; }
+  .aboutSlideBody { padding-top: 3.2%; }
+}

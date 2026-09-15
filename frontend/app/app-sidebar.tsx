@@ -115,6 +115,9 @@ export default function AppSidebar({
         <a className="navLink" href="#audit">
           <span className="navIcon">≡</span>审计记录
         </a>
+        <Link className="navLink" href="/about">
+          <span className="navIcon">ⓘ</span>关于项目
+        </Link>
       </nav>
 
       <div className="sidebarFoot">

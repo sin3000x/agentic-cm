@@ -24,6 +24,7 @@ test("every route server-renders without throwing", async () => {
   for (const pathname of [
     "/",
     "/inbox",
+    "/about",
     "/cases/CM-2026-014",
     "/assets/skills",
     "/assets/policies",
@@ -41,6 +42,7 @@ test("the global Sidebar exposes overview, inbox, and organization assets", asyn
   for (const href of [
     '"/"',
     '"/inbox"',
+    '"/about"',
     '"/assets/skills"',
     '"/assets/policies"',
     '"/assets/knowledge"',
