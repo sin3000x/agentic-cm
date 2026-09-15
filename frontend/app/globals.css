@@ -686,27 +686,20 @@ button {
   align-items: center;
   gap: 10px;
 }
-.caseGlyph {
-  width: 30px;
-  height: 30px;
-  display: grid;
-  place-items: center;
+.homeIcon {
+  width: 18px;
+  height: 18px;
   flex: 0 0 auto;
-  border-radius: 8px;
-  font-size: var(--text-base);
+  vertical-align: middle;
 }
-.glyph-高 {
-  color: #ad5042;
-  background: #faeae7;
-}
-.glyph-中 {
-  color: #a46a1b;
-  background: #fbf0de;
-}
-.glyph-低 {
-  color: #2c796d;
-  background: #e4f2ef;
-}
+.metricIcon .homeIcon { width: 21px; height: 21px; }
+.phaseRing { width: 34px; height: 34px; flex: 0 0 auto; display: block; }
+.phaseRing svg { width: 100%; height: 100%; display: block; }
+.phaseRing text { fill: #386b64; font-size: 11px; font-weight: 650; }
+.phaseComplete { stroke: #69a99c; }
+.phaseCurrent { stroke: #126d60; }
+.phasePending { stroke: #e0e8e5; }
+.phaseCheck { fill: none; stroke: #287d6c; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .caseTitle > span:last-child,
 .ownerCell > span:last-child {
   display: flex;
@@ -954,8 +947,8 @@ button {
   font-weight: 750;
 }
 .activityAgent {
-  color: #23695f;
-  background: #def0ec;
+  background: transparent;
+  border-radius: 0;
 }
 .activityAgent img {
   width: 100%;

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import AppSidebar from "./app-sidebar";
 import { apiGet, isAbort } from "./lib/api";
-import { personAvatars, useDemoIdentity } from "./lib/identities";
+import { botAvatars, personAvatars, useDemoIdentity } from "./lib/identities";
 import { formatDay, formatDayTime } from "./lib/format";
 
 type CaseStatus = "处理中" | "暂缓" | "已关闭";
@@ -50,6 +50,40 @@ type ApiCase = {
 const filters = ["全部", "处理中", "暂缓", "已关闭"] as const;
 const stages = ["受理", "评审", "探索", "承诺", "决策"];
 
+function HomeIcon({ name }: { name: "search" | "bell" | "plus" | "active" | "attention" | "check" | "cases" | "right" | "left" | "arrow" }) {
+  const paths = {
+    search: "M21 21l-5-5M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0",
+    bell: "M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4",
+    plus: "M12 5v14M5 12h14",
+    active: "M20 12a8 8 0 1 1-8-8M12 8v4l3 2M16 4h4v4",
+    attention: "M12 8v5M12 17h.01M10.3 3.8 2.2 18a2 2 0 0 0 1.7 3h16.2a2 2 0 0 0 1.7-3L13.7 3.8a2 2 0 0 0-3.4 0",
+    check: "M8 12l3 3 5-6M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0",
+    cases: "M3 7V5a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7h18",
+    right: "m9 5 7 7-7 7",
+    left: "m15 5-7 7 7 7",
+    arrow: "M4 12h16m-6-6 6 6-6 6",
+  };
+  return <svg className="homeIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name]} /></svg>;
+}
+
+function PhaseRing({ value, label, closed }: { value: number; label: string; closed: boolean }) {
+  const description = closed ? "已关闭" : `当前阶段：${label}（${value}/${stages.length}）`;
+  return (
+    <span className="phaseRing" role="img" aria-label={description} title={description}>
+      <svg viewBox="0 0 36 36" aria-hidden="true">
+        {stages.map((stage, index) => (
+          <circle key={stage} cx="18" cy="18" r="14" pathLength="100"
+            fill="none" strokeWidth={index === value - 1 && !closed ? 3.5 : 2.5}
+            strokeDasharray="16 84" strokeLinecap="round"
+            transform={`rotate(${-86 + index * 72} 18 18)`}
+            className={closed || index < value - 1 ? "phaseComplete" : index === value - 1 ? "phaseCurrent" : "phasePending"} />
+        ))}
+        {closed ? <path className="phaseCheck" d="m12 18 4 4 8-8" /> : <text x="18" y="18" dy=".35em" textAnchor="middle">{value}</text>}
+      </svg>
+    </span>
+  );
+}
+
 function StatusPill({ status }: { status: CaseStatus }) {
   return <span className={`statusPill status-${status}`}>{status}</span>;
 }
@@ -84,7 +118,7 @@ function PersonAvatar({ name, fallback }: { name: string; fallback: string }) {
 function OrchestratorAvatar() {
   return (
     <span className="activityAgent">
-      <Image src="/avatars/bot-orchestrator.png" alt="" width={64} height={64} />
+      <Image src={botAvatars.orchestrator} alt="" width={64} height={64} />
     </span>
   );
 }
@@ -202,7 +236,7 @@ export default function Home() {
           </div>
           <div className="topActions">
             <label className="globalSearch">
-              <span>⌕</span>
+              <HomeIcon name="search" />
               <input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
@@ -212,10 +246,10 @@ export default function Home() {
               <kbd>⌘ K</kbd>
             </label>
             <button className="iconButton" type="button" aria-label="通知">
-              ◔<i />
+              <HomeIcon name="bell" /><i />
             </button>
             <button className="createButton" type="button">
-              <span>＋</span>新建 Case
+              <HomeIcon name="plus" />新建 Case
             </button>
           </div>
         </header>
@@ -236,7 +270,7 @@ export default function Home() {
           </section>
           <section className="metrics" aria-label="Case 指标">
             <article>
-              <div className="metricIcon metricTeal">◎</div>
+              <div className="metricIcon metricTeal"><HomeIcon name="active" /></div>
               <div>
                 <span>进行中 Case</span>
                 <strong>{openCount}</strong>
@@ -246,7 +280,7 @@ export default function Home() {
               </div>
             </article>
             <article>
-              <div className="metricIcon metricAmber">!</div>
+              <div className="metricIcon metricAmber"><HomeIcon name="attention" /></div>
               <div>
                 <span>需要关注</span>
                 <strong>{attentionCases.length}</strong>
@@ -254,7 +288,7 @@ export default function Home() {
               </div>
             </article>
             <article>
-              <div className="metricIcon metricBlue">✓</div>
+              <div className="metricIcon metricBlue"><HomeIcon name="check" /></div>
               <div>
                 <span>已闭环 Case</span>
                 <strong>{closedCount}</strong>
@@ -262,7 +296,7 @@ export default function Home() {
               </div>
             </article>
             <article>
-              <div className="metricIcon metricViolet">◇</div>
+              <div className="metricIcon metricViolet"><HomeIcon name="cases" /></div>
               <div>
                 <span>全部 Case</span>
                 <strong>{caseData.length}</strong>
@@ -278,7 +312,7 @@ export default function Home() {
                   <p>跨组织异常处置的当前状态</p>
                 </div>
                 <button type="button">
-                  查看全部 <span>→</span>
+                  查看全部 <HomeIcon name="arrow" />
                 </button>
               </div>
               {loadState === "error" && (
@@ -303,7 +337,7 @@ export default function Home() {
                   ))}
                 </div>
                 <label className="tableSearch">
-                  <span>⌕</span>
+                  <HomeIcon name="search" />
                   <input
                     value={search}
                     onChange={(event) => setSearch(event.target.value)}
@@ -332,7 +366,7 @@ export default function Home() {
                       const hasWorkspace = item.id === "CM-2026-014";
                       const title = (
                         <>
-                          <span className={`caseGlyph glyph-${item.risk}`}>◇</span>
+                          <PhaseRing value={item.phase} label={item.phaseLabel} closed={item.status === "已关闭"} />
                           <span>
                             <b>{item.title}</b>
                             <small>
@@ -390,7 +424,7 @@ export default function Home() {
                                 }}
                                 aria-label={`打开 ${item.title}`}
                               >
-                                ›
+                                <HomeIcon name="right" />
                               </a>
                             ) : (
                               <button
@@ -399,7 +433,7 @@ export default function Home() {
                                 onClick={() => setSelectedCase(item)}
                                 aria-label={`查看 ${item.title}`}
                               >
-                                ›
+                                <HomeIcon name="right" />
                               </button>
                             )}
                           </td>
@@ -410,7 +444,7 @@ export default function Home() {
                 </table>
                 {visibleCases.length === 0 && (
                   <div className="emptyState">
-                    <span>⌕</span>
+                    <HomeIcon name="search" />
                     <strong>
                       {loadState === "loading" ? "正在同步 Case 状态" : "没有匹配的 Case"}
                     </strong>
@@ -428,13 +462,13 @@ export default function Home() {
                 </span>
                 <div>
                   <button type="button" disabled>
-                    ‹
+                    <HomeIcon name="left" />
                   </button>
                   <button type="button" className="active">
                     1
                   </button>
                   <button type="button" disabled>
-                    ›
+                    <HomeIcon name="right" />
                   </button>
                 </div>
               </div>
@@ -485,7 +519,7 @@ export default function Home() {
                     </div>
                   </li>
                   <li>
-                    <span className="activityDone">✓</span>
+                    <span className="activityDone"><HomeIcon name="check" /></span>
                     <div>
                       <p>
                         <b>CM-2026-006</b> 已完成验证

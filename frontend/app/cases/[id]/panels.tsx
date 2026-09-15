@@ -33,7 +33,7 @@ export function PersonIcon({
 export function BotIcon({ kind, className }: { kind: keyof typeof botAvatars; className: string }) {
   return (
     <span className={className}>
-      <Image src={botAvatars[kind].replace(".png", "-transparent.png")} alt="" width={80} height={80} />
+      <Image src={botAvatars[kind]} alt="" width={80} height={80} />
     </span>
   );
 }

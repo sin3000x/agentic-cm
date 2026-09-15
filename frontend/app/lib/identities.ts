@@ -41,9 +41,9 @@ export const personAvatars: Record<string, string> = Object.fromEntries(
 );
 
 export const botAvatars = {
-  orchestrator: "/avatars/bot-orchestrator.png",
-  path: "/avatars/bot-path.png",
-  synthesis: "/avatars/bot-synthesis.png",
+  orchestrator: "/avatars/bot-orchestrator-transparent.png",
+  path: "/avatars/bot-path-transparent.png",
+  synthesis: "/avatars/bot-synthesis-transparent.png",
 } as const;
 
 export function resolveDemoIdentity(name: string | null | undefined): SidebarIdentity {
