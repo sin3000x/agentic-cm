@@ -928,8 +928,7 @@ export default function Home() {
                     <em>{revision.generated_by}</em>
                   </div>
                   <div className="solutionRecommendation">
-                    <strong>Agent 建议（非业务决定）</strong>
-                    <p>{revision.recommendation}</p>
+                      <p>{revision.recommendation}</p>
                   </div>
                   {runs.length > 0 && (
                     <>
@@ -1808,7 +1807,6 @@ export default function Home() {
           >
             <header>
               <div>
-                <small>ROLE-SCOPED EVIDENCE · {approvalReview.node.id}</small>
                 <h2>{approvalReview.node.role}审批依据</h2>
                 <p>
                   {approvalReview.caseId} · {approvalReview.pathTitle}
@@ -1820,28 +1818,23 @@ export default function Home() {
             </header>
             <div className="approvalReviewBody">
               <section className="approvalScope">
-                <small>本次责任边界</small>
+                <small>审批事项</small>
                 <strong>{commitmentCopy[approvalReview.node.id] ?? "确认本节点专业判断"}</strong>
-                <p>你只批准本节点对应的专业判断，不代表其他角色，也不执行任何业务动作。</p>
               </section>
               <section className="evidenceSection roleEvidence">
-                <small>你的专业判断与证据摘要</small>
-                <h3>{approvalReview.context.role_report?.dimension ?? "对应角色报告尚未生成"}</h3>
+                <small>审批依据</small>
+                <h3>{approvalReview.context.role_report?.dimension ?? "暂无审批依据"}</h3>
                 <p>
                   {approvalReview.context.role_report?.report ??
-                    "当前没有可供本角色审查的报告，请选择“修改”要求补充。"}
+                    "暂无报告，请选择“修改”要求补充。"}
                 </p>
               </section>
-              <section className="evidenceSection">
-                <small>推荐方案 · REVISION {approvalReview.context.revision ?? "—"}</small>
+              <details className="evidenceSection">
+                <summary>查看 Agent 推荐方案</summary>
                 <div className="evidenceRecommendation">
-                  <strong>Agent 建议（非业务决定）</strong>
                   <p>{approvalReview.context.recommendation || "暂无推荐方案。"}</p>
                 </div>
-              </section>
-              <p className="roleEvidenceBoundary">
-                其他角色的判断与证据在其责任节点审批时展示，不在本报告中展开。
-              </p>
+              </details>
             </div>
             <footer>
               <span>

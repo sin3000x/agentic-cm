@@ -209,7 +209,6 @@ export default function InboxPage() {
           >
             <header>
               <div>
-                <small>ROLE-SCOPED EVIDENCE · {reviewItem.node.id}</small>
                 <h2>{reviewItem.node.role}审批依据</h2>
                 <p>
                   {reviewItem.case_id} · {reviewItem.path_title}
@@ -221,29 +220,27 @@ export default function InboxPage() {
             </header>
             <div className="inboxReviewBody">
               <section>
-                <small>本次责任边界</small>
+                <small>审批事项</small>
                 <strong>
                   {commitmentCopy[reviewItem.node.id] ?? reviewItem.node.review_dimension}
                 </strong>
-                <p>你只批准本节点对应的专业判断，不代表其他角色，也不执行任何业务动作。</p>
               </section>
               <section className="roleEvidence">
-                <small>你的专业判断与证据摘要</small>
+                <small>审批依据</small>
                 <strong>
-                  {reviewItem.approval_context.role_report?.dimension ?? "对应角色报告尚未生成"}
+                  {reviewItem.approval_context.role_report?.dimension ?? "暂无审批依据"}
                 </strong>
                 <p>
                   {reviewItem.approval_context.role_report?.report ??
-                    "当前没有可供本角色审查的报告，请选择“修改”要求补充。"}
+                    "暂无报告，请选择“修改”要求补充。"}
                 </p>
               </section>
-              <section>
-                <small>推荐方案 · REVISION {reviewItem.approval_context.revision ?? "—"}</small>
+              <details>
+                <summary>查看 Agent 推荐方案</summary>
                 <div className="inboxRecommendation">
-                  <strong>Agent 建议（非业务决定）</strong>
                   <p>{reviewItem.approval_context.recommendation || "暂无推荐方案。"}</p>
                 </div>
-              </section>
+              </details>
             </div>
             <footer>
               <span>
