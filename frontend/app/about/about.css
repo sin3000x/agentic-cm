@@ -55,3 +55,13 @@
   .aboutSlideFooter { position: absolute; right: 0; bottom: 2.3%; }
   .aboutSlideBody { padding-top: 3.2%; }
 }
+
+.aboutNoteEmphasis { color: #71501d; background: #f5ecd6; border-left: .35cqw solid #b58a3d; border-radius: .35cqw; padding: .7cqw 1cqw; font-size: 1.15cqw; font-weight: 600; }
+.agentBox.agent-orchestrator rect { fill: #136570; stroke: #136570; }
+.agentBox.agent-path rect { fill: #28549a; stroke: #28549a; }
+.agentBox.agent-synthesis rect { fill: #6b4894; stroke: #6b4894; }
+.agentBox .boxTitle { fill: #fff; }
+.agentBox .boxSub { fill: #f0f4fa; }
+@media screen and (max-width: 700px) {
+  .aboutNoteEmphasis { font-size: 13px; padding: 12px; border-left-width: 4px; border-radius: 4px; }
+}
