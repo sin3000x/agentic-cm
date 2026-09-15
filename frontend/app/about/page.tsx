@@ -112,7 +112,7 @@ export default function AboutPage() {
         <Diagram label="三条 Path 并行探索审批后汇总，由 Case Owner 决策；关闭 Case 后回到最初的供应链事件，完成处置闭环" height={495} inset={24}>
           <Text x={109} y={24}>01 · 规划范围</Text>
           <Text x={528} y={24}>02 · 并行探索与审批</Text>
-          <Text x={955} y={24}>03 · 汇总决策</Text>
+          <Text x={982} y={24}>03 · 汇总决策</Text>
           <path d="M244 55V455M818 55V455" stroke="#dbe4dc" strokeWidth="1"/>
 
           <Box x={14} y={79} w={190} h={60} title="供应链事件" icon="event"/>
@@ -132,15 +132,15 @@ export default function AboutPage() {
             <Text x={556} y={y+76} small>打回修改</Text>
           </g>)}
           <Line d="M764 110H780Q790 110 790 120V372Q790 382 780 382H764M764 246H790" arrow="none"/>
-          <Line d="M790 246H824Q834 246 834 236V202Q834 192 844 192H851"/>
+          <Line d="M790 246H848Q858 246 858 236V202Q858 192 868 192H875"/>
           <circle cx="272" cy="246" r="3.5" fill="#648b7d"/><circle cx="790" cy="246" r="3.5" fill="#648b7d"/>
-          <Text x={958} y={137} small>所有 Path 审批通过</Text>
-          <AgentBox x={853} y={160} w={210} h={64} title="总结 Agent" agent="synthesis"/>
-          <Line d="M958 224V288"/><Text x={976} y={263} anchor="start" small>综合建议</Text>
-          <Box x={863} y={290} w={190} h={60} title="Case Owner" tone="gold" icon="owner"/>
-          <Line d="M730 414V432Q730 442 740 442H948Q958 442 958 432V352" gold/>
-          <Text x={897} y={429} small>审批超期升级</Text>
-          <Line d="M1053 320H1084Q1096 320 1096 332V468Q1096 480 1084 480H-4Q-16 480-16 468V121Q-16 109-4 109H12"/>
+          <Text x={982} y={137} small>所有 Path 审批通过</Text>
+          <AgentBox x={877} y={160} w={210} h={64} title="总结 Agent" agent="synthesis"/>
+          <Line d="M982 224V268"/><Text x={1000} y={253} anchor="start" small>综合建议</Text>
+          <Box x={887} y={270} w={190} h={60} title="Case Owner" tone="gold" icon="owner"/>
+          <Line d="M790 246H848Q858 246 858 256V290Q858 300 868 300H885" gold dashed/>
+          <text x="824" y="282" textAnchor="middle" fontSize="13" fill="#8b642a"><tspan x="824">审批超期</tspan></text>
+          <Line d="M982 330V468Q982 480 970 480H-4Q-16 480-16 468V121Q-16 109-4 109H12"/>
           <Text x={540} y={510}>关闭 Case · 事件闭环</Text>
         </Diagram>
       </Slide>
