@@ -1224,8 +1224,8 @@ button {
   .metrics article:nth-child(4) {
     border-top: 1px solid var(--line);
   }
-  .caseTable th:nth-child(6),
-  .caseTable td:nth-child(6) {
+  .caseTable th:nth-child(5),
+  .caseTable td:nth-child(5) {
     display: none;
   }
 }
@@ -1303,10 +1303,8 @@ button {
   }
   .caseTable th:nth-child(3),
   .caseTable td:nth-child(3),
-  .caseTable th:nth-child(4),
-  .caseTable td:nth-child(4),
-  .caseTable th:nth-child(6),
-  .caseTable td:nth-child(6) {
+  .caseTable th:nth-child(5),
+  .caseTable td:nth-child(5) {
     display: none;
   }
   .caseTable th:first-child,
@@ -1338,8 +1336,8 @@ button {
   .metricIcon {
     display: none;
   }
-  .caseTable th:nth-child(5),
-  .caseTable td:nth-child(5) {
+  .caseTable th:nth-child(4),
+  .caseTable td:nth-child(4) {
     display: none;
   }
   .caseTitle {

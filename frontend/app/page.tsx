@@ -352,7 +352,6 @@ export default function Home() {
                     <tr>
                       <th>CASE</th>
                       <th>状态 / 风险</th>
-                      <th>当前阶段</th>
                       <th>负责人</th>
                       <th>承诺期限</th>
                       <th>最近更新</th>
@@ -370,7 +369,7 @@ export default function Home() {
                           <span>
                             <b>{item.title}</b>
                             <small>
-                              {item.id} · {item.customer}
+                              {item.id} · {item.status === "已关闭" ? "已关闭" : item.phaseLabel}
                             </small>
                           </span>
                         </>
@@ -393,9 +392,6 @@ export default function Home() {
                           <td>
                             <StatusPill status={item.status} />
                             <RiskMark risk={item.risk} />
-                          </td>
-                          <td>
-                            <StageProgress value={item.phase} label={item.phaseLabel} />
                           </td>
                           <td>
                             <div className="ownerCell">
