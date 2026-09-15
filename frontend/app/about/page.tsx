@@ -18,11 +18,11 @@ function Slide({ number, title, children, note }: { number: number; title: strin
   </section>;
 }
 
-function Diagram({ label, children, height = 360 }: { label: string; children: ReactNode; height?: number }) {
+function Diagram({ label, children, height = 360, inset = 0 }: { label: string; children: ReactNode; height?: number; inset?: number }) {
   const id = useId().replace(/:/g, "");
   // A scrollable diagram needs keyboard focus so arrow keys can pan it on narrow screens.
   // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
-  return <div className="aboutDiagramScroll" tabIndex={0} role="region" aria-label={label}><svg className="aboutDiagram" viewBox={`0 0 1080 ${height}`} role="img" aria-labelledby={id}><title id={id}>{label}</title>{children}</svg></div>;
+  return <div className="aboutDiagramScroll" tabIndex={0} role="region" aria-label={label}><svg className="aboutDiagram" viewBox={`${-inset} 0 ${1080 + inset * 2} ${height}`} role="img" aria-labelledby={id}><title id={id}>{label}</title>{children}</svg></div>;
 }
 function NodeIcon({ name, x, y }: { name: "event" | "people" | "owner"; x: number; y: number }) {
   const paths = {
@@ -51,7 +51,7 @@ function Line({ d, dashed = false, gold = false, arrow = "end" }: { d: string; d
   const color = gold ? "#a57730" : "#648b7d";
   return <g><defs><marker id={id} markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto-start-reverse"><path d="M0 0 9 4.5 0 9Z" fill={color}/></marker></defs><path d={d} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" strokeDasharray={dashed ? "6 5" : undefined} markerStart={arrow === "both" ? `url(#${id})` : undefined} markerEnd={arrow !== "none" ? `url(#${id})` : undefined}/></g>;
 }
-function Text({ x, y, children, small = false, anchor = "middle" }: { x: number; y: number; children: ReactNode; small?: boolean; anchor?: "start" | "middle" }) {
+function Text({ x, y, children, small = false, anchor = "middle" }: { x: number; y: number; children: ReactNode; small?: boolean; anchor?: "start" | "middle" | "end" }) {
   return <text x={x} y={y} textAnchor={anchor} className={small ? "diagramSmall" : "diagramText"}>{children}</text>;
 }
 
@@ -109,7 +109,7 @@ export default function AboutPage() {
         </Diagram>
       </Slide>
       <Slide number={4} title="三类 Agent：规划、推演、汇总">
-        <Diagram label="规划后启动提拉、替代及更多 Path；三条示意路径各自审批、支持打回，并共同汇入总结 Agent" height={495}>
+        <Diagram label="三条 Path 并行探索审批后汇总，由 Case Owner 决策；关闭 Case 后回到最初的供应链事件，完成处置闭环" height={495} inset={24}>
           <Text x={109} y={24}>01 · 规划范围</Text>
           <Text x={528} y={24}>02 · 并行探索与审批</Text>
           <Text x={955} y={24}>03 · 汇总决策</Text>
@@ -118,27 +118,30 @@ export default function AboutPage() {
           <Box x={14} y={79} w={190} h={60} title="供应链事件" icon="event"/>
           <Line d="M109 139V202"/>
           <AgentBox x={0} y={204} w={218} h={66} title="Orchestrator" agent="orchestrator"/>
-          <Line d="M109 270V339"/><Text x={126} y={310} anchor="start" small>探索清单</Text>
-          <Box x={14} y={341} w={190} h={60} title="Case Owner" tone="gold" icon="owner"/>
-          <Text x={109} y={437} small>微调路径 · 启动探索</Text>
-          <Line d="M204 371H272M272 110V382" arrow="none"/><circle cx="272" cy="371" r="3" fill="#648b7d"/>
+          <Line d="M119 270C135 292 135 328 119 350"/><Text x={145} y={316} anchor="start" small>探索清单</Text>
+          <Line d="M99 352C83 330 83 294 99 272" gold/><Text x={73} y={316} anchor="end" small>打回修改</Text>
+          <Box x={14} y={352} w={190} h={60} title="Case Owner" tone="gold" icon="owner"/>
+          <Line d="M204 382H226Q236 382 236 372V256Q236 246 246 246H272M272 120V372" arrow="none"/>
 
           {[78, 214, 350].map((y, index) => <g key={y}>
-            <Line d={`M272 ${y+32}H304`}/>
+            <Line d={index === 0 ? "M272 120Q272 110 282 110H304" : index === 2 ? "M272 372Q272 382 282 382H304" : "M272 246H304"}/>
             <AgentBox x={306} y={y} w={210} h={64} title={index === 0 ? "Path Agent 1" : index === 1 ? "Path Agent 2" : "Path Agent N"} agent="path"/>
-            <Text x={555} y={y+17} small>建议方案</Text><Line d={`M516 ${y+32}H594`}/>
+            <Text x={556} y={y+3} small>建议方案</Text><Line d={`M516 ${y+22}C538 ${y+6} 572 ${y+6} 594 ${y+22}`}/>
             <Box x={596} y={y} w={168} h={64} title="角色审批" tone="gold" icon="people"/>
-            <Line d={`M680 ${y+64}V${y+94}Q680 ${y+106} 668 ${y+106}H423Q411 ${y+106} 411 ${y+94}V${y+66}`} gold/>
-            <Text x={546} y={y+96} small>打回修改</Text>
+            <Line d={`M596 ${y+42}C574 ${y+58} 540 ${y+58} 518 ${y+42}`} gold/>
+            <Text x={556} y={y+76} small>打回修改</Text>
           </g>)}
-          <Line d="M764 110H778Q790 110 790 122V370Q790 382 778 382H764M764 246H790" arrow="none"/>
-          <circle cx="790" cy="192" r="3" fill="#648b7d"/><Line d="M790 192H851"/>
+          <Line d="M764 110H780Q790 110 790 120V372Q790 382 780 382H764M764 246H790" arrow="none"/>
+          <Line d="M790 246H824Q834 246 834 236V202Q834 192 844 192H851"/>
+          <circle cx="272" cy="246" r="3.5" fill="#648b7d"/><circle cx="790" cy="246" r="3.5" fill="#648b7d"/>
           <Text x={958} y={137} small>所有 Path 审批通过</Text>
           <AgentBox x={853} y={160} w={210} h={64} title="总结 Agent" agent="synthesis"/>
           <Line d="M958 224V288"/><Text x={976} y={263} anchor="start" small>综合建议</Text>
           <Box x={863} y={290} w={190} h={60} title="Case Owner" tone="gold" icon="owner"/>
-          <Line d="M764 398H795Q807 398 807 410V430Q807 442 819 442H946Q958 442 958 430V352" gold/>
+          <Line d="M730 414V432Q730 442 740 442H948Q958 442 958 432V352" gold/>
           <Text x={897} y={429} small>审批超期升级</Text>
+          <Line d="M1053 320H1084Q1096 320 1096 332V468Q1096 480 1084 480H-4Q-16 480-16 468V121Q-16 109-4 109H12"/>
+          <Text x={540} y={510}>关闭 Case · 事件闭环</Text>
         </Diagram>
       </Slide>
       <Slide number={5} title="三类资产：能力、规则、经验" note="演进方式：角色意见与经验经人工整理后纳入 Knowledge，供后续 Case 参考；当前不做自动学习或自动回写。">
