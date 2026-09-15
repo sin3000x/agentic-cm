@@ -61,7 +61,7 @@ export default function AboutPage() {
     <div className="aboutGuide"><span>导出时选择「另存为 PDF」，关闭页眉和页脚</span><nav aria-label="About 章节">{chapters.map((chapter, index) => <a key={chapter} href={`#slide-${index + 1}`}>{String(index + 1).padStart(2, "0")} {chapter}</a>)}</nav></div>
     <main className="aboutDeck">
       <Slide number={1} title="业务流程 vs 事件驱动">
-        <Diagram label="业务流程按确定节点流转，Case 管理围绕目标探索未知路径；供应链事件以 Case 组织探索，以 Policy 固化审批" height={465}>
+        <Diagram label="业务流程按确定节点流转，Case 管理围绕目标探索未知路径；关闭 Case 需要主计划、研发、订单经理等多角色沟通、确认方案与承诺，再由 Case Owner 决策闭环" height={465}>
           <rect className="diagramPanel" x="0" y="0" width="510" height="310" rx="14"/><rect className="diagramPanel" x="540" y="0" width="540" height="310" rx="14"/>
           <Text x={255} y={45}>Business Process · 确定性流转</Text>
           <Box x={24} y={128} w={126} h={80} title="节点 A" sub="接收订单"/><Box x={192} y={128} w={126} h={80} title="节点 B" sub="核验条件"/><Box x={360} y={128} w={126} h={80} title="节点 C" sub="批准执行"/>
@@ -72,10 +72,10 @@ export default function AboutPage() {
           <Line d="M678 151C710 151 706 94 740 94" dashed/><Line d="M678 168H740" dashed/><Line d="M678 185C710 185 706 242 740 242" dashed/>
           <Box x={748} y={69} w={118} h={50} title="路径 A ?"/><Box x={748} y={143} w={118} h={50} title="路径 B ?"/><Box x={748} y={217} w={118} h={50} title="新路径 ?"/>
           <Line d="M872 94C898 94 889 151 933 151" dashed/><Line d="M872 168H933" dashed/><Line d="M872 242C898 242 889 185 933 185" dashed/>
-          <Text x={810} y={289} small>目标明确，路径随事实与判断展开</Text>
+          <Text x={810} y={289} small>目标明确，路径需多角色沟通与共同判断</Text>
           <Line d="M255 316V329Q255 339 265 339H800Q810 339 810 329V316" arrow="none"/>
           <Line d="M540 339V361"/>
-          <Box x={0} y={371} w={1080} h={90} title="供应链事件 → Case 组织探索 + Policy 固化审批" sub="订单延期 · 提拉 / 替代 / 拆分等路径探索 · 按规则由责任人确认" tone="green"/>
+          <Box x={0} y={371} w={1080} h={90} title="关闭 Case：多角色沟通 → 方案与承诺确认 → Case Owner 决策闭环" tone="green"/>
         </Diagram>
       </Slide>
       <Slide number={2} title="按人拆 vs 按路径拆">
@@ -134,7 +134,7 @@ export default function AboutPage() {
           <Line d="M764 110H780Q790 110 790 120V372Q790 382 780 382H764M764 246H790" arrow="none"/>
           <Line d="M790 246H848Q858 246 858 236V202Q858 192 868 192H875"/>
           <circle cx="272" cy="246" r="3.5" fill="#648b7d"/><circle cx="790" cy="246" r="3.5" fill="#648b7d"/>
-          <Text x={982} y={137} small>所有 Path 审批通过</Text>
+          <text x={824} y={223} textAnchor="middle" fontSize={13}>探索完毕</text>
           <AgentBox x={877} y={160} w={210} h={64} title="总结 Agent" agent="synthesis"/>
           <Line d="M982 224V268"/><Text x={1000} y={253} anchor="start" small>综合建议</Text>
           <Box x={887} y={270} w={190} h={60} title="Case Owner" tone="gold" icon="owner"/>
@@ -152,7 +152,7 @@ export default function AboutPage() {
           <Box x={395} y={86} w={290} h={70} title="Case 类型 + Path"/><Line d="M540 165V194"/><Box x={395} y={204} w={290} h={70} title="确定性匹配 → 审批责任" tone="gold"/>
           <Box x={765} y={86} w={290} h={70} title="角色意见 + 既往经验"/><Line d="M910 165V194"/><Box x={765} y={204} w={290} h={70} title="供 Agent 参考与判断" tone="green"/>
           <Text x={540} y={339}>触发不依赖 LLM</Text>
-          <Box x={0} y={377} w={248} h={67} title="本次 Case 意见与经验"/><Line d="M256 410H282"/><Box x={292} y={377} w={220} h={67} title="人工整理与沉淀"/><Line d="M520 410H546"/><Box x={556} y={377} w={220} h={67} title="Knowledge"/><Line d="M784 410H810"/><Box x={820} y={377} w={260} h={67} title="下一次 Case 的分析" tone="green"/>
+          <Box x={0} y={377} w={248} h={67} title="本次 Case 意见与经验"/><Line d="M256 410H282"/><Box x={292} y={377} w={220} h={67} title="沉淀与人工确认"/><Line d="M520 410H546"/><Box x={556} y={377} w={220} h={67} title="Knowledge"/><Line d="M784 410H810"/><Box x={820} y={377} w={260} h={67} title="下一次 Case 的分析" tone="green"/>
         </Diagram>
       </Slide>
       <Slide number={6} title="四层架构">
@@ -164,7 +164,6 @@ export default function AboutPage() {
             { y: 357, label: "数据与基础设施", sub: "存储与运行", tone: "plain" as const, items: [["SQLite", "Case JSON · Events · Traces"], ["版本化目录文件", "能力资产 · Path 目录"], ["Agent Runtime / Adapter", "模型调用 · 重试 · 只读工具"]] },
           ].map(({y,label,sub,tone,items}) => <g key={label}><rect className="diagramPanel" x="0" y={y} width="1080" height="96" rx="12"/><Text x={122} y={y+40}>{label}</Text><Text x={122} y={y+68} small>{sub}</Text>{items.map(([title,desc],i) => <Box key={title} x={260+i*(800/items.length)} y={y+11} w={800/items.length-12} h={74} title={title} sub={desc} tone={tone}/>)}{y<357 && <Line d={`M661 ${y+101}V${y+113}`}/>}</g>)}
         </Diagram>
-        <p className="aboutArchitectureCaption">逻辑分层对应当前模块，后端在同一 Python 进程内运行</p>
       </Slide>
     </main>
   </div>;
