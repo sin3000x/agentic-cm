@@ -946,7 +946,7 @@ export default function Home() {
                           : `查看 ${path.title} Trace (${runs.length}) →`}
                       </button>
                       {expandedPathTraces[path.id] && (
-                        <AgentTracePanel runs={runs} agentType="path" />
+                        <AgentTracePanel runs={runs} agentType="path" paths={manifestPaths} />
                       )}
                     </>
                   )}
@@ -1652,6 +1652,7 @@ export default function Home() {
                         {latestFailedPathRuns.length > 0 && (
                           <AgentTracePanel
                             runs={latestFailedPathRuns}
+                            paths={manifestPaths}
                             agentType="path"
                             autoExpand
                           />

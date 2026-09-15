@@ -91,7 +91,7 @@
   color: #245b55;
 }
 .botAvatar {
-  background: #0a776d;
+  background: transparent;
   color: #fff;
   letter-spacing: 0.04em;
 }
@@ -189,7 +189,12 @@
   font-weight: 800;
 }
 .eventIcon.botEvent {
-  background: #376a73;
+  background: transparent;
+}
+.threadAvatar.botAvatar,
+.eventIcon.botEvent {
+  border-color: transparent;
+  border-radius: 0;
 }
 .eventIcon.humanEvent {
   background: #dbeae6;

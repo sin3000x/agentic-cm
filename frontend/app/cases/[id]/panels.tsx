@@ -33,7 +33,7 @@ export function PersonIcon({
 export function BotIcon({ kind, className }: { kind: keyof typeof botAvatars; className: string }) {
   return (
     <span className={className}>
-      <Image src={botAvatars[kind]} alt="" width={80} height={80} />
+      <Image src={botAvatars[kind].replace(".png", "-transparent.png")} alt="" width={80} height={80} />
     </span>
   );
 }
@@ -173,7 +173,7 @@ export function AiWorkingCard({
             </span>
             <em>每 600ms 刷新</em>
           </header>
-          <AgentTracePanel runs={runs} agentType={agentType} autoExpand embedded />
+          <AgentTracePanel runs={runs} agentType={agentType} paths={paths} autoExpand embedded />
         </section>
       </div>
     </section>
@@ -341,11 +341,13 @@ function TraceActivity({ start, end, running }: {
 export function AgentTracePanel({
   runs,
   agentType,
+  paths = [],
   autoExpand = false,
   embedded = false,
 }: {
   runs: AgentRun[];
   agentType: "orchestrator" | "path" | "synthesis";
+  paths?: ManifestPath[];
   autoExpand?: boolean;
   embedded?: boolean;
 }) {
@@ -375,42 +377,49 @@ export function AgentTracePanel({
         <p className="emptyTrace">尚无 {label} 运行记录。</p>
       ) : (
         <div className="traceRuns">
-          {typedRuns.map((run) => (
-            <details
-              className={`traceRun ${run.status.toLowerCase()}`}
-              open={autoExpand && (run.status === "RUNNING" || run.status === "FAILED")}
-              key={run.id}
-            >
-              <summary>
-                <span className="traceRunIdentity">
-                  <i aria-hidden="true" />
-                  <span>
-                    <strong>{run.adapter_profile}</strong>
-                    <small>
-                      {formatThreadTime(run.started_at)} · {run.id.slice(0, 8)}
-                    </small>
+          {typedRuns.map((run) => {
+            const pathId = pathIdForRun(run);
+            const pathTitle = agentType === "path"
+              ? paths.find((path) => path.id === pathId)?.title ?? pathId ?? "未关联 Path"
+              : null;
+            return (
+              <details
+                className={`traceRun ${run.status.toLowerCase()}`}
+                open={autoExpand && (run.status === "RUNNING" || run.status === "FAILED")}
+                key={run.id}
+              >
+                <summary>
+                  <span className="traceRunIdentity">
+                    <i aria-hidden="true" />
+                    <span>
+                      <strong title={pathTitle ?? run.adapter_profile}>{pathTitle ?? run.adapter_profile}</strong>
+                      {pathTitle && <small>{run.adapter_profile}</small>}
+                      <small>
+                        {formatThreadTime(run.started_at)} · {run.id.slice(0, 8)}
+                      </small>
+                    </span>
                   </span>
-                </span>
-                <span className="traceRunMeta">
-                  <b>{statusLabel[run.status]}</b>
-                  <small>{run.events.filter((event) => event.step === "deepagent.tool.started").length} 次工具调用 · {run.events.length} 条记录</small>
-                </span>
-              </summary>
-              <div className="traceRunBody">
-                <div className="traceRunOverview"><span>执行活动</span><span>{traceDuration(run.started_at, run.completed_at) ?? (run.status === "RUNNING" ? "实时更新" : "耗时未知")}</span></div>
-                {run.error_message && (
-                  <p className="traceError">
-                    {run.error_type}: {run.error_message}
-                  </p>
-                )}
-                <ol className="traceSteps">
-                  {traceActivities(run.events).map(({ start, end }) => (
-                    <TraceActivity key={start.id} start={start} end={end} running={run.status === "RUNNING"} />
-                  ))}
-                </ol>
-              </div>
-            </details>
-          ))}
+                  <span className="traceRunMeta">
+                    <b>{statusLabel[run.status]}</b>
+                    <small>{run.events.filter((event) => event.step === "deepagent.tool.started").length} 次工具调用 · {run.events.length} 条记录</small>
+                  </span>
+                </summary>
+                <div className="traceRunBody">
+                  <div className="traceRunOverview"><span>执行活动</span><span>{traceDuration(run.started_at, run.completed_at) ?? (run.status === "RUNNING" ? "实时更新" : "耗时未知")}</span></div>
+                  {run.error_message && (
+                    <p className="traceError">
+                      {run.error_type}: {run.error_message}
+                    </p>
+                  )}
+                  <ol className="traceSteps">
+                    {traceActivities(run.events).map(({ start, end }) => (
+                      <TraceActivity key={start.id} start={start} end={end} running={run.status === "RUNNING"} />
+                    ))}
+                  </ol>
+                </div>
+              </details>
+            );
+          })}
         </div>
       )}
     </section>
