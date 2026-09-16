@@ -79,17 +79,22 @@ export default function AboutPage() {
         </Diagram>
       </Slide>
       <Slide number={2} title="按人拆 vs 按路径拆">
-        <Diagram label="角色数字分身仍在主计划、研发和订单经理之间交接；按提拉、替代等问题组织 Agent，可以跨学科整合求解" height={465}>
+        <Diagram label="角色数字分身以订单经理为中心，与主计划、研发、供应经理和物流构成协作网络，仍需沟通交接确认；按提拉、替代等问题组织 Agent，可以跨学科整合求解" height={465}>
           <rect className="diagramPanel" x="0" y="0" width="520" height="399" rx="14"/><rect className="diagramPanel" x="560" y="0" width="520" height="399" rx="14"/>
           <Text x={260} y={45}>按角色复制数字分身</Text><Text x={820} y={45}>按问题组织求解 Agent</Text>
-          <Box x={176} y={90} w={168} h={78} title="主计划 Agent"/><Box x={24} y={263} w={166} h={78} title="研发 Agent"/><Box x={326} y={263} w={170} h={78} title="订单经理 Agent"/>
-          <Line d="M189 176L117 254" arrow="both"/><Line d="M332 176L404 254" arrow="both"/><Line d="M199 302H317" arrow="both"/>
-          <Text x={260} y={227} small>沟通 · 交接 · 确认</Text><Text x={260} y={376} small>角色边界保留，信息交接次数没有减少</Text>
+          <Line d="M198 111H322" arrow="both" dashed/><Line d="M198 303H322" arrow="both" dashed/>
+          <Line d="M107 148V266" arrow="both" dashed/><Line d="M413 148V266" arrow="both" dashed/>
+          <Line d="M150 148L207 168" arrow="both"/><Line d="M370 148L313 168" arrow="both"/>
+          <Line d="M150 266L207 246" arrow="both"/><Line d="M370 266L313 246" arrow="both"/>
+          <Box x={24} y={80} w={166} h={62} title="主计划 Agent"/><Box x={330} y={80} w={166} h={62} title="供应经理 Agent"/>
+          <Box x={165} y={176} w={190} h={62} title="订单经理 Agent" tone="green"/>
+          <Box x={24} y={272} w={166} h={62} title="研发 Agent"/><Box x={330} y={272} w={166} h={62} title="物流 Agent"/>
+          <Text x={260} y={358} small>沟通 · 交接 · 确认</Text><Text x={260} y={382} small>角色边界保留，信息交接次数没有减少</Text>
           <Box x={704} y={90} w={232} h={78} title="订单缺料 Case" tone="green"/>
           <Line d="M820 176V215M650 241V225Q650 215 660 215H980Q990 215 990 225V241" arrow="none"/>
           <Line d="M650 231V253"/><Line d="M820 215V253"/><Line d="M990 231V253"/>
           <Box x={576} y={263} w={148} h={78} title="提拉 Agent"/><Box x={746} y={263} w={148} h={78} title="替代 Agent"/><Box x={916} y={263} w={148} h={78} title="拆分 Agent"/>
-          <Text x={820} y={376} small>整合计划、研发、订单等跨学科能力</Text>
+          <Text x={820} y={376} small>整合计划、研发、订单、供应、物流能力</Text>
           <Text x={540} y={451}>协作的基本单元，从角色交接 → 路径求解</Text>
         </Diagram>
       </Slide>
