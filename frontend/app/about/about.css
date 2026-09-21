@@ -30,18 +30,18 @@
 .diagramText { fill: #24533f; font-size: 20px; font-weight: 600; }
 .diagramSmall { fill: #647a69; font-size: 15px; }
 @media screen and (max-width: 700px) {
-  .aboutToolbar { flex-wrap: wrap; padding: 16px; }
-  .aboutToolbar > span { display: none; }
-  .aboutGuide { line-height: 1.8; }
-  .aboutDeck { padding: 0 12px 24px; gap: 18px; }
-  .aboutSlide { aspect-ratio: auto; min-width: 0; }
-  .aboutSlideFooter { position: static; font-size: 10px; padding: 0 0 16px; }
-  .aboutSlideBody { padding: 18px; min-width: 0; }
-  .aboutSlide h1, .aboutSlide h2 { font-size: 25px; }
+  .aboutPage:not(.aboutPresenting) .aboutToolbar { flex-wrap: wrap; padding: 16px; }
+  .aboutPage:not(.aboutPresenting) .aboutToolbar > span { display: none; }
+  .aboutPage:not(.aboutPresenting) .aboutGuide { line-height: 1.8; }
+  .aboutPage:not(.aboutPresenting) .aboutDeck { padding: 0 12px 24px; gap: 18px; }
+  .aboutPage:not(.aboutPresenting) .aboutSlide { aspect-ratio: auto; min-width: 0; }
+  .aboutPage:not(.aboutPresenting) .aboutSlideFooter { position: static; font-size: 10px; padding: 0 0 16px; }
+  .aboutPage:not(.aboutPresenting) .aboutSlideBody { padding: 18px; min-width: 0; }
+  .aboutPage:not(.aboutPresenting) .aboutSlide h1, .aboutPage:not(.aboutPresenting) .aboutSlide h2 { font-size: 25px; }
 
-  .aboutDiagramScroll { overflow-x: auto; padding-bottom: 10px; }
-  .aboutDiagram { min-width: 820px; }
-  .aboutNote, .aboutArchitectureCaption { font-size: 12px; margin-top: 14px; }
+  .aboutPage:not(.aboutPresenting) .aboutDiagramScroll { overflow-x: auto; padding-bottom: 10px; }
+  .aboutPage:not(.aboutPresenting) .aboutDiagram { min-width: 820px; }
+  .aboutPage:not(.aboutPresenting) .aboutNote, .aboutPage:not(.aboutPresenting) .aboutArchitectureCaption { font-size: 12px; margin-top: 14px; }
 }
 @page { size: 320mm 180mm; margin: 0; }
 @media print {
@@ -63,5 +63,18 @@
 .agentBox .boxTitle { fill: #fff; }
 .agentBox .boxSub { fill: #f0f4fa; }
 @media screen and (max-width: 700px) {
-  .aboutNoteEmphasis { font-size: 13px; padding: 12px; border-left-width: 4px; border-radius: 4px; }
+  .aboutPage:not(.aboutPresenting) .aboutNoteEmphasis { font-size: 13px; padding: 12px; border-left-width: 4px; border-radius: 4px; }
+}
+
+.aboutToolbarActions { display: flex; flex-wrap: wrap; gap: 10px; }
+.aboutPlayback { display: none; }
+@media screen {
+  .aboutPresenting { position: fixed; inset: 0; z-index: 1000; height: 100dvh; min-height: 0; background: #101916; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  .aboutPresenting .aboutToolbar, .aboutPresenting .aboutGuide { display: none; }
+  .aboutPresenting .aboutDeck { width: min(100vw, calc((100dvh - 64px) * 16 / 9)); max-width: none; margin: 0; padding: 0; display: block; }
+  .aboutPresenting .aboutSlide { width: 100%; box-sizing: border-box; border: 0; box-shadow: none; }
+  .aboutPresenting .aboutSlideInactive { display: none; }
+  .aboutPresenting .aboutPlayback { height: 64px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; gap: 12px; color: #fff; font-size: 14px; }
+  .aboutPlayback button { font: inherit; color: #fff; background: #29483e; border: 1px solid #638477; border-radius: 6px; padding: 9px 12px; cursor: pointer; }
+  .aboutPlayback button:disabled { opacity: .4; cursor: default; }
 }

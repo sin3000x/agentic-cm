@@ -1,14 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useId, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { botAvatars } from "../lib/identities";
 import "./about.css";
 
 const chapters = ["流程与 Case", "角色与求解", "能力与责任", "Case 工作流", "平台资产", "技术架构"];
 
-function Slide({ number, title, children, note }: { number: number; title: string; children: ReactNode; note?: string }) {
-  return <section className="aboutSlide" id={`slide-${number}`} aria-labelledby={`heading-${number}`}>
+function Slide({ number, title, children, note, presentingSlide }: { presentingSlide: number | null; number: number; title: string; children: ReactNode; note?: string }) {
+  return <section className={`aboutSlide${presentingSlide !== null && presentingSlide !== number ? " aboutSlideInactive" : ""}`} id={`slide-${number}`} aria-labelledby={`heading-${number}`}>
     <div className="aboutSlideBody">
       {number === 1 ? <h1 id={`heading-${number}`}>{title}</h1> : <h2 id={`heading-${number}`}>{title}</h2>}
       {children}
@@ -56,11 +56,68 @@ function Text({ x, y, children, small = false, anchor = "middle" }: { x: number;
 }
 
 export default function AboutPage() {
-  return <div className="aboutPage">
-    <div className="aboutToolbar"><Link href="/">← 返回工作台</Link><span>关于 Agentic CM · 6 页演示</span><button type="button" onClick={() => window.print()}>导出 PDF slides ↗</button></div>
+  const [presenting, setPresenting] = useState(false);
+  const [currentSlide, setCurrentSlide] = useState(1);
+  const pageRef = useRef<HTMLDivElement>(null);
+  const playButtonRef = useRef<HTMLButtonElement>(null);
+  const deckRef = useRef<HTMLElement>(null);
+  const moveSlide = useCallback((delta: number) => {
+    setCurrentSlide((current) => Math.max(1, Math.min(chapters.length, current + delta)));
+  }, []);
+  const stopPresentation = useCallback(() => {
+    setPresenting(false);
+    if (document.fullscreenElement === pageRef.current) {
+      void document.exitFullscreen().catch(() => {});
+    }
+    playButtonRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  useEffect(() => {
+    if (!presenting) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    deckRef.current?.focus();
+    const onFullscreenChange = () => {
+      if (!document.fullscreenElement) stopPresentation();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.altKey || event.ctrlKey || event.metaKey) return;
+      if (event.key === "Escape") stopPresentation();
+      else if (["ArrowRight", "ArrowDown", "PageDown"].includes(event.key)) moveSlide(1);
+      else if (["ArrowLeft", "ArrowUp", "PageUp"].includes(event.key)) moveSlide(-1);
+      else if (event.key === " " && !(event.target instanceof HTMLButtonElement)) moveSlide(1);
+      else if (event.key === "Home") setCurrentSlide(1);
+      else if (event.key === "End") setCurrentSlide(chapters.length);
+      else return;
+      event.preventDefault();
+    };
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("fullscreenchange", onFullscreenChange);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [presenting, moveSlide, stopPresentation]);
+
+  async function startPresentation() {
+    const slides = pageRef.current?.querySelectorAll<HTMLElement>(".aboutSlide");
+    const nearest = slides && Array.from(slides).reduce((best, slide) =>
+      Math.abs(slide.getBoundingClientRect().top) < Math.abs(best.getBoundingClientRect().top) ? slide : best);
+    setCurrentSlide(nearest ? Number(nearest.id.replace("slide-", "")) : 1);
+    setPresenting(true);
+    try {
+      await pageRef.current?.requestFullscreen?.();
+    } catch {
+      // Keep the viewport presentation available when native fullscreen is denied.
+    }
+  }
+
+  return <div ref={pageRef} className={`aboutPage${presenting ? " aboutPresenting" : ""}`}>
+    <div className="aboutToolbar"><Link href="/">← 返回工作台</Link><span>关于 Agentic CM · 6 页演示</span><div className="aboutToolbarActions"><button ref={playButtonRef} type="button" onClick={startPresentation}>全屏播放 ▷</button><button type="button" onClick={() => window.print()}>导出 PDF slides ↗</button></div></div>
     <div className="aboutGuide"><span>导出时选择「另存为 PDF」，关闭页眉和页脚</span><nav aria-label="About 章节">{chapters.map((chapter, index) => <a key={chapter} href={`#slide-${index + 1}`}>{String(index + 1).padStart(2, "0")} {chapter}</a>)}</nav></div>
-    <main className="aboutDeck">
-      <Slide number={1} title="业务流程 vs 事件驱动">
+    <main ref={deckRef} tabIndex={-1} className="aboutDeck">
+      <Slide presentingSlide={presenting ? currentSlide : null} number={1} title="业务流程 vs 事件驱动">
         <Diagram label="业务流程按确定节点流转，Case 管理围绕目标探索未知路径；关闭 Case 需要主计划、研发、订单经理等多角色沟通、确认方案与承诺，再由 Case Owner 决策闭环" height={465}>
           <rect className="diagramPanel" x="0" y="0" width="510" height="310" rx="14"/><rect className="diagramPanel" x="540" y="0" width="540" height="310" rx="14"/>
           <Text x={255} y={45}>Business Process · 确定性流转</Text>
@@ -78,7 +135,7 @@ export default function AboutPage() {
           <Box x={0} y={371} w={1080} h={90} title="关闭 Case：多角色沟通 → 方案与承诺确认 → Case Owner 决策闭环" tone="green"/>
         </Diagram>
       </Slide>
-      <Slide number={2} title="按人拆 vs 按路径拆">
+      <Slide presentingSlide={presenting ? currentSlide : null} number={2} title="按人拆 vs 按路径拆">
         <Diagram label="角色数字分身以订单经理为中心，与主计划、研发、供应经理和物流构成协作网络，仍需沟通交接确认；按提拉、替代等问题组织 Agent，可以跨学科整合求解" height={465}>
           <rect className="diagramPanel" x="0" y="0" width="520" height="399" rx="14"/><rect className="diagramPanel" x="560" y="0" width="520" height="399" rx="14"/>
           <Text x={260} y={45}>按角色复制数字分身</Text><Text x={820} y={45}>按问题组织求解 Agent</Text>
@@ -98,7 +155,7 @@ export default function AboutPage() {
           <Text x={540} y={451}>协作的基本单元，从角色交接 → 路径求解</Text>
         </Diagram>
       </Slide>
-      <Slide number={3} title="能力 vs 责任" note="备注：这是理想化设计，信息无法全部在系统中承载；实际应用中，人还需在 Agent 提问时补充信息。">
+      <Slide presentingSlide={presenting ? currentSlide : null} number={3} title="能力 vs 责任" note="备注：这是理想化设计，信息无法全部在系统中承载；实际应用中，人还需在 Agent 提问时补充信息。">
         <Diagram label="人员能力沉淀为跨角色 Skills，Path Agent 整合并生成方案；人负责批准否决或提出修改意见，所有记录归入 Case" height={448}>
           <rect className="diagramPanel" x="0" y="0" width="300" height="338" rx="14"/>
           <Text x={150} y={38}>人的能力 → 可以抽取</Text><Text x={950} y={106}>人的责任 → 仍然存在</Text>
@@ -113,7 +170,7 @@ export default function AboutPage() {
           <Box x={0} y={382} w={1080} h={60} title="Case 统一记录与审计：事实 → 方案版本 → 人员意见 → 承诺与决策" tone="green"/>
         </Diagram>
       </Slide>
-      <Slide number={4} title="三类 Agent：规划、推演、汇总">
+      <Slide presentingSlide={presenting ? currentSlide : null} number={4} title="三类 Agent：规划、推演、汇总">
         <Diagram label="三条 Path 并行探索审批后汇总，由 Case Owner 决策；关闭 Case 后回到最初的供应链事件，完成处置闭环" height={495} inset={24}>
           <Text x={109} y={24}>01 · 规划范围</Text>
           <Text x={528} y={24}>02 · 并行探索与审批</Text>
@@ -149,7 +206,7 @@ export default function AboutPage() {
           <Text x={540} y={510}>关闭 Case · 事件闭环</Text>
         </Diagram>
       </Slide>
-      <Slide number={5} title="三类资产：能力、规则、经验" note="演进方式：角色意见与经验经人工整理后纳入 Knowledge，供后续 Case 参考；当前不做自动学习或自动回写。">
+      <Slide presentingSlide={presenting ? currentSlide : null} number={5} title="三类资产：能力、规则、经验" note="演进方式：角色意见与经验经人工整理后纳入 Knowledge，供后续 Case 参考；当前不做自动学习或自动回写。">
         <Diagram label="Skills 是可复用能力，Policies 通过确定性规则触发审批，Knowledge 保存观察记忆经验；Case 意见经验经整理沉淀供下次分析参考" height={450}>
           <rect className="diagramPanel" x="0" y="0" width="340" height="300" rx="14"/><rect className="diagramPanel" x="370" y="0" width="340" height="300" rx="14"/><rect className="diagramPanel" x="740" y="0" width="340" height="300" rx="14"/>
           <Text x={170} y={43}>Skills · 可复用的能力</Text><Text x={540} y={43}>Policies · 审批策略</Text><Text x={910} y={43}>Knowledge · 观察、记忆、经验</Text>
@@ -160,7 +217,7 @@ export default function AboutPage() {
           <Box x={0} y={377} w={248} h={67} title="本次 Case 意见与经验"/><Line d="M256 410H282"/><Box x={292} y={377} w={220} h={67} title="沉淀与人工确认"/><Line d="M520 410H546"/><Box x={556} y={377} w={220} h={67} title="Knowledge"/><Line d="M784 410H810"/><Box x={820} y={377} w={260} h={67} title="下一次 Case 的分析" tone="green"/>
         </Diagram>
       </Slide>
-      <Slide number={6} title="四层架构">
+      <Slide presentingSlide={presenting ? currentSlide : null} number={6} title="四层架构">
         <Diagram label="四层技术架构：交互与接入层，组织求解审批层，能力治理记录底座，数据与基础设施层" height={456}>
           {[
             { y: 0, label: "交互与接入", sub: "呈现与入口", tone: "plain" as const, items: [["React 工作台", "Case · 待办 · 资产 · Trace"], ["FastAPI", "HTTP API · 请求与响应"]] },
@@ -171,5 +228,11 @@ export default function AboutPage() {
         </Diagram>
       </Slide>
     </main>
+    {presenting && <nav className="aboutPlayback" aria-label="幻灯片播放控制">
+      <button type="button" disabled={currentSlide === 1} onClick={() => moveSlide(-1)}>← 上一页</button>
+      <span aria-live="polite">{currentSlide} / {chapters.length}</span>
+      <button type="button" disabled={currentSlide === chapters.length} onClick={() => moveSlide(1)}>下一页 →</button>
+      <button type="button" onClick={stopPresentation}>退出全屏</button>
+    </nav>}
   </div>;
 }
