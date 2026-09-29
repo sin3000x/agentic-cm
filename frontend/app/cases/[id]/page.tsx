@@ -1191,14 +1191,27 @@ export default function Home() {
           <span className="agentIcon">✦</span>
           <span>
             <small>ORCHESTRATOR 建议</small>
-            <h2>审查 Path Manifest</h2>
+            <h2>选择本轮探索路径</h2>
           </span>
         </div>
-        <span className="version">v1 · 待批准</span>
+        <span className="version">v{manifestVersion ?? 1} · 待批准</span>
       </div>
       <p className="lead">
-        Orchestrator 已为每条候选 Path 选择本次采用的 Skill。Owner 可以选择本轮真正进入探索的 Path。
+        选择需要进一步验证的路径。批准后开始推演，业务方案仍需专业评审与最终决策。
       </p>
+      <div className="approvalBox">
+        <span>
+          <strong>批准范围 · 已选 {selectedPathIds.length} 条</strong>
+          <small>只为勾选的 Path 创建 PathAttempt，不代表批准最终业务方案。</small>
+        </span>
+        <button
+          className="primary"
+          disabled={busy || selectedPathIds.length === 0}
+          onClick={approveManifest}
+        >
+          {busy ? "处理中…" : "批准并启动所选 Path"}
+        </button>
+      </div>
       <div className="pathChoices">
         {manifestPaths.map((path, index) => {
           const selected = selectedPathIds.includes(path.id);
@@ -1210,26 +1223,14 @@ export default function Home() {
                   <span className="recommended">DEMO</span>
                 )}
                 <label className="pathSelector">
-                  <input type="checkbox" checked={selected} onChange={() => togglePath(path.id)} />
+                  <input type="checkbox" aria-label={`探索${pathLabel(path)}`} checked={selected} onChange={() => togglePath(path.id)} />
                   <span>{selected ? "本轮探索" : "暂不探索"}</span>
                 </label>
               </div>
               <h3>{pathLabel(path)}</h3>
               <p>{path.rationale}</p>
-              <div className="pathStats">
-                <span>
-                  <small>强制 Policy</small>
-                  <strong>{path.policies.length}</strong>
-                </span>
-                <span>
-                  <small>Agent 选择</small>
-                  <strong>{path.skill_selections.length}</strong>
-                </span>
-                <span>
-                  <small>参考 Knowledge</small>
-                  <strong>{path.knowledge.length}</strong>
-                </span>
-              </div>
+              <details className="pathContext">
+                <summary>查看所用能力 <span>{path.policies.length} 项规则 · {path.skill_selections.length} 项能力 · {path.knowledge.length} 项参考</span></summary>
               <div className="manifestSkillChoices">
                 {path.skill_selections.map((selection) => (
                   <details className="manifestSkillChoice" key={selection.entrypoint.id}>
@@ -1252,6 +1253,7 @@ export default function Home() {
                   </details>
                 ))}
               </div>
+              </details>
             </article>
           );
         })}
@@ -1269,19 +1271,7 @@ export default function Home() {
           })}
         />
       )}
-      <div className="approvalBox">
-        <span>
-          <strong>批准范围 · 已选 {selectedPathIds.length} 条</strong>
-          <small>只为勾选的 Path 创建 PathAttempt，不代表批准最终业务方案。</small>
-        </span>
-        <button
-          className="primary"
-          disabled={busy || selectedPathIds.length === 0}
-          onClick={approveManifest}
-        >
-          {busy ? "处理中…" : "批准并启动所选 Path"}
-        </button>
-      </div>
+
     </>
   );
 
@@ -1295,7 +1285,10 @@ export default function Home() {
             <Link href="/">Case 总览</Link> <span>/</span> {caseDetails?.id ?? activeCaseId}
           </div>
           <div className="topActions">
-            <button className="ghost">审计记录</button>
+            <button className="ghost" onClick={() => {
+              const history = document.getElementById("audit") as HTMLDetailsElement | null;
+              if (history) { history.open = true; history.scrollIntoView({ block: "start" }); }
+            }}>流转记录</button>
             <button className="ghost" disabled={busy} onClick={resetDemo}>
               重置 Demo
             </button>
@@ -1325,10 +1318,14 @@ export default function Home() {
                 当前由 <strong>{caseDetails?.owner ?? "—"}</strong> 负责
               </p>
             </div>
-            <button className="primary">
-              继续处理 <span>→</span>
-            </button>
+
           </header>
+
+          <section className="decisionFocus" aria-label="当前处理重点">
+            <div><span className="focusEyebrow">{isCaseClosed ? "已完成" : "当前处理"}</span><h2>{caseDetails ? currentStage : "正在同步 Case"}</h2></div>
+            <p>{!caseDetails ? "正在读取当前进度与责任信息。" : isCaseClosed ? "最终决定已记录，可查阅方案与完整流转记录。" : phase === "MANIFEST_REVIEW" ? "请 Case Owner 选择本轮探索路径，再批准启动。" : phase === "PROFESSIONAL_COMMITMENT" ? `等待专业评审：${Array.from(new Set(commitmentNodes.filter((node) => node.status === "PENDING").map((node) => node.role))).join("、") || "正在汇合评审结果"}。` : phase === "PATH_EXPLORATION" ? "Agent 正在推演已批准路径，完成后进入专业评审。" : phase === "FINAL_REVIEW" ? "汇总各路径结果与剩余风险，由 Case Owner 作出最终决定。" : "根据 Case 事实生成候选路径，准备进入评审。"}</p>
+            <a href="#current-action" onClick={() => document.getElementById("current-action")?.focus({ preventScroll: true })}>{isCaseClosed ? "查看结果" : "查看当前步骤"} <span aria-hidden="true">↓</span></a>
+          </section>
 
           <div className="mainGrid threadLayout">
             <section className="caseThread" aria-label="Case 完整流转 Thread">
@@ -1338,6 +1335,174 @@ export default function Home() {
                 </div>
               )}
 
+              <article className="threadItem commentItem currentThreadItem" id="current-action" tabIndex={-1}>
+                <BotIcon
+                  kind={
+                    phase === "FINAL_REVIEW"
+                      ? "synthesis"
+                      : phase === "PATH_EXPLORATION"
+                        ? "path"
+                        : "orchestrator"
+                  }
+                  className="threadAvatar botAvatar"
+                />
+                <div className="commentBox activeComment">
+                  <header>
+                    <strong>Agentic CM</strong>
+                    <span>
+                      {phase === "FINAL_REVIEW"
+                        ? "Synthesis Agent"
+                        : phase === "PROFESSIONAL_COMMITMENT"
+                          ? "Commitment Workflow"
+                          : approved
+                            ? "Path Agent"
+                            : "Orchestrator"}{" "}
+                      · 当前步骤
+                    </span>
+                    <b className="currentLabel">{currentStage}</b>
+                  </header>
+                  <div className="commentBody actionBody">
+                    {orchestrationCard}
+                    {hasApprovedManifest && (
+                      <section
+                        className={`approvedManifestArchive ${showApprovedManifest ? "expanded" : ""}`}
+                        aria-label="已批准 Manifest"
+                      >
+                        <header>
+                          <span className="approvedManifestIcon">M</span>
+                          <span>
+                            <small>CASE KEY MATERIAL · FROZEN</small>
+                            <strong>
+                              已批准 Manifest{manifestVersion ? ` v${manifestVersion}` : ""}
+                            </strong>
+                            <p>
+                              {manifestPaths.filter((path) => path.selected).length} 条 Path
+                              已批准进入本轮探索 · 原始理由与能力快照持续保留
+                            </p>
+                          </span>
+                          <button
+                            type="button"
+                            aria-expanded={showApprovedManifest}
+                            onClick={() => setShowApprovedManifest((current) => !current)}
+                          >
+                            {showApprovedManifest ? "收起 Manifest ↑" : "查看已批准 Manifest →"}
+                          </button>
+                        </header>
+                        {showApprovedManifest && (
+                          <div className="approvedManifestBody">
+                            <p className="manifestBoundary">
+                              这是批准时冻结的 Manifest，只用于查阅与审计；后续 Path
+                              结果和专业审批不会改写这份材料。
+                            </p>
+                            <div className="approvedManifestPaths">
+                              {manifestPaths.map((path, index) => {
+                                return (
+                                  <article
+                                    className={path.selected ? "selected" : "notSelected"}
+                                    key={path.id}
+                                  >
+                                    <div>
+                                      <span>PATH {String(index + 1).padStart(2, "0")}</span>
+                                      <em>{path.selected ? "已批准" : "本轮未选"}</em>
+                                    </div>
+                                    <h3>{pathLabel(path)}</h3>
+                                    <p>{path.rationale || "Manifest 未记录额外理由。"}</p>
+                                    <dl>
+                                      <div>
+                                        <dt>Policy</dt>
+                                        <dd>{path.policies.length}</dd>
+                                      </div>
+                                      <div>
+                                        <dt>Agent 选择</dt>
+                                        <dd>{path.skill_selections.length}</dd>
+                                      </div>
+                                      <div>
+                                        <dt>Knowledge</dt>
+                                        <dd>{path.knowledge.length}</dd>
+                                      </div>
+                                    </dl>
+                                  </article>
+                                );
+                              })}
+                            </div>
+                            <button
+                              className="linkButton capabilityToggle"
+                              onClick={toggleManifestYaml}
+                            >
+                              {showManifestYaml
+                                ? "收起完整 Manifest YAML ↑"
+                                : "查看完整 Manifest YAML →"}
+                            </button>
+                            {showManifestYaml && manifestYaml && (
+                              <ManifestYamlPanel
+                                yaml={manifestYaml}
+                                onCopy={copyManifestYaml}
+                                downloadHref={apiUrl(`/api/cases/${activeCaseId}/manifest.yaml`, {
+                                  actor: currentIdentity.name,
+                                  role: currentIdentity.role,
+                                })}
+                              />
+                            )}
+                          </div>
+                        )}
+                      </section>
+                    )}
+                    {canViewManifest && latestFailedRunCount > 0 && (
+                      <section className="failedAgentTraces" aria-label="最新失败 Agent Trace">
+                        <header>
+                          <span>
+                            <small>AGENT FAILURE</small>
+                            <strong>最新失败运行 · Trace 已自动展开</strong>
+                          </span>
+                          <em>{latestFailedRunCount} FAILED</em>
+                        </header>
+                        {latestFailedOrchestratorRuns.length > 0 && (
+                          <AgentTracePanel
+                            runs={latestFailedOrchestratorRuns}
+                            agentType="orchestrator"
+                            autoExpand
+                          />
+                        )}
+                        {latestFailedPathRuns.length > 0 && (
+                          <AgentTracePanel
+                            runs={latestFailedPathRuns}
+                            paths={manifestPaths}
+                            agentType="path"
+                            autoExpand
+                          />
+                        )}
+                        {latestFailedSynthesisRuns.length > 0 && (
+                          <AgentTracePanel
+                            runs={latestFailedSynthesisRuns}
+                            agentType="synthesis"
+                            autoExpand
+                          />
+                        )}
+                      </section>
+                    )}
+                    {canViewManifest &&
+                      agentRuns.some((run) => run.agent_type === "orchestrator") && (
+                        <>
+                          <button
+                            className="linkButton traceToggle"
+                            onClick={() => setShowOrchestratorTrace((current) => !current)}
+                          >
+                            {showOrchestratorTrace
+                              ? "收起 Orchestrator Trace ↑"
+                              : `${agentRuns.some((run) => run.status === "FAILED") ? "查看失败" : "查看"} Orchestrator Trace (${agentRuns.filter((run) => run.agent_type === "orchestrator").length}) →`}
+                          </button>
+                          {showOrchestratorTrace && (
+                            <AgentTracePanel runs={agentRuns} agentType="orchestrator" />
+                          )}
+                        </>
+                      )}
+                  </div>
+                </div>
+              </article>
+
+              <details className="caseHistory" id="audit">
+                <summary><strong>流转记录与原始提案</strong><span>{timelineEvents.length} 条事件 · 提案与操作留痕</span></summary>
+                <div className="historyTimeline">
               <article className="threadItem commentItem">
                 <PersonIcon
                   name={humanProposal.author}
@@ -1521,170 +1686,8 @@ export default function Home() {
                 return null;
               })}
 
-              <article className="threadItem commentItem currentThreadItem">
-                <BotIcon
-                  kind={
-                    phase === "FINAL_REVIEW"
-                      ? "synthesis"
-                      : phase === "PATH_EXPLORATION"
-                        ? "path"
-                        : "orchestrator"
-                  }
-                  className="threadAvatar botAvatar"
-                />
-                <div className="commentBox activeComment">
-                  <header>
-                    <strong>Agentic CM</strong>
-                    <span>
-                      {phase === "FINAL_REVIEW"
-                        ? "Synthesis Agent"
-                        : phase === "PROFESSIONAL_COMMITMENT"
-                          ? "Commitment Workflow"
-                          : approved
-                            ? "Path Agent"
-                            : "Orchestrator"}{" "}
-                      · 当前步骤
-                    </span>
-                    <b className="currentLabel">{currentStage}</b>
-                  </header>
-                  <div className="commentBody actionBody">
-                    {orchestrationCard}
-                    {hasApprovedManifest && (
-                      <section
-                        className={`approvedManifestArchive ${showApprovedManifest ? "expanded" : ""}`}
-                        aria-label="已批准 Manifest"
-                      >
-                        <header>
-                          <span className="approvedManifestIcon">M</span>
-                          <span>
-                            <small>CASE KEY MATERIAL · FROZEN</small>
-                            <strong>
-                              已批准 Manifest{manifestVersion ? ` v${manifestVersion}` : ""}
-                            </strong>
-                            <p>
-                              {manifestPaths.filter((path) => path.selected).length} 条 Path
-                              已批准进入本轮探索 · 原始理由与能力快照持续保留
-                            </p>
-                          </span>
-                          <button
-                            type="button"
-                            aria-expanded={showApprovedManifest}
-                            onClick={() => setShowApprovedManifest((current) => !current)}
-                          >
-                            {showApprovedManifest ? "收起 Manifest ↑" : "查看已批准 Manifest →"}
-                          </button>
-                        </header>
-                        {showApprovedManifest && (
-                          <div className="approvedManifestBody">
-                            <p className="manifestBoundary">
-                              这是批准时冻结的 Manifest，只用于查阅与审计；后续 Path
-                              结果和专业审批不会改写这份材料。
-                            </p>
-                            <div className="approvedManifestPaths">
-                              {manifestPaths.map((path, index) => {
-                                return (
-                                  <article
-                                    className={path.selected ? "selected" : "notSelected"}
-                                    key={path.id}
-                                  >
-                                    <div>
-                                      <span>PATH {String(index + 1).padStart(2, "0")}</span>
-                                      <em>{path.selected ? "已批准" : "本轮未选"}</em>
-                                    </div>
-                                    <h3>{pathLabel(path)}</h3>
-                                    <p>{path.rationale || "Manifest 未记录额外理由。"}</p>
-                                    <dl>
-                                      <div>
-                                        <dt>Policy</dt>
-                                        <dd>{path.policies.length}</dd>
-                                      </div>
-                                      <div>
-                                        <dt>Agent 选择</dt>
-                                        <dd>{path.skill_selections.length}</dd>
-                                      </div>
-                                      <div>
-                                        <dt>Knowledge</dt>
-                                        <dd>{path.knowledge.length}</dd>
-                                      </div>
-                                    </dl>
-                                  </article>
-                                );
-                              })}
-                            </div>
-                            <button
-                              className="linkButton capabilityToggle"
-                              onClick={toggleManifestYaml}
-                            >
-                              {showManifestYaml
-                                ? "收起完整 Manifest YAML ↑"
-                                : "查看完整 Manifest YAML →"}
-                            </button>
-                            {showManifestYaml && manifestYaml && (
-                              <ManifestYamlPanel
-                                yaml={manifestYaml}
-                                onCopy={copyManifestYaml}
-                                downloadHref={apiUrl(`/api/cases/${activeCaseId}/manifest.yaml`, {
-                                  actor: currentIdentity.name,
-                                  role: currentIdentity.role,
-                                })}
-                              />
-                            )}
-                          </div>
-                        )}
-                      </section>
-                    )}
-                    {canViewManifest && latestFailedRunCount > 0 && (
-                      <section className="failedAgentTraces" aria-label="最新失败 Agent Trace">
-                        <header>
-                          <span>
-                            <small>AGENT FAILURE</small>
-                            <strong>最新失败运行 · Trace 已自动展开</strong>
-                          </span>
-                          <em>{latestFailedRunCount} FAILED</em>
-                        </header>
-                        {latestFailedOrchestratorRuns.length > 0 && (
-                          <AgentTracePanel
-                            runs={latestFailedOrchestratorRuns}
-                            agentType="orchestrator"
-                            autoExpand
-                          />
-                        )}
-                        {latestFailedPathRuns.length > 0 && (
-                          <AgentTracePanel
-                            runs={latestFailedPathRuns}
-                            paths={manifestPaths}
-                            agentType="path"
-                            autoExpand
-                          />
-                        )}
-                        {latestFailedSynthesisRuns.length > 0 && (
-                          <AgentTracePanel
-                            runs={latestFailedSynthesisRuns}
-                            agentType="synthesis"
-                            autoExpand
-                          />
-                        )}
-                      </section>
-                    )}
-                    {canViewManifest &&
-                      agentRuns.some((run) => run.agent_type === "orchestrator") && (
-                        <>
-                          <button
-                            className="linkButton traceToggle"
-                            onClick={() => setShowOrchestratorTrace((current) => !current)}
-                          >
-                            {showOrchestratorTrace
-                              ? "收起 Orchestrator Trace ↑"
-                              : `${agentRuns.some((run) => run.status === "FAILED") ? "查看失败" : "查看"} Orchestrator Trace (${agentRuns.filter((run) => run.agent_type === "orchestrator").length}) →`}
-                          </button>
-                          {showOrchestratorTrace && (
-                            <AgentTracePanel runs={agentRuns} agentType="orchestrator" />
-                          )}
-                        </>
-                      )}
-                  </div>
                 </div>
-              </article>
+              </details>
 
               {activeStageIndex < 4 && (
                 <div className="futureFlow" aria-label="后续流程">

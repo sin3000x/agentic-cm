@@ -1848,3 +1848,18 @@ button {
 .adapterSelector select { width: 100%; padding: 8px; border: 1px solid #d7dce2; border-radius: 6px; background: white; color: #263445; }
 .adapterSelector small { font-size: 11px; color: #697586; line-height: 1.5; }
 .adapterSelector [role="alert"] { color: #b42318; }
+
+/* Business status stays legible on the light workbench surface. */
+:root { --muted: #596e70; }
+.attentionIntro { margin: 0; padding: 0 20px 16px; color: var(--muted); font-size: var(--text-xs); }
+.attentionList { list-style: none; margin: 0; padding: 0 20px; }
+.attentionList li { padding: 16px 0; border-top: 1px solid var(--line); }
+.attentionList li > strong { display: block; margin: 7px 0; font-size: var(--text-sm); line-height: 1.6; }
+.attentionList p { margin: 0 0 12px; color: #50665f; font-size: var(--text-xs); }
+.attentionList li > div { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; font-size: var(--text-2xs); color: #5f706b; }
+.attentionList a, .attentionList button { padding: 0; border: 0; background: none; color: var(--teal-dark); font-size: inherit; font-weight: 700; text-decoration: none; }
+.attentionRisk { color: #5c716b; font-size: var(--text-2xs); font-weight: 700; }
+.attentionRisk.risk-高 { color: #a44735; }
+.attentionRisk.risk-中 { color: #8c661e; }
+.activityCard .railHeader > span { color: var(--muted); font-size: var(--text-xs); }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import AppSidebar from "./app-sidebar";
 import { apiGet, isAbort } from "./lib/api";
-import { botAvatars, personAvatars, useDemoIdentity } from "./lib/identities";
+import { personAvatars, useDemoIdentity } from "./lib/identities";
 import { formatDay, formatDayTime } from "./lib/format";
 
 type CaseStatus = "处理中" | "暂缓" | "已关闭";
@@ -115,14 +115,6 @@ function PersonAvatar({ name, fallback }: { name: string; fallback: string }) {
     </span>
   );
 }
-function OrchestratorAvatar() {
-  return (
-    <span className="activityAgent">
-      <Image src={botAvatars.orchestrator} alt="" width={64} height={64} />
-    </span>
-  );
-}
-
 function duePresentation(apiCase: ApiCase): Pick<CaseSummary, "due" | "dueTone"> {
   if (apiCase.status === "CLOSED") return { due: "已完成", dueTone: "muted" };
   const value = apiCase.business_payload?.commitment_due_date;
@@ -256,10 +248,10 @@ export default function Home() {
         <div className="pageContent">
           <section className="welcome">
             <div>
-              <p className="eyebrow">CASE OPERATIONS · LIVE</p>
+              <p className="eyebrow">CASE OPERATIONS</p>
               <h1>早上好，{identity.name}</h1>
               <p className="welcomeCopy">
-                当前有 <strong>{attentionCases.length} 个事项</strong>需要你的判断，其中{" "}
+                当前有 <strong>{attentionCases.length} 个 Case</strong>需要团队关注，其中{" "}
                 {overdueCount} 个已超过承诺期限。
               </p>
             </div>
@@ -275,7 +267,7 @@ export default function Home() {
                 <span>进行中 Case</span>
                 <strong>{openCount}</strong>
                 <small>
-                  <b>实时</b> 来自 Case API
+                  当前处置中
                 </small>
               </div>
             </article>
@@ -292,7 +284,7 @@ export default function Home() {
               <div>
                 <span>已闭环 Case</span>
                 <strong>{closedCount}</strong>
-                <small>来自 Case API</small>
+                <small>已完成最终决策</small>
               </div>
             </article>
             <article>
@@ -471,62 +463,19 @@ export default function Home() {
             </section>
             <aside className="rightRail">
               <section className="activityCard" id="activity">
-                <div className="railHeader">
-                  <div>
-                    <h2>最新协作动态</h2>
-                  </div>
-                  <button type="button">全部</button>
-                </div>
-                <ol className="activityList">
-                  <li>
-                    <PersonAvatar name="王淼" fallback="王" />
-                    <div>
-                      <p>
-                        <b>王淼</b> 提交了供应可行性承诺
-                      </p>
-                      <small>
-                        <b>CM-2026-014</b>
-                        <time>12 分钟前</time>
-                      </small>
-                    </div>
-                  </li>
-                  <li>
-                    <OrchestratorAvatar />
-                    <div>
-                      <p>
-                        <b>Orchestrator</b> 生成 Manifest v2
-                      </p>
-                      <small>
-                        <b>CM-2026-012</b>
-                        <time>28 分钟前</time>
-                      </small>
-                    </div>
-                  </li>
-                  <li>
-                    <PersonAvatar name="林乔" fallback="林" />
-                    <div>
-                      <p>
-                        <b>林乔</b> 请求补充技术证据
-                      </p>
-                      <small>
-                        <b>CM-2026-015</b>
-                        <time>1 小时前</time>
-                      </small>
-                    </div>
-                  </li>
-                  <li>
-                    <span className="activityDone"><HomeIcon name="check" /></span>
-                    <div>
-                      <p>
-                        <b>CM-2026-006</b> 已完成验证
-                      </p>
-                      <small>
-                        <b>Case 日志</b>
-                        <time>2 天前</time>
-                      </small>
-                    </div>
-                  </li>
+                <div className="railHeader"><h2>团队关注</h2><span>{attentionCases.length} 项</span></div>
+                <p className="attentionIntro">按当前阶段查看下一步</p>
+                <ol className="attentionList">
+                  {attentionCases.map((item) => (
+                    <li key={item.id}>
+                      <span className={`attentionRisk risk-${item.risk}`}>{item.risk}风险</span>
+                      <strong>{item.title}</strong>
+                      <p>{item.attention}</p>
+                      <div><span>{item.id}</span>{item.id === "CM-2026-014" ? <a href={`/cases/${item.id}`}>进入工作台 →</a> : <button type="button" onClick={() => setSelectedCase(item)}>查看详情 →</button>}</div>
+                    </li>
+                  ))}
                 </ol>
+                {attentionCases.length === 0 && <p className="attentionIntro">{loadState === "loading" ? "正在读取 Case…" : loadState === "error" ? "暂时无法读取关注事项" : "当前没有待关注事项"}</p>}
               </section>
             </aside>
           </div>
