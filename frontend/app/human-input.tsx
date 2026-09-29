@@ -40,7 +40,7 @@ export function CommitmentDecisionForm({
           disabled={busy}
         />
       </label>
-      <small>要求修改或否决时必须填写理由；通过只适用于当前展示的版本。</small>
+      <small>修改或否决须填写理由；仅审批当前版本。</small>
       {error && (
         <p className="humanInputError" role="alert">
           {error}
@@ -109,7 +109,6 @@ export function InformationAnswerForm({
           disabled={busy}
         />
       </label>
-      <small>回答会进入 Case 流转记录和下一轮推演，不代表批准业务方案。</small>
       {error && (
         <p className="humanInputError" role="alert">
           {error}

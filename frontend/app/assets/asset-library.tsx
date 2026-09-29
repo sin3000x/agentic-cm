@@ -42,19 +42,19 @@ const groupCopy = {
   skills: {
     eyebrow: "AGENT METHODS",
     title: "Skills",
-    description: "Agent 可调用的标准 SKILL.md 方法包。它们负责分析与提案，不替代业务人员作出承诺。",
+    description: "Agent 使用的分析方法。",
     empty: "后台当前没有已发布的 Skill。",
   },
   policies: {
     eyebrow: "GOVERNANCE RULES",
     title: "Policies",
-    description: "平台强制执行的责任、评审与依赖规则，会确定性编译为 Case 中的 CommitmentDAG。",
+    description: "责任分工、评审要求与依赖规则。",
     empty: "后台当前没有已发布的 Policy。",
   },
   knowledge: {
     eyebrow: "ADVISORY CONTEXT",
     title: "Knowledge",
-    description: "带来源和审核信息的组织经验，只作为建议材料，不会覆盖当前 Case 事实。",
+    description: "供分析参考的组织经验。",
     empty: "后台当前没有已发布的 Knowledge。",
   },
 } as const;
@@ -274,7 +274,7 @@ function SkillRoleLibrary({ skills, search }: { skills: CapabilityAsset[]; searc
                   >
                     {members.length > 0 && (
                       <div className="skillMemberRefs">
-                        <p>组合成员 · 仅作为 Bundle 引用</p>
+                        <p>组合成员</p>
                         {members.map((member) => (
                           <div className="skillMemberRef" key={member.id}>
                             <span>
@@ -387,7 +387,6 @@ export default function AssetLibrary({ group }: { group: AssetGroup }) {
           {!data && !error && (
             <div className="assetMessage">
               <strong>正在读取后台资产…</strong>
-              <p>数据来自当前运行中的 CapabilityRegistry。</p>
             </div>
           )}
           {data && isEmpty && (

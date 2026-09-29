@@ -164,14 +164,12 @@ export function AiWorkingCard({
             </div>
           </>
         )}
-        <p>你可以留在当前页面，结果完成后会自动出现；AI 只生成建议，不会替人批准业务承诺。</p>
         <section className="embeddedLiveTrace" aria-label="实时审计轨迹">
           <header>
             <span>
               <small>LIVE TRACE</small>
               <strong>实时审计轨迹</strong>
             </span>
-            <em>每 600ms 刷新</em>
           </header>
           <AgentTracePanel runs={runs} agentType={agentType} paths={paths} autoExpand embedded />
         </section>
@@ -185,17 +183,14 @@ export function CapabilityPanel({ details }: { details: CapabilityDetails }) {
     {
       key: "policies" as const,
       label: "POLICY · 强制责任",
-      note: "由平台结构化匹配并编译为 CommitmentDAG 责任节点",
     },
     {
       key: "skills" as const,
       label: "SKILL · 认知方法",
-      note: "由 Agent Adapter 使用，不能代替业务审批",
     },
     {
       key: "knowledge" as const,
       label: "KNOWLEDGE · 建议材料",
-      note: "带来源的历史观察，不是当前 Case 事实",
     },
   ];
   return (
@@ -212,7 +207,6 @@ export function CapabilityPanel({ details }: { details: CapabilityDetails }) {
           <div className="capabilityGroup" key={group.key}>
             <div>
               <strong>{group.label}</strong>
-              <small>{group.note}</small>
             </div>
             {details.assets[group.key].map((asset) => (
               <article key={asset.resolved_ref.id}>
@@ -255,7 +249,6 @@ export function ManifestYamlPanel({
       <header>
         <span>
           <strong>完整 Manifest YAML</strong>
-          <small>全局 Knowledge 与所有 Path 的 Skill / Policy / Knowledge</small>
         </span>
         <span>
           <button className="linkButton" onClick={onCopy}>
@@ -368,7 +361,6 @@ export function AgentTracePanel({
         <header className="traceHeader">
           <span>
             <strong>{label} TRACE</strong>
-            <small>查看执行过程、工具调用与返回结果</small>
           </span>
           <em>{typedRuns.length} 次运行</em>
         </header>

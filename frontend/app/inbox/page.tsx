@@ -132,7 +132,6 @@ export default function InboxPage() {
             <div>
               <p className="eyebrow">MY CASE ACTIONS</p>
               <h1>我的待办</h1>
-              <p>处理分配给当前角色的专业审批和 Agent 信息请求。</p>
             </div>
             <div className="inboxCount">
               <strong>{loadState === "ready" ? items.length : "—"}</strong>
@@ -149,7 +148,6 @@ export default function InboxPage() {
           {loadState === "loading" && (
             <div className="inboxState">
               <strong>正在同步待办</strong>
-              <p>读取当前角色的审批节点与信息请求。</p>
             </div>
           )}
           {loadState === "error" && (
@@ -161,7 +159,6 @@ export default function InboxPage() {
           {loadState === "ready" && items.length === 0 && (
             <div className="inboxState">
               <strong>当前没有待处理事项</strong>
-              <p>可从左下角切换演示身份，查看其他角色的待办。</p>
             </div>
           )}
           {loadState === "ready" && items.length > 0 && (

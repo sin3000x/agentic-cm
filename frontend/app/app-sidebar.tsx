@@ -133,7 +133,7 @@ export default function AppSidebar({
             <option value="deterministic">deterministic</option>
             <option value="openai-compatible">openai-compatible</option>
           </select>
-          <small>{savingAdapter ? "切换中…" : "全局生效；模型配置来自后端环境变量"}</small>
+          <small>{savingAdapter ? "切换中…" : "全局生效"}</small>
           {adapterError && <small role="alert">{adapterError}</small>}
         </div>
         <div className="systemStatus">
@@ -175,7 +175,6 @@ export default function AppSidebar({
                 </span>
               </button>
             ))}
-            <p>仅模拟查看权限，不连接或修改 ERP</p>
           </div>
         )}
       </div>

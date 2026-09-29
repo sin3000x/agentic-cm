@@ -334,7 +334,7 @@ export default function Home() {
       setShowManifestYaml(false);
       setManifestYaml("");
       await refreshTimeline();
-      setMessage("Orchestrator 已根据 Case 与现有能力生成 Manifest，并冻结适用 Policy。 ");
+      setMessage("Manifest 已生成。");
     } catch (error) {
       setFailedAiRun("manifest");
       setMessage(
@@ -828,15 +828,13 @@ export default function Home() {
         <span className="version">内容已隐藏</span>
       </div>
       <p className="lead">
-        Manifest 的 Path、理由、Policy、Skill 和能力快照仅 Case Owner
-        可见。当前身份不能查看内容，也不能执行审批。
+        仅 Case Owner 可查看和审批。
       </p>
       <article className="pathCard compactPath">
         <div className="pathHeading">
           <span className="pathBadge">ACCESS RESTRICTED</span>
         </div>
         <h3>等待陈澄完成评审</h3>
-        <p>审批完成后，平台只会向相关角色的 Inbox 投递其本人需要处理的责任节点。</p>
       </article>
     </>
   ) : phase === "PATH_EXPLORATION" ? (
@@ -908,7 +906,7 @@ export default function Home() {
       </div>
       <div className="explorationGate">
         <strong>阶段出口</strong>
-        <p>所有已选 Path 均产出可审查方案 → 进入“专业承诺”并开放审批 DAG。</p>
+        <p>全部路径完成后进入专业评审。</p>
       </div>
       {canViewManifest && pendingExplorationPathIds.length > 0 && (
         <button
@@ -930,15 +928,13 @@ export default function Home() {
           <span className="agentIcon">✓</span>
           <span>
             <small>PROFESSIONAL COMMITMENT</small>
-            <h2>专业承诺 · 审批 DAG</h2>
+            <h2>专业承诺</h2>
           </span>
         </div>
         <span className="version">{selectedPathViews.length} PATHS</span>
       </div>
       <p className="lead">
-        Path
-        卡片只保留所有角色共享的推荐方案。轮到本人审批时，从责任节点打开专属依据与决策面板；Agent
-        不能代替审批。
+        点击待审批节点查看依据并审批。
       </p>
       <div className="pathApprovalList">
         {selectedPathViews.map(({ path, revision, nodes, runs }) => {
@@ -999,7 +995,7 @@ export default function Home() {
                   )}
                 </section>
               ) : (
-                <p className="autoRunNote">该 Path 尚缺少可审查的 SolutionRevision。</p>
+                <p className="autoRunNote">暂无可审查方案。</p>
               )}
               <div
                 className={`dag ${rootNodes.length === 1 ? "singleRoot" : ""}`}
@@ -1139,7 +1135,6 @@ export default function Home() {
                 placeholder="例如：保留物料替代 Path，同时重点探索不需要客户重新认证的交付拆分方案。"
                 rows={4}
               />
-              <small>这段文字会成为新版 Human Proposal，并进入下一轮 Orchestrator 上下文。</small>
               <div>
                 <button
                   className="ghost"
@@ -1180,10 +1175,6 @@ export default function Home() {
       ) : (
         <div className="explorationGate">
           <strong>全部审批 DAG 已完成</strong>
-          <p>
-            Synthesis Agent 将读取所有成功与失败 Path 的 SolutionRevision
-            和人类审批结果，不会补造新证据。
-          </p>
           {failedAiRun === "synthesis" && (
             <button
               className="primary explorationRetry"
@@ -1208,10 +1199,6 @@ export default function Home() {
         </div>
         <span className="version">等待规划</span>
       </div>
-      <p className="lead">
-        平台将基于 Case 事实匹配 Policy、Skill 与 Knowledge，枚举可探索路径；Agent
-        只提出方案，不会修改业务系统。
-      </p>
       <article className="pathCard compactPath">
         <div className="pathHeading">
           <span className="pathBadge">CASE READY</span>
@@ -1222,7 +1209,6 @@ export default function Home() {
       <div className="approvalBox">
         <span>
           <strong>{failedAiRun === "manifest" ? "自动规划已暂停" : "AI 将自动开始规划"}</strong>
-          <small>Planner 无权发明 Path、删除强制责任或作出业务承诺。</small>
         </span>
         {failedAiRun === "manifest" && (
           <button className="primary" disabled={busy} onClick={generateManifest}>
@@ -1249,7 +1235,6 @@ export default function Home() {
       <div className="approvalBox">
         <span>
           <strong>批准范围 · 已选 {selectedPathIds.length} 条</strong>
-          <small>只为勾选的 Path 创建 PathAttempt，不代表批准最终业务方案。</small>
         </span>
         <button
           className="primary"
@@ -1275,7 +1260,6 @@ export default function Home() {
                 </label>
               </div>
               <h3>{pathLabel(path)}</h3>
-              <p>{path.rationale}</p>
               <details className="pathContext">
                 <summary>查看所用能力 <span>{path.policies.length} 项规则 · {path.skill_selections.length} 项能力 · {path.knowledge.length} 项参考</span></summary>
               <div className="manifestSkillChoices">
@@ -1306,7 +1290,7 @@ export default function Home() {
         })}
       </div>
       <button className="linkButton capabilityToggle" onClick={toggleManifestYaml}>
-        {showManifestYaml ? "收起完整 Manifest YAML ↑" : "查看完整 Manifest YAML →"}
+        {showManifestYaml ? "收起 YAML ↑" : "查看 YAML →"}
       </button>
       {showManifestYaml && manifestYaml && (
         <ManifestYamlPanel
@@ -1628,29 +1612,20 @@ export default function Home() {
                         <header>
                           <span className="approvedManifestIcon">M</span>
                           <span>
-                            <small>CASE KEY MATERIAL · FROZEN</small>
                             <strong>
                               已批准 Manifest{manifestVersion ? ` v${manifestVersion}` : ""}
                             </strong>
-                            <p>
-                              {manifestPaths.filter((path) => path.selected).length} 条 Path
-                              已批准进入本轮探索 · 原始理由与能力快照持续保留
-                            </p>
                           </span>
                           <button
                             type="button"
                             aria-expanded={showApprovedManifest}
                             onClick={() => setShowApprovedManifest((current) => !current)}
                           >
-                            {showApprovedManifest ? "收起 Manifest ↑" : "查看已批准 Manifest →"}
+                            {showApprovedManifest ? "收起 ↑" : "展开 →"}
                           </button>
                         </header>
                         {showApprovedManifest && (
                           <div className="approvedManifestBody">
-                            <p className="manifestBoundary">
-                              这是批准时冻结的 Manifest，只用于查阅与审计；后续 Path
-                              结果和专业审批不会改写这份材料。
-                            </p>
                             <div className="approvedManifestPaths">
                               {manifestPaths.map((path, index) => {
                                 return (
@@ -1663,7 +1638,6 @@ export default function Home() {
                                       <em>{path.selected ? "已批准" : "本轮未选"}</em>
                                     </div>
                                     <h3>{pathLabel(path)}</h3>
-                                    <p>{path.rationale || "Manifest 未记录额外理由。"}</p>
                                     <dl>
                                       <div>
                                         <dt>Policy</dt>
@@ -1687,8 +1661,8 @@ export default function Home() {
                               onClick={toggleManifestYaml}
                             >
                               {showManifestYaml
-                                ? "收起完整 Manifest YAML ↑"
-                                : "查看完整 Manifest YAML →"}
+                                ? "收起 YAML ↑"
+                                : "查看 YAML →"}
                             </button>
                             {showManifestYaml && manifestYaml && (
                               <ManifestYamlPanel
@@ -1858,7 +1832,7 @@ export default function Home() {
               </section>
               <section className="notice">
                 <strong>演示安全边界</strong>
-                <p>不连接或修改 ERP、库存、订单及客户系统；所有执行均为 sandbox 推演。</p>
+                <p>仅模拟推演，不修改业务系统。</p>
               </section>
             </aside>
           </div>

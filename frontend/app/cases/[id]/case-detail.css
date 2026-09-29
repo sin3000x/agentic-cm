@@ -3186,20 +3186,8 @@ button:disabled {
   flex-direction: column;
   gap: 3px;
 }
-.approvedManifestArchive > header small {
-  color: #176f64;
-  font-size: var(--text-2xs);
-  font-weight: 850;
-  letter-spacing: 0.1em;
-}
 .approvedManifestArchive > header strong {
   font-size: var(--text-sm);
-}
-.approvedManifestArchive > header p {
-  margin: 0;
-  color: #6a7d7a;
-  font-size: var(--text-xs);
-  line-height: 1.45;
 }
 .approvedManifestArchive > header button {
   min-height: 32px;
@@ -3213,15 +3201,6 @@ button:disabled {
 }
 .approvedManifestBody {
   padding: 14px;
-}
-.manifestBoundary {
-  margin: 0 0 11px;
-  padding: 9px 11px;
-  border-left: 3px solid #68a69b;
-  background: #eaf4f1;
-  color: #4f6a66;
-  font-size: var(--text-xs);
-  line-height: 1.55;
 }
 .approvedManifestPaths {
   display: grid;

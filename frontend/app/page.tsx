@@ -255,10 +255,6 @@ export default function Home() {
                 {overdueCount} 个已超过承诺期限。
               </p>
             </div>
-            <div className="governanceNote">
-              <span>Human governed</span>
-              <p>Agent 提案 · 人员决策 · 全程留痕</p>
-            </div>
           </section>
           <section className="metrics" aria-label="Case 指标">
             <article>
@@ -266,9 +262,6 @@ export default function Home() {
               <div>
                 <span>进行中 Case</span>
                 <strong>{openCount}</strong>
-                <small>
-                  当前处置中
-                </small>
               </div>
             </article>
             <article>
@@ -284,7 +277,6 @@ export default function Home() {
               <div>
                 <span>已闭环 Case</span>
                 <strong>{closedCount}</strong>
-                <small>已完成最终决策</small>
               </div>
             </article>
             <article>
@@ -292,7 +284,6 @@ export default function Home() {
               <div>
                 <span>全部 Case</span>
                 <strong>{caseData.length}</strong>
-                <small>当前数据集</small>
               </div>
             </article>
           </section>
@@ -301,7 +292,6 @@ export default function Home() {
               <div className="panelHeader">
                 <div>
                   <h2>Case 总览</h2>
-                  <p>跨组织异常处置的当前状态</p>
                 </div>
                 <button type="button">
                   查看全部 <HomeIcon name="arrow" />
@@ -464,7 +454,6 @@ export default function Home() {
             <aside className="rightRail">
               <section className="activityCard" id="activity">
                 <div className="railHeader"><h2>团队关注</h2><span>{attentionCases.length} 项</span></div>
-                <p className="attentionIntro">按当前阶段查看下一步</p>
                 <ol className="attentionList">
                   {attentionCases.map((item) => (
                     <li key={item.id}>
