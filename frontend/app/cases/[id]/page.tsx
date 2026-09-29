@@ -4,6 +4,7 @@ import { useEffect, useEffectEvent, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import AppSidebar from "../../app-sidebar";
+import { CommitmentDecisionForm, InformationAnswerForm } from "../../human-input";
 import { apiGet, apiGetText, apiPost, apiUrl, isAbort } from "../../lib/api";
 import {
   demoIdentities,
@@ -19,6 +20,7 @@ import {
   commitmentCopy,
   initialHumanProposal,
   isSolutionRevision,
+  isPathRunnable,
   pathLabel,
   skillLabel,
   stages,
@@ -32,6 +34,7 @@ import {
   type CommitmentDecision,
   type CommitmentNode,
   type HumanProposal,
+  type InformationRequest,
   type ManifestPath,
   type OwnerDecision,
   type PathAttempt,
@@ -91,7 +94,7 @@ export default function Home() {
   const [showOrchestratorTrace, setShowOrchestratorTrace] = useState(false);
   const [expandedPathTraces, setExpandedPathTraces] = useState<Record<string, boolean>>({});
   const [caseCreatedAt, setCaseCreatedAt] = useState<string | null>(null);
-  const [canViewManifest, setCanViewManifest] = useState(true);
+  const [canViewManifest, setCanViewManifest] = useState(false);
   const { identity: currentIdentity } = useDemoIdentity();
   const [caseRefreshKey, setCaseRefreshKey] = useState(0);
   const identityNameRef = useRef(currentIdentity.name);
@@ -163,6 +166,9 @@ export default function Home() {
     setShowOrchestratorTrace(false);
     setExpandedPathTraces({});
     setApprovalReview(null);
+    setMessage("");
+    setPathAttempts([]);
+    setCommitmentNodes([]);
   }
 
   function loadManifest(
@@ -252,14 +258,10 @@ export default function Home() {
               const attempt = (data.path_attempts ?? []).find(
                 (item: PathAttempt) => item.path_id === path.id,
               );
-              return (
-                !attempt ||
-                attempt.state === "REVISING" ||
-                !isSolutionRevision(attempt.solution_revision)
-              );
+              return isPathRunnable(attempt);
             })
             .map((path) => path.id);
-          const runKey = `${identity.name}:alternatives:${pendingPathIds.join(",")}`;
+          const runKey = `${identity.name}:alternatives:${data.version}:${pendingPathIds.join(",")}`;
           if (pendingPathIds.length > 0 && !automaticRunsRef.current.has(runKey)) {
             automaticRunsRef.current.add(runKey);
             startAutomaticAlternatives(pendingPathIds);
@@ -395,6 +397,7 @@ export default function Home() {
         },
       );
       const updatedCase = data.case;
+      setCaseDetails(updatedCase);
       if (data.execution_mode === "parallel" || data.execution_mode === "serial") {
         setPathExecutionMode(data.execution_mode);
       }
@@ -409,9 +412,12 @@ export default function Home() {
       );
       await refreshAgentRuns();
       await refreshTimeline();
-      setMessage(
-        `Path Agent 已${data.execution_mode === "parallel" ? "并行" : "逐条"}完成 ${requestedPathIds.length} 条 Path 的可审查替代方案。 `,
-      );
+      const waitingCount = (updatedCase.path_attempts ?? []).filter(
+        (attempt) => requestedPathIds.includes(attempt.path_id) && attempt.state === "AWAITING_INFORMATION",
+      ).length;
+      setMessage(waitingCount > 0
+        ? `Path Agent 已暂停 ${waitingCount} 条 Path 等待人工补充信息；问题已投递给对应角色。`
+        : `Path Agent 已完成 ${requestedPathIds.length} 条 Path 的可审查方案。`);
     } catch (error) {
       setFailedAiRun("alternatives");
       setMessage(
@@ -605,15 +611,19 @@ export default function Home() {
     caseId: string,
     node: CommitmentNode,
     decision: CommitmentDecision,
+    expectedRevision: number | null,
+    reason: string,
   ) {
+    if (expectedRevision === null) throw new Error("未获取到审批版本，请重新打开审批依据。");
     setBusy(true);
     setMessage("");
     try {
       const data = await apiPost<CaseDetails>(
         `/api/cases/${caseId}/paths/${node.path_id}/commitments/${node.id}/decision`,
-        { actor: currentIdentity.name, role: currentIdentity.role, decision },
+        { actor: currentIdentity.name, role: currentIdentity.role, decision, expected_revision: expectedRevision, reason },
       );
       if (caseId === activeCaseId) {
+        setCaseDetails(data);
         setCommitmentNodes(data.commitment_nodes ?? []);
         setPathAttempts(data.path_attempts ?? []);
         setPhase(data.phase);
@@ -621,9 +631,27 @@ export default function Home() {
       }
       setApprovalReview(null);
       const result = decision === "APPROVE" ? "通过" : decision === "REVISE" ? "要求修改" : "否决";
-      setMessage(`${currentIdentity.name} 已${result} ${caseId} 的 ${node.id} 节点。`);
-    } catch {
-      setMessage("审批操作失败：请确认当前身份、节点状态与本地 API。 ");
+      setMessage(`${currentIdentity.name} 已${result} ${caseId} 的方案 v${expectedRevision}。`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function answerInformation(pathId: string, request: InformationRequest, answer: string) {
+    setBusy(true);
+    setMessage("");
+    try {
+      const data = await apiPost<CaseDetails>(
+        `/api/cases/${activeCaseId}/paths/${pathId}/information-requests/${request.id}/answer`,
+        { actor: currentIdentity.name, role: currentIdentity.role, answer },
+      );
+      setCaseDetails(data);
+      setPathAttempts(data.path_attempts ?? []);
+      setCommitmentNodes(data.commitment_nodes ?? []);
+      setPhase(data.phase);
+      await refreshTimeline();
+      setMessage("补充信息已记录；全部问题回答后，由 Case Owner 继续 Path 推演。");
+      setCaseRefreshKey((current) => current + 1);
     } finally {
       setBusy(false);
     }
@@ -638,19 +666,25 @@ export default function Home() {
   };
   const activeStageIndex = phaseStageIndex[phase] ?? 0;
   const isCaseClosed = caseStatus === "CLOSED";
-  const currentStage = isCaseClosed ? "Case 已关闭" : stages[activeStageIndex];
+  const pendingInformation = pathAttempts.flatMap((attempt) =>
+    (attempt.information_requests ?? [])
+      .filter((request) => request.answer === null)
+      .map((request) => ({ pathId: attempt.path_id, request })),
+  );
+  const currentStage = isCaseClosed ? "Case 已关闭" : pendingInformation.length > 0 ? "等待补充信息" : stages[activeStageIndex];
   const synthesisRevision = synthesisReport?.revision ?? ownerDecision?.synthesis_revision;
   const pendingExplorationPathIds = manifestPaths
     .filter((path) => path.selected)
     .filter((path) => {
       const attempt = pathAttempts.find((item) => item.path_id === path.id);
-      return (
-        !attempt || attempt.state === "REVISING" || !isSolutionRevision(attempt.solution_revision)
-      );
+      return isPathRunnable(attempt);
     })
     .map((path) => path.id);
-  const completedExplorationCount =
-    manifestPaths.filter((path) => path.selected).length - pendingExplorationPathIds.length;
+  const completedExplorationCount = manifestPaths.filter((path) => {
+    const attempt = pathAttempts.find((item) => item.path_id === path.id);
+    return path.selected && isSolutionRevision(attempt?.solution_revision) &&
+      !isPathRunnable(attempt) && attempt?.state !== "AWAITING_INFORMATION";
+  }).length;
   const selectedPathViews = manifestPaths
     .filter((path) => path.selected)
     .map((path) => {
@@ -690,32 +724,15 @@ export default function Home() {
     manifestPaths.length > 0 &&
     ["PATH_EXPLORATION", "PROFESSIONAL_COMMITMENT", "FINAL_REVIEW"].includes(phase);
 
-  function approvalActions(caseId: string, node: CommitmentNode) {
+  function approvalActions(caseId: string, node: CommitmentNode, context: ApprovalContext) {
     if (node.status !== "PENDING" || node.role !== currentIdentity.role) return null;
     return (
-      <div className="approvalActions" aria-label={`${node.id} 审批操作`}>
-        <button
-          className="decisionApprove"
-          disabled={busy}
-          onClick={() => decideCommitment(caseId, node, "APPROVE")}
-        >
-          通过
-        </button>
-        <button
-          className="decisionRevise"
-          disabled={busy}
-          onClick={() => decideCommitment(caseId, node, "REVISE")}
-        >
-          修改
-        </button>
-        <button
-          className="decisionReject"
-          disabled={busy}
-          onClick={() => decideCommitment(caseId, node, "REJECT")}
-        >
-          否决
-        </button>
-      </div>
+      <CommitmentDecisionForm
+        key={`${currentIdentity.name}-${caseId}-${node.path_id}-${node.id}-${context.revision}`}
+        revision={context.revision}
+        busy={busy}
+        onDecide={(decision, reason) => decideCommitment(caseId, node, decision, context.revision, reason)}
+      />
     );
   }
 
@@ -742,7 +759,7 @@ export default function Home() {
         className="reviewEvidenceButton"
         onClick={() => openApprovalReview(caseId, caseTitle, pathTitle, node, context)}
       >
-        查看审批依据 →
+        查看依据并处理 →
       </button>
     );
   }
@@ -771,7 +788,7 @@ export default function Home() {
         className={`dagNode ${node.depends_on.length ? "downstream" : "upstream"} ${node.status.toLowerCase()}`}
         key={`${node.path_id}-${node.id}`}
       >
-        <span>{statusLabel}</span>
+        <span>{statusLabel}{node.status === "READY" && node.reviewed_revision != null ? ` · v${node.reviewed_revision}` : ""}</span>
         <h3>{node.role}</h3>
         <p>{commitmentCopy[node.id] ?? "等待责任人确认"}</p>
         {approvalReviewButton(
@@ -781,7 +798,6 @@ export default function Home() {
           node,
           approvalContextFor(revision, node.role),
         )}
-        {approvalActions(activeCaseId, node)}
       </article>
     );
   }
@@ -838,27 +854,52 @@ export default function Home() {
         </span>
       </div>
       <p className="lead">
-        Path Agent 正在为每条已选 Path 形成独立的
-        SolutionRevision。全部完成后，本阶段自动结束，平台才会开放专业承诺审批。
+        {pendingInformation.length > 0
+          ? `有 ${pendingInformation.length} 个问题需要人工补充。对应 Path 已暂停，回答会进入下一轮推演。`
+          : "Path Agent 为每条已选 Path 形成可审查方案。全部完成后，平台开放专业承诺审批。"}
       </p>
+      {pendingInformation.length > 0 && (
+        <section className="caseInformationRequests" aria-label="待补充的信息">
+          {pendingInformation.map(({ pathId, request }) => (
+            <article className="caseInformationRequest" key={`${pathId}-${request.id}`}>
+              <header>
+                <span>Path Agent 请求信息</span>
+                <small>{manifestPaths.find((path) => path.id === pathId)?.title ?? pathId} · {request.role}</small>
+              </header>
+              <h3>{request.question}</h3>
+              <p>{request.reason}</p>
+              {request.role === currentIdentity.role ? (
+                <InformationAnswerForm
+                  key={`${currentIdentity.name}-${pathId}-${request.id}`}
+                  busy={busy}
+                  onAnswer={(answer) => answerInformation(pathId, request, answer)}
+                />
+              ) : <small className="informationWaiting">等待{request.role}补充，可在其“我的待办”中处理。</small>}
+            </article>
+          ))}
+        </section>
+      )}
       <div className="pathExplorationProgress" aria-label="Path 探索进度">
         {manifestPaths
           .filter((path) => path.selected)
           .map((path) => {
             const attempt = pathAttempts.find((item) => item.path_id === path.id);
             const complete =
-              isSolutionRevision(attempt?.solution_revision) && attempt?.state !== "REVISING";
+              isSolutionRevision(attempt?.solution_revision) && !isPathRunnable(attempt) && attempt?.state !== "AWAITING_INFORMATION";
+            const waiting = attempt?.state === "AWAITING_INFORMATION";
             return (
-              <article className={complete ? "complete" : "pending"} key={path.id}>
-                <span>{complete ? "✓" : "AI"}</span>
+              <article className={complete ? "complete" : waiting ? "waiting" : "pending"} key={path.id}>
+                <span>{complete ? "✓" : waiting ? "?" : "AI"}</span>
                 <div>
                   <strong>{path.title}</strong>
                   <small>
                     {complete
                       ? "SolutionRevision 已就绪"
-                      : attempt?.state === "REVISING"
+                      : waiting
+                        ? "已暂停 · 等待人工补充信息"
+                        : attempt?.state === "REVISING"
                         ? "根据专业意见重新推演"
-                        : "等待 Path Agent 完成"}
+                        : "待继续推演"}
                   </small>
                 </div>
               </article>
@@ -869,14 +910,17 @@ export default function Home() {
         <strong>阶段出口</strong>
         <p>所有已选 Path 均产出可审查方案 → 进入“专业承诺”并开放审批 DAG。</p>
       </div>
-      {failedAiRun === "alternatives" && (
+      {canViewManifest && pendingExplorationPathIds.length > 0 && (
         <button
           className="primary explorationRetry"
-          disabled={busy || pendingExplorationPathIds.length === 0}
+          disabled={busy}
           onClick={() => generateAlternatives(pendingExplorationPathIds)}
         >
-          重试未完成的 Path Agent
+          {failedAiRun === "alternatives" ? "重试可执行的 Path" : "继续 Path 推演"}
         </button>
+      )}
+      {!canViewManifest && pendingExplorationPathIds.length > 0 && (
+        <p className="informationWaiting">已有 Path 可以继续，等待 Case Owner 启动推演。</p>
       )}
     </>
   ) : phase === "PROFESSIONAL_COMMITMENT" ? (
@@ -930,6 +974,9 @@ export default function Home() {
                   <div className="solutionRecommendation">
                       <p>{revision.recommendation}</p>
                   </div>
+                  {revision.change_summary && (
+                    <div className="solutionChangeSummary"><strong>本轮修改说明</strong><p>{revision.change_summary}</p></div>
+                  )}
                   {runs.length > 0 && (
                     <>
                       <button
@@ -1322,7 +1369,7 @@ export default function Home() {
 
           <section className="decisionFocus" aria-label="当前处理重点">
             <div><span className="focusEyebrow">{isCaseClosed ? "已完成" : "当前处理"}</span><h2>{caseDetails ? currentStage : "正在同步 Case"}</h2></div>
-            <p>{!caseDetails ? "正在读取当前进度与责任信息。" : isCaseClosed ? "最终决定已记录，可查阅方案与完整流转记录。" : phase === "MANIFEST_REVIEW" ? "请 Case Owner 选择本轮探索路径，再批准启动。" : phase === "PROFESSIONAL_COMMITMENT" ? `等待专业评审：${Array.from(new Set(commitmentNodes.filter((node) => node.status === "PENDING").map((node) => node.role))).join("、") || "正在汇合评审结果"}。` : phase === "PATH_EXPLORATION" ? "Agent 正在推演已批准路径，完成后进入专业评审。" : phase === "FINAL_REVIEW" ? "汇总各路径结果与剩余风险，由 Case Owner 作出最终决定。" : "根据 Case 事实生成候选路径，准备进入评审。"}</p>
+            <p>{!caseDetails ? "正在读取当前进度与责任信息。" : isCaseClosed ? "最终决定已记录，可查阅方案与完整流转记录。" : phase === "MANIFEST_REVIEW" ? "请 Case Owner 选择本轮探索路径，再批准启动。" : phase === "PROFESSIONAL_COMMITMENT" ? `等待专业评审：${Array.from(new Set(commitmentNodes.filter((node) => node.status === "PENDING").map((node) => node.role))).join("、") || "正在汇合评审结果"}。` : phase === "PATH_EXPLORATION" ? pendingInformation.length > 0 ? `等待补充信息：${Array.from(new Set(pendingInformation.map(({ request }) => request.role))).join("、")}。` : canViewManifest ? "已批准路径可继续推演，形成新方案后进入专业评审。" : "等待 Case Owner 继续已批准路径的推演。" : phase === "FINAL_REVIEW" ? "汇总各路径结果与剩余风险，由 Case Owner 作出最终决定。" : "根据 Case 事实生成候选路径，准备进入评审。"}</p>
             <a href="#current-action" onClick={() => document.getElementById("current-action")?.focus({ preventScroll: true })}>{isCaseClosed ? "查看结果" : "查看当前步骤"} <span aria-hidden="true">↓</span></a>
           </section>
 
@@ -1419,6 +1466,33 @@ export default function Home() {
                           {eventPath ? pathLabel(eventPath) : event.details.path_id} · 提交推荐方案供专业角色评审
                           · {formatThreadTime(event.created_at)}
                         </span>
+                        {event.details.change_summary && <span className="threadContent">本轮修改：{event.details.change_summary}</span>}
+                      </p>
+                    </div>
+                  );
+                }
+                if (event.event_type === "information.requested") {
+                  return (
+                    <div className="threadEvent informationThreadEvent" key={event.id}>
+                      <BotIcon kind="path" className="eventIcon botEvent" />
+                      <p>
+                        <strong>Path Agent 请{event.details.role}补充信息</strong>
+                        <span>{event.details.path_id} · {formatThreadTime(event.created_at)}</span>
+                        <span className="threadContent">{event.details.question}</span>
+                        {event.details.reason && <span className="threadContent">原因：{event.details.reason}</span>}
+                      </p>
+                    </div>
+                  );
+                }
+                if (event.event_type === "information.answered") {
+                  return (
+                    <div className="threadEvent completedEvent informationThreadEvent" key={event.id}>
+                      <PersonIcon name={event.details.actor} fallback={event.details.actor?.slice(0, 1) ?? "人"} className="eventIcon humanEvent" />
+                      <p>
+                        <strong>{event.details.actor}（{event.details.role}）提供补充信息</strong>
+                        <span>{event.details.path_id} · {formatThreadTime(event.created_at)}</span>
+                        <span className="threadContent">问题：{event.details.question}</span>
+                        <span className="threadContent">回答：{event.details.answer}</span>
                       </p>
                     </div>
                   );
@@ -1434,11 +1508,13 @@ export default function Home() {
                       <p>
                         <strong>
                           {event.details.actor}（{event.details.role}）批准 {event.details.node_id}
+                          {event.details.revision != null ? ` · 方案 v${event.details.revision}` : ""}
                         </strong>
                         <span>
                           {commitmentCopy[event.details.node_id ?? ""] ?? "专业责任节点"}
                           已确认，节点变为 READY · {formatThreadTime(event.created_at)}
                         </span>
+                        {event.details.reason && <span className="threadContent">理由：{event.details.reason}</span>}
                       </p>
                     </div>
                   );
@@ -1459,11 +1535,13 @@ export default function Home() {
                         <strong>
                           {event.details.actor}（{event.details.role}）
                           {isRevision ? "要求修改" : "否决"} {event.details.node_id}
+                          {event.details.revision != null ? ` · 方案 v${event.details.revision}` : ""}
                         </strong>
                         <span>
                           {isRevision ? "PathAttempt 进入 REVISING" : "当前 PathAttempt 已结束"} ·{" "}
                           {formatThreadTime(event.created_at)}
                         </span>
+                        {event.details.reason && <span className="threadContent">理由：{event.details.reason}</span>}
                       </p>
                     </div>
                   );
@@ -1792,7 +1870,7 @@ export default function Home() {
           className="approvalReviewBackdrop"
           role="presentation"
           onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setApprovalReview(null);
+            if (event.target === event.currentTarget && !busy) setApprovalReview(null);
           }}
         >
           <aside
@@ -1808,13 +1886,13 @@ export default function Home() {
                   {approvalReview.caseId} · {approvalReview.pathTitle}
                 </p>
               </div>
-              <button aria-label="关闭审批依据" onClick={() => setApprovalReview(null)}>
+              <button aria-label="关闭审批依据" disabled={busy} onClick={() => setApprovalReview(null)}>
                 ×
               </button>
             </header>
             <div className="approvalReviewBody">
               <section className="approvalScope">
-                <small>审批事项</small>
+                <small>审批事项 · 方案 v{approvalReview.context.revision ?? "—"}</small>
                 <strong>{commitmentCopy[approvalReview.node.id] ?? "确认本节点专业判断"}</strong>
               </section>
               <section className="evidenceSection roleEvidence">
@@ -1831,6 +1909,7 @@ export default function Home() {
                   <p>{approvalReview.context.recommendation || "暂无推荐方案。"}</p>
                 </div>
               </details>
+              {approvalActions(approvalReview.caseId, approvalReview.node, approvalReview.context)}
             </div>
             <footer>
               <span>
@@ -1839,7 +1918,6 @@ export default function Home() {
                   {currentIdentity.name} · {currentIdentity.role}
                 </strong>
               </span>
-              {approvalActions(approvalReview.caseId, approvalReview.node)}
             </footer>
           </aside>
         </div>

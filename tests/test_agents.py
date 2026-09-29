@@ -13,7 +13,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from langchain_core.outputs import ChatGeneration, ChatResult
 
 from agentic_cm.agent_runtime import AgentError, AgentExecutionError, AgentOutputError
-from agentic_cm.domain import PathAgentResult, RoleReport, SolutionRevision
+from agentic_cm.domain import InformationQuestion, PathAgentResult, RoleReport, SolutionRevision
 from agentic_cm.orchestrator import (
     DeterministicPlannerAdapter,
     planner_from_environment,
@@ -863,6 +863,7 @@ def test_deterministic_mode_delays_every_agent_stage(
                 node_id,
                 actor=actor,
                 role=role,
+                expected_revision=1,
             )
         started = perf_counter()
         await service.synthesize_case(
@@ -895,6 +896,32 @@ def test_path_agent_cannot_omit_required_role_reports(tmp_path: Path) -> None:
         asyncio.run(service.execute_path(DEMO_CASE_ID, "PATH-01", actor=OWNER_ACTOR, role=OWNER_ROLE))
     case = service.get_case(DEMO_CASE_ID)
     assert case.path_attempts[0].solution_revision is None
+
+
+@pytest.mark.parametrize("invalid", ["unknown_role", "mixed_solution", "duplicate_question"])
+def test_information_requests_cannot_bypass_path_output_boundaries(tmp_path: Path, invalid: str) -> None:
+    class AskingAdapter:
+        profile = "test/invalid-information"
+
+        async def generate(self, context, trace):
+            question = InformationQuestion(
+                role="不存在的角色" if invalid == "unknown_role" else context.required_role_reports[0]["role"],
+                question="请提供本批次的有效测试结果。",
+                reason="冻结资料缺少本批次验证，无法确认候选可行性。",
+            )
+            return PathAgentResult(
+                information_requests=[question, question] if invalid == "duplicate_question" else [question],
+                recommendation="缺少证据却提出方案。" if invalid == "mixed_solution" else "",
+            )
+
+    service = make_service(tmp_path, path_agent=AskingAdapter())
+    orchestrate(service)
+    service.approve_manifest(DEMO_CASE_ID, ["PATH-01"], actor=OWNER_ACTOR, role=OWNER_ROLE)
+    before = service.get_case(DEMO_CASE_ID).to_dict()
+    with pytest.raises(AgentOutputError):
+        asyncio.run(service.execute_path(DEMO_CASE_ID, "PATH-01", actor=OWNER_ACTOR, role=OWNER_ROLE))
+    assert service.get_case(DEMO_CASE_ID).to_dict() == before
+    assert service.get_agent_runs(DEMO_CASE_ID, actor=OWNER_ACTOR, role=OWNER_ROLE, agent_type="path")[0]["status"] == "FAILED"
 
 
 @pytest.mark.parametrize("field", ["recommendation", "role", "dimension", "report"])
@@ -1061,6 +1088,12 @@ def test_path_agent_context_files_project_only_generation_inputs() -> None:
         },),
         required_role_reports=({"role": "主计划", "dimension": "供应可行性"},),
         previous_solution_revision=None,
+        revision_feedback=({"role": "研发", "actor": "林乔", "revision": 1, "reason": "补充温度等级验证。"},),
+        human_information=({
+            "id": "INFO-1", "role": "主计划", "question": "请确认可用数量。",
+            "reason": "当前库存快照缺失。", "answer": "已核查可用数量为一百件。",
+            "answered_by": "王淼", "answered_at": "2026-09-29T01:00:00+00:00",
+        },),
     )
 
     files = _context_files(context)
@@ -1078,6 +1111,8 @@ def test_path_agent_context_files_project_only_generation_inputs() -> None:
         "content": {"summary": "客户认证可能造成返工。"},
     }]
     snapshot = json.loads(files["/case/snapshot.json"])
+    assert json.loads(files["/case/review-feedback.json"]) == list(context.revision_feedback)
+    assert json.loads(files["/case/human-information.json"]) == list(context.human_information)
     assert "id" not in snapshot
     assert "title" not in snapshot
     assert "classification" not in snapshot
@@ -1273,7 +1308,7 @@ def test_synthesis_repairs_paraphrased_artifact_refs(tmp_path: Path) -> None:
                 ("TECH", "林乔", "研发"),
                 ("CUSTOMER", "赵宁", "供应经理"),
             ):
-                service.approve_commitment(DEMO_CASE_ID, "PATH-01", node_id, actor=actor, role=role)
+                service.approve_commitment(DEMO_CASE_ID, "PATH-01", node_id, actor=actor, role=role, expected_revision=1)
             return await service.synthesize_case(DEMO_CASE_ID, actor=OWNER_ACTOR, role=OWNER_ROLE)
 
     case = asyncio.run(scenario())

@@ -7,7 +7,7 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .agent_runtime import AgentError, AgentExecutionError
 from .config import load_runtime_environment
@@ -58,10 +58,18 @@ class PathExecutionRequest(OwnerActionRequest):
 class CommitmentApprovalRequest(BaseModel):
     actor: str
     role: str
+    expected_revision: int = Field(gt=0)
 
 
 class CommitmentDecisionRequest(CommitmentApprovalRequest):
     decision: CommitmentDecision
+    reason: str | None = None
+
+
+class InformationAnswerRequest(BaseModel):
+    actor: str
+    role: str
+    answer: str
 
 
 class OwnerDecisionRequest(OwnerActionRequest):
@@ -239,7 +247,10 @@ def approve_commitment(
     node_id: str,
     request: CommitmentApprovalRequest,
 ):
-    service.approve_commitment(case_id, path_id, node_id, actor=request.actor, role=request.role)
+    service.approve_commitment(
+        case_id, path_id, node_id, actor=request.actor, role=request.role,
+        expected_revision=request.expected_revision,
+    )
     return service.get_case_view(case_id, actor=request.actor, role=request.role)
 
 
@@ -257,6 +268,18 @@ def decide_commitment(
         decision=request.decision,
         actor=request.actor,
         role=request.role,
+        expected_revision=request.expected_revision,
+        reason=request.reason,
+    )
+    return service.get_case_view(case_id, actor=request.actor, role=request.role)
+
+
+@app.post("/api/cases/{case_id}/paths/{path_id}/information-requests/{request_id}/answer")
+def answer_information_request(
+    case_id: str, path_id: str, request_id: str, request: InformationAnswerRequest,
+):
+    service.answer_information_request(
+        case_id, path_id, request_id, actor=request.actor, role=request.role, answer=request.answer,
     )
     return service.get_case_view(case_id, actor=request.actor, role=request.role)
 

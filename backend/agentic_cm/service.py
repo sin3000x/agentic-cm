@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from uuid import uuid4
 
-from .agent_run import agent_run
+from .agent_run import adapter_profile_of, agent_run
 from .agent_runtime import AgentError
 from .capabilities import CapabilityConfigurationError, CapabilityRegistry, default_registry
 from .config import agent_adapter_from_environment, path_execution_mode_from_environment, path_max_concurrency_from_environment
@@ -13,6 +14,7 @@ from .domain import (
     CommitmentDecision,
     CommitmentNode,
     HumanProposal,
+    InformationRequest,
     NodeStatus,
     OrchestrationPhase,
     OwnerDecision,
@@ -210,10 +212,12 @@ class CaseService:
         public_fields = {
             CaseEvent.MANIFEST_PROPOSED: ("revision",),
             CaseEvent.MANIFEST_APPROVED: ("actor",),
-            CaseEvent.SOLUTION_REVISION_PROPOSED: ("path_id", "revision"),
-            CaseEvent.COMMITMENT_APPROVED: ("actor", "role", "node_id", "path_id"),
-            CaseEvent.COMMITMENT_REVISION_REQUESTED: ("actor", "role", "node_id", "path_id"),
-            CaseEvent.COMMITMENT_REJECTED: ("actor", "role", "node_id", "path_id"),
+            CaseEvent.SOLUTION_REVISION_PROPOSED: ("path_id", "revision", "change_summary"),
+            CaseEvent.INFORMATION_REQUESTED: ("path_id", "request_id", "role", "question", "reason"),
+            CaseEvent.INFORMATION_ANSWERED: ("path_id", "request_id", "role", "actor", "question", "answer"),
+            CaseEvent.COMMITMENT_APPROVED: ("actor", "role", "node_id", "path_id", "revision", "reason"),
+            CaseEvent.COMMITMENT_REVISION_REQUESTED: ("actor", "role", "node_id", "path_id", "revision", "reason"),
+            CaseEvent.COMMITMENT_REJECTED: ("actor", "role", "node_id", "path_id", "revision", "reason"),
             CaseEvent.SYNTHESIS_PROPOSED: ("revision", "successful_path_count", "failed_path_count"),
             CaseEvent.OWNER_DECISION: ("actor", "role", "action", "synthesis_revision", "guidance"),
         }
@@ -448,13 +452,39 @@ class CaseService:
             initial_attempt = next(
                 attempt for attempt in case_snapshot.path_attempts if attempt.path_id == path_id
             )
+            if any(request.answer is None for request in initial_attempt.information_requests):
+                raise InvalidTransitionError("Path is waiting for human information before it can run again")
             initial_solution_revision = initial_attempt.solution_revision
-            solution_revision = await self.path_agent.run(
+            events = self.repository.list_events(case_id)
+            next_revision = max(
+                (
+                    event["payload"]["revision"] for event in events
+                    if event["event_type"] == CaseEvent.SOLUTION_REVISION_PROPOSED
+                    and event["payload"].get("path_id") == path_id
+                ),
+                default=initial_solution_revision.revision if initial_solution_revision else 0,
+            ) + 1
+            revision_feedback = []
+            if initial_solution_revision:
+                latest_approval = max(
+                    (event["id"] for event in events if event["event_type"] == CaseEvent.MANIFEST_APPROVED),
+                    default=0,
+                )
+                revision_feedback = [
+                    event["payload"] for event in events
+                    if event["id"] > latest_approval
+                    and event["event_type"] == CaseEvent.COMMITMENT_REVISION_REQUESTED
+                    and event["payload"].get("path_id") == path_id
+                    and event["payload"].get("revision") == initial_solution_revision.revision
+                ]
+            result = await self.path_agent.run(
                 case_snapshot,
                 path_id,
                 self._path_titles(case_snapshot).get(path.definition, path.definition),
                 resolution,
                 run.trace,
+                revision_feedback=tuple(revision_feedback),
+                next_revision=next_revision,
             )
             lock = self._path_commit_locks.setdefault(case_id, asyncio.Lock())
             async with lock:
@@ -463,8 +493,37 @@ class CaseService:
                 current_attempt = next(
                     attempt for attempt in case.path_attempts if attempt.path_id == path_id
                 )
-                if current_attempt.solution_revision != initial_solution_revision:
+                if current_attempt != initial_attempt:
                     raise InvalidTransitionError(f"Path {path_id} changed while its Agent was running")
+                if result.information_requests:
+                    requests = [
+                        InformationRequest(id=f"INFO-{uuid4()}", **question.model_dump())
+                        for question in result.information_requests
+                    ]
+                    case.path_attempts = [
+                        attempt.model_copy(update={
+                            "state": PathAttemptState.AWAITING_INFORMATION,
+                            "information_requests": [*attempt.information_requests, *requests],
+                        }) if attempt.path_id == path_id else attempt
+                        for attempt in case.path_attempts
+                    ]
+                    case.phase = OrchestrationPhase.PATH_EXPLORATION
+                    case.touch()
+                    for request in requests:
+                        self.repository.save(case, CaseEvent.INFORMATION_REQUESTED, {
+                            "path_id": path_id,
+                            "request_id": request.id,
+                            "role": request.role,
+                            "question": request.question,
+                            "reason": request.reason,
+                        })
+                    run.complete(
+                        "信息补充请求已持久化，等待责任角色提供资料",
+                        {"path_id": path_id, "request_ids": [request.id for request in requests]},
+                        adapter_profile=adapter_profile_of(self.path_agent.adapter),
+                    )
+                    return case
+                solution_revision = result
                 case.path_attempts = [
                     attempt.model_copy(update={
                         "state": PathAttemptState.AWAITING_COMMITMENT,
@@ -472,17 +531,19 @@ class CaseService:
                     }) if attempt.path_id == path_id else attempt
                     for attempt in case.path_attempts
                 ]
-                if all(attempt.solution_revision for attempt in case.path_attempts):
+                if all(attempt.state in {
+                    PathAttemptState.AWAITING_COMMITMENT,
+                    PathAttemptState.SUCCEEDED,
+                    PathAttemptState.REJECTED,
+                } for attempt in case.path_attempts):
                     case.phase = OrchestrationPhase.PROFESSIONAL_COMMITMENT
-                ready_ids = {
-                    node.id for node in case.commitment_nodes
-                    if node.path_id == path_id and node.status is NodeStatus.READY
-                }
                 case.commitment_nodes = [
                     node.model_copy(update={
-                        "status": NodeStatus.PENDING if set(node.depends_on).issubset(ready_ids) else NodeStatus.BLOCKED
+                        "status": NodeStatus.BLOCKED if node.depends_on else NodeStatus.PENDING,
+                        "reviewed_revision": None,
+                        "decision_reason": None,
                     })
-                    if node.path_id == path_id and node.status is NodeStatus.STALE
+                    if node.path_id == path_id
                     else node
                     for node in case.commitment_nodes
                 ]
@@ -491,6 +552,7 @@ class CaseService:
                     "path_id": path_id,
                     "revision": solution_revision.revision,
                     "generated_by": solution_revision.generated_by,
+                    "change_summary": solution_revision.change_summary,
                     "next_phase": case.phase.value,
                 })
             run.complete(
@@ -508,13 +570,28 @@ class CaseService:
     def get_inbox(self, role: str) -> list[dict]:
         items: list[dict] = []
         for case in self.repository.list_cases():
-            if case.phase is not OrchestrationPhase.PROFESSIONAL_COMMITMENT:
+            if case.status is not CaseStatus.OPEN:
                 continue
             definition_titles = self._path_titles(case)
             path_titles = {
                 path.id: definition_titles.get(path.definition, path.definition)
                 for path in (case.manifest.paths if case.manifest else ())
             }
+            for attempt in case.path_attempts:
+                if attempt.state is not PathAttemptState.AWAITING_INFORMATION:
+                    continue
+                for request in attempt.information_requests:
+                    if request.role == role and request.answer is None:
+                        items.append({
+                            "kind": "information_request",
+                            "case_id": case.id,
+                            "case_title": case.title,
+                            "path_id": attempt.path_id,
+                            "path_title": path_titles.get(attempt.path_id, attempt.path_id),
+                            "information_request": request.model_dump(mode="json"),
+                        })
+            if case.phase is not OrchestrationPhase.PROFESSIONAL_COMMITMENT:
+                continue
             for node in case.commitment_nodes:
                 if node.role != role or node.status is not NodeStatus.PENDING:
                     continue
@@ -531,6 +608,7 @@ class CaseService:
                     None,
                 )
                 items.append({
+                    "kind": "commitment",
                     "case_id": case.id,
                     "case_title": case.title,
                     "path_id": node.path_id,
@@ -544,9 +622,50 @@ class CaseService:
                 })
         return items
 
-    def approve_commitment(self, case_id: str, path_id: str, node_id: str, *, actor: str, role: str):
+    def answer_information_request(
+        self, case_id: str, path_id: str, request_id: str, *, actor: str, role: str, answer: str,
+    ):
+        case = self.get_case(case_id)
+        attempt = next((item for item in case.path_attempts if item.path_id == path_id), None)
+        request = next(
+            (item for item in attempt.information_requests if item.id == request_id), None,
+        ) if attempt else None
+        if request is None:
+            raise InvalidTransitionError("Unknown information request")
+        if request.role != role:
+            raise AuthorizationError(f"Information request requires role {request.role}")
+        if not actor.strip() or not answer.strip():
+            raise InvalidTransitionError("Information answer requires an actor and a non-empty answer")
+        if request.answer is not None:
+            raise InvalidTransitionError("Information request has already been answered")
+        if case.status is not CaseStatus.OPEN or attempt.state is not PathAttemptState.AWAITING_INFORMATION:
+            raise InvalidTransitionError("Path is not waiting for information")
+        requests = [
+            item.model_copy(update={
+                "answer": answer.strip(), "answered_by": actor, "answered_at": utc_now(),
+            }) if item.id == request_id else item
+            for item in attempt.information_requests
+        ]
+        next_state = PathAttemptState.AWAITING_INFORMATION
+        if all(item.answer is not None for item in requests):
+            next_state = PathAttemptState.REVISING if attempt.solution_revision else PathAttemptState.PLANNED
+        case.path_attempts = [
+            item.model_copy(update={"information_requests": requests, "state": next_state})
+            if item.path_id == path_id else item for item in case.path_attempts
+        ]
+        case.touch()
+        self.repository.save(case, CaseEvent.INFORMATION_ANSWERED, {
+            "path_id": path_id, "request_id": request_id, "role": role,
+            "actor": actor, "question": request.question, "answer": answer.strip(),
+        })
+        return case
+
+    def approve_commitment(
+        self, case_id: str, path_id: str, node_id: str, *, actor: str, role: str, expected_revision: int,
+    ):
         return self.decide_commitment(
-            case_id, path_id, node_id, decision=CommitmentDecision.APPROVE, actor=actor, role=role
+            case_id, path_id, node_id, decision=CommitmentDecision.APPROVE,
+            actor=actor, role=role, expected_revision=expected_revision,
         )
 
     def decide_commitment(
@@ -558,6 +677,8 @@ class CaseService:
         decision: CommitmentDecision,
         actor: str,
         role: str,
+        expected_revision: int,
+        reason: str | None = None,
     ):
         case = self.get_case(case_id)
         if case.phase is not OrchestrationPhase.PROFESSIONAL_COMMITMENT:
@@ -578,10 +699,20 @@ class CaseService:
             raise InvalidTransitionError("Commitment is not awaiting Inbox approval")
         if not actor.strip():
             raise InvalidTransitionError("Commitment decision requires an actor")
+        attempt = next((item for item in case.path_attempts if item.path_id == path_id), None)
+        revision = attempt.solution_revision if attempt else None
+        if revision is None or revision.revision != expected_revision:
+            raise InvalidTransitionError("方案已更新，请刷新并重新查看审批依据后再提交。")
+        normalized_reason = reason.strip() if reason else ""
+        if decision in {CommitmentDecision.REVISE, CommitmentDecision.REJECT} and not normalized_reason:
+            raise InvalidTransitionError("Revision and rejection require a reason")
 
         nodes = list(case.commitment_nodes)
         if decision is CommitmentDecision.APPROVE:
-            nodes[target_index] = target.model_copy(update={"status": NodeStatus.READY})
+            nodes[target_index] = target.model_copy(update={
+                "status": NodeStatus.READY, "reviewed_revision": revision.revision,
+                "decision_reason": normalized_reason or None,
+            })
             ready_ids = {
                 node.id for node in nodes
                 if node.path_id == path_id and node.status is NodeStatus.READY
@@ -596,12 +727,21 @@ class CaseService:
             ]
             event_type = CaseEvent.COMMITMENT_APPROVED
         elif decision is CommitmentDecision.REVISE:
-            nodes[target_index] = target.model_copy(update={"status": NodeStatus.STALE})
+            nodes = [
+                node.model_copy(update={"status": NodeStatus.STALE}) if node.path_id == path_id else node
+                for node in nodes
+            ]
+            nodes[target_index] = nodes[target_index].model_copy(update={
+                "reviewed_revision": revision.revision, "decision_reason": normalized_reason,
+            })
             event_type = CaseEvent.COMMITMENT_REVISION_REQUESTED
             self._update_path_attempt(case, path_id, state=PathAttemptState.REVISING)
             case.phase = OrchestrationPhase.PATH_EXPLORATION
         elif decision is CommitmentDecision.REJECT:
-            nodes[target_index] = target.model_copy(update={"status": NodeStatus.REJECTED})
+            nodes[target_index] = target.model_copy(update={
+                "status": NodeStatus.REJECTED, "reviewed_revision": revision.revision,
+                "decision_reason": normalized_reason,
+            })
             nodes = [
                 node.model_copy(update={"status": NodeStatus.STALE})
                 if node.path_id == path_id
@@ -629,6 +769,13 @@ class CaseService:
             "node_id": node_id,
             "actor": actor,
             "role": role,
+            "revision": revision.revision,
+            "reason": normalized_reason,
+            "recommendation_snapshot": revision.recommendation,
+            "role_report_snapshot": next((
+                report.model_dump(mode="json") for report in revision.role_reports
+                if report.role == target.role and report.dimension == target.review_dimension
+            ), None),
         })
         return case
 

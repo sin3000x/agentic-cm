@@ -125,6 +125,26 @@
   color: #71817f;
   font-size: var(--text-xs);
 }
+.inboxItem.informationInboxItem {
+  border-color: #decba5;
+}
+.informationInboxItem > header span {
+  color: #795713;
+  background: #fff1d2;
+}
+.inboxItem > .informationReason {
+  margin-top: 9px;
+  color: #685c45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.inboxReviewBody .humanDecisionForm,
+.inboxReviewBody .humanAnswerForm {
+  padding: 16px;
+  border: 1px solid #bfd4cc;
+  border-radius: 9px;
+  background: #fff;
+}
 .inboxItem dl {
   margin: 15px 0 0;
   border-top: 1px solid #e8edec;

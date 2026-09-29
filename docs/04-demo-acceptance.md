@@ -16,7 +16,17 @@
 4. 主计划与研发并行审批，供应经理依赖二者。
 5. 全部 READY 后进入 FINAL_REVIEW；Synthesis 汇总；Owner CLOSE / KEEP_OPEN / MODIFY。
 
-REVISE 把节点标 STALE 并回到 PATH_EXPLORATION。REJECT 结束该 Path。
+REVISE 必须填写理由并携带被审版本，回到 PATH_EXPLORATION；新版方案说明改动，同 Path 全部重新审批。REJECT 同样必须填写理由并携带版本，结束该 Path；理由进入汇总依据。
+
+## 信息补充与修订验收
+
+1. Path 缺少必需事实时，Agent 提出问题；Path 为 AWAITING_INFORMATION，不新增方案版本。
+2. 指定角色在「我的待办」或 Case 中回答。其他角色、空回答和重复回答被拒绝；等待期间不能再次执行 Path。
+3. 全部回答完成后，Owner 继续推演。Agent 收到带来源的回答；原始业务事实不被静默覆盖，答案不等于审批。
+4. 先由主计划批准 v1，再由研发填写理由要求修改；Agent 收到理由并生成 v2，主计划也需要重审。
+5. 旧页面提交 v1 审批被拒绝。时间线保留问题、回答、理由、版本及改动说明。
+
+Deterministic 模式在 Case 缺少缺料数量或需要到料日期时提出信息请求，可用隔离测试数据验证这个闭环；默认完整 Demo 数据保持原黄金路径。
 
 ## 必须保持的边界
 

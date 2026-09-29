@@ -3,24 +3,25 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import AppSidebar from "../app-sidebar";
+import { CommitmentDecisionForm, InformationAnswerForm } from "../human-input";
 import { apiGet, apiPost, isAbort } from "../lib/api";
 import {
   commitmentCopy,
-  type ApprovalContext,
   type CommitmentDecision,
-  type CommitmentNode,
+  type CommitmentInboxItem,
+  type InformationInboxItem,
+  type InboxItem,
 } from "../lib/case";
 import { useDemoIdentity } from "../lib/identities";
 import "./inbox.css";
 
-type InboxItem = {
-  case_id: string;
-  case_title: string;
-  path_id: string;
-  path_title: string;
-  node: CommitmentNode;
-  approval_context: ApprovalContext;
-};
+function itemKey(item: InboxItem) {
+  return `${item.case_id}-${item.path_id}-${item.kind}-${item.kind === "commitment" ? item.node.id : item.information_request.id}`;
+}
+
+function itemRole(item: InboxItem) {
+  return item.kind === "commitment" ? item.node.role : item.information_request.role;
+}
 
 export default function InboxPage() {
   const { identity: currentIdentity } = useDemoIdentity();
@@ -52,45 +53,60 @@ export default function InboxPage() {
     setReviewItem(null);
   }
 
-  async function decide(item: InboxItem, decision: CommitmentDecision) {
-    const itemKey = `${item.case_id}-${item.path_id}-${item.node.id}`;
-    setBusyKey(itemKey);
+  async function finishItem(item: InboxItem, result: string) {
+    setItems((current) => current.filter((candidate) => itemKey(candidate) !== itemKey(item)));
+    setReviewItem(null);
+    setMessage(result);
+    try {
+      setItems(await apiGet<InboxItem[]>("/api/inbox", { role: currentIdentity.role }));
+      setLoadState("ready");
+    } catch {
+      setLoadState("error");
+    }
+  }
+
+  async function decide(item: CommitmentInboxItem, decision: CommitmentDecision, reason: string) {
+    const revision = item.approval_context.revision;
+    if (revision === null) throw new Error("未获取到审批版本，请重新打开审批依据。");
+    setBusyKey(itemKey(item));
     setMessage("");
     try {
       await apiPost(
-        `/api/cases/${item.case_id}/paths/${item.node.path_id}/commitments/${item.node.id}/decision`,
-        { actor: currentIdentity.name, role: currentIdentity.role, decision },
+        `/api/cases/${item.case_id}/paths/${item.path_id}/commitments/${item.node.id}/decision`,
+        {
+          actor: currentIdentity.name,
+          role: currentIdentity.role,
+          decision,
+          expected_revision: revision,
+          reason,
+        },
       );
-      const nextItems = await apiGet<InboxItem[]>("/api/inbox", { role: currentIdentity.role });
-      setItems(nextItems);
-      setReviewItem(null);
       const result = decision === "APPROVE" ? "通过" : decision === "REVISE" ? "要求修改" : "否决";
-      setMessage(`${currentIdentity.name} 已${result} ${item.case_id} 的 ${item.node.id} 节点。`);
-    } catch {
-      setMessage("审批操作失败：请确认当前身份、节点状态与本地 API。");
+      await finishItem(
+        item,
+        `${currentIdentity.name} 已${result} ${item.case_id} 的方案 v${revision}。`,
+      );
     } finally {
       setBusyKey(null);
     }
   }
 
-  function approvalActions(item: InboxItem) {
-    if (item.node.status !== "PENDING" || item.node.role !== currentIdentity.role) return null;
-    const itemKey = `${item.case_id}-${item.path_id}-${item.node.id}`;
-    const busy = busyKey === itemKey;
-    return (
-      <div className="inboxApprovalActions" aria-label={`${item.node.id} 审批操作`}>
-        <button className="approve" disabled={busy} onClick={() => decide(item, "APPROVE")}>
-          通过
-        </button>
-        <button className="revise" disabled={busy} onClick={() => decide(item, "REVISE")}>
-          修改
-        </button>
-        <button className="reject" disabled={busy} onClick={() => decide(item, "REJECT")}>
-          否决
-        </button>
-      </div>
-    );
+  async function answer(item: InformationInboxItem, content: string) {
+    setBusyKey(itemKey(item));
+    setMessage("");
+    try {
+      await apiPost(
+        `/api/cases/${item.case_id}/paths/${item.path_id}/information-requests/${item.information_request.id}/answer`,
+        { actor: currentIdentity.name, role: currentIdentity.role, answer: content },
+      );
+      await finishItem(item, "补充信息已记录；全部问题回答后，由 Case Owner 继续 Path 推演。");
+    } finally {
+      setBusyKey(null);
+    }
   }
+
+  const approvalCount = items.filter((item) => item.kind === "commitment").length;
+  const informationCount = items.length - approvalCount;
 
   return (
     <div className="appShell">
@@ -100,7 +116,6 @@ export default function InboxPage() {
         busy={busyKey !== null}
         onIdentitySelect={selectIdentity}
       />
-
       <main className="mainArea">
         <header className="topbar">
           <div className="breadcrumb">
@@ -115,16 +130,17 @@ export default function InboxPage() {
         <div className="inboxPage">
           <header className="inboxHero">
             <div>
-              <p className="eyebrow">ROLE-SCOPED APPROVALS</p>
+              <p className="eyebrow">MY CASE ACTIONS</p>
               <h1>我的待办</h1>
-              <p>汇总所有 Case 中分配给当前角色、且依赖已经满足的待审批节点。</p>
+              <p>处理分配给当前角色的专业审批和 Agent 信息请求。</p>
             </div>
             <div className="inboxCount">
               <strong>{loadState === "ready" ? items.length : "—"}</strong>
-              <span>待本人审批</span>
+              <span>
+                {approvalCount} 待审批 · {informationCount} 待补信息
+              </span>
             </div>
           </header>
-
           {message && (
             <div className="inboxMessage" role="status">
               {message}
@@ -132,38 +148,46 @@ export default function InboxPage() {
           )}
           {loadState === "loading" && (
             <div className="inboxState">
-              <strong>正在同步待审批节点</strong>
-              <p>审批数据来自跨 Case Inbox API。</p>
+              <strong>正在同步待办</strong>
+              <p>读取当前角色的审批节点与信息请求。</p>
             </div>
           )}
           {loadState === "error" && (
             <div className="inboxState error" role="alert">
               <strong>待办同步失败</strong>
-              <p>请确认本地 API 已启动后重试。</p>
+              <p>请确认本地 API 已启动后刷新重试。</p>
             </div>
           )}
           {loadState === "ready" && items.length === 0 && (
             <div className="inboxState">
-              <strong>当前没有待批准事项</strong>
-              <p>可从左下角切换演示身份，查看其他角色的审批节点。</p>
+              <strong>当前没有待处理事项</strong>
+              <p>可从左下角切换演示身份，查看其他角色的待办。</p>
             </div>
           )}
-
           {loadState === "ready" && items.length > 0 && (
-            <section className="inboxGrid" aria-label={`${currentIdentity.role} 待审批节点`}>
+            <section className="inboxGrid" aria-label={`${currentIdentity.role} 待处理事项`}>
               {items.map((item) => (
                 <article
-                  className="inboxItem"
-                  key={`${item.case_id}-${item.path_id}-${item.node.id}`}
+                  className={`inboxItem ${item.kind === "information_request" ? "informationInboxItem" : ""}`}
+                  key={itemKey(item)}
                 >
                   <header>
-                    <span>PENDING</span>
+                    <span>{item.kind === "commitment" ? "专业审批" : "补充信息"}</span>
                     <small>
-                      {item.path_id} · {item.node.id}
+                      {item.path_id}
+                      {item.kind === "commitment" &&
+                        ` · 方案 v${item.approval_context.revision ?? "—"}`}
                     </small>
                   </header>
-                  <h2>{commitmentCopy[item.node.id] ?? item.node.review_dimension}</h2>
+                  <h2>
+                    {item.kind === "commitment"
+                      ? (commitmentCopy[item.node.id] ?? item.node.review_dimension)
+                      : item.information_request.question}
+                  </h2>
                   <p>{item.path_title}</p>
+                  {item.kind === "information_request" && (
+                    <p className="informationReason">{item.information_request.reason}</p>
+                  )}
                   <dl>
                     <div>
                       <dt>Case</dt>
@@ -175,7 +199,7 @@ export default function InboxPage() {
                     </div>
                     <div>
                       <dt>责任角色</dt>
-                      <dd>{item.node.role}</dd>
+                      <dd>{itemRole(item)}</dd>
                     </div>
                   </dl>
                   <button
@@ -183,64 +207,95 @@ export default function InboxPage() {
                     type="button"
                     onClick={() => setReviewItem(item)}
                   >
-                    查看审批依据 →
+                    {item.kind === "commitment" ? "查看依据并处理 →" : "回答信息请求 →"}
                   </button>
-                  {approvalActions(item)}
                 </article>
               ))}
             </section>
           )}
         </div>
       </main>
-
       {reviewItem && (
         <div
           className="inboxReviewBackdrop"
           role="presentation"
           onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setReviewItem(null);
+            if (event.target === event.currentTarget && busyKey === null) setReviewItem(null);
           }}
         >
           <aside
             className="inboxReviewPanel"
             role="dialog"
             aria-modal="true"
-            aria-label={`${reviewItem.node.role} 审批依据`}
+            aria-label={`${itemRole(reviewItem)}${reviewItem.kind === "commitment" ? "审批依据" : "补充信息"}`}
           >
             <header>
               <div>
-                <h2>{reviewItem.node.role}审批依据</h2>
+                <h2>
+                  {itemRole(reviewItem)}
+                  {reviewItem.kind === "commitment" ? "审批依据" : "补充信息"}
+                </h2>
                 <p>
                   {reviewItem.case_id} · {reviewItem.path_title}
                 </p>
               </div>
-              <button aria-label="关闭审批依据" onClick={() => setReviewItem(null)}>
+              <button
+                aria-label="关闭待办详情"
+                disabled={busyKey !== null}
+                onClick={() => setReviewItem(null)}
+              >
                 ×
               </button>
             </header>
             <div className="inboxReviewBody">
-              <section>
-                <small>审批事项</small>
-                <strong>
-                  {commitmentCopy[reviewItem.node.id] ?? reviewItem.node.review_dimension}
-                </strong>
-              </section>
-              <section className="roleEvidence">
-                <small>审批依据</small>
-                <strong>
-                  {reviewItem.approval_context.role_report?.dimension ?? "暂无审批依据"}
-                </strong>
-                <p>
-                  {reviewItem.approval_context.role_report?.report ??
-                    "暂无报告，请选择“修改”要求补充。"}
-                </p>
-              </section>
-              <details>
-                <summary>查看 Agent 推荐方案</summary>
-                <div className="inboxRecommendation">
-                  <p>{reviewItem.approval_context.recommendation || "暂无推荐方案。"}</p>
-                </div>
-              </details>
+              {reviewItem.kind === "commitment" ? (
+                <>
+                  <section>
+                    <small>审批事项 · 方案 v{reviewItem.approval_context.revision ?? "—"}</small>
+                    <strong>
+                      {commitmentCopy[reviewItem.node.id] ?? reviewItem.node.review_dimension}
+                    </strong>
+                  </section>
+                  <section className="roleEvidence">
+                    <small>审批依据</small>
+                    <strong>
+                      {reviewItem.approval_context.role_report?.dimension ?? "暂无审批依据"}
+                    </strong>
+                    <p>
+                      {reviewItem.approval_context.role_report?.report ??
+                        "暂无报告，请要求修改并说明需要补充的内容。"}
+                    </p>
+                  </section>
+                  <section>
+                    <small>Agent 推荐方案</small>
+                    <p>{reviewItem.approval_context.recommendation || "暂无推荐方案。"}</p>
+                  </section>
+                  {reviewItem.node.status === "PENDING" &&
+                    reviewItem.node.role === currentIdentity.role && (
+                      <CommitmentDecisionForm
+                        key={`${currentIdentity.name}-${itemKey(reviewItem)}-${reviewItem.approval_context.revision}`}
+                        revision={reviewItem.approval_context.revision}
+                        busy={busyKey !== null}
+                        onDecide={(decision, reason) => decide(reviewItem, decision, reason)}
+                      />
+                    )}
+                </>
+              ) : (
+                <>
+                  <section className="roleEvidence">
+                    <small>Path Agent 的问题</small>
+                    <strong>{reviewItem.information_request.question}</strong>
+                    <p>{reviewItem.information_request.reason}</p>
+                  </section>
+                  {reviewItem.information_request.role === currentIdentity.role && (
+                    <InformationAnswerForm
+                      key={`${currentIdentity.name}-${itemKey(reviewItem)}`}
+                      busy={busyKey !== null}
+                      onAnswer={(content) => answer(reviewItem, content)}
+                    />
+                  )}
+                </>
+              )}
             </div>
             <footer>
               <span>
@@ -249,7 +304,6 @@ export default function InboxPage() {
                   {currentIdentity.name} · {currentIdentity.role}
                 </strong>
               </span>
-              {approvalActions(reviewItem)}
             </footer>
           </aside>
         </div>

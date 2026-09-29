@@ -11,10 +11,14 @@
 | Agent | 输入 | 输出 | 不能做 |
 |---|---|---|---|
 | Orchestrator / Planner | Case 摘要、Catalog Path、可见 Skill 入口 | 每条 Path 的 rationale + Skill 选择 | 发明/省略 Path，选择 Bundle 成员，改 Policy |
-| Path Agent | 已批准 Manifest 冻结引用、只读 tool 结果 | `PathAgentResult` | 跳过角色报告，改 Case |
+| Path Agent | 已批准 Manifest 冻结引用、只读 tool 结果、专业修改意见、人工补充资料 | 完整 `PathAgentResult` 或信息请求 | 编造缺失事实，改 Case，把资料补充当作审批 |
 | Synthesis Agent | 全部终态 PathAttempt + Commitment | `SynthesisResult` | 补造未探索 Path，杜撰 supporting_refs |
 
 平台在 Adapter 之外校验白名单，然后把 LLM 输出加上 `revision` / `generated_by` 写成 `SolutionRevision` 或 `SynthesisReport`。不要再复制一套 dataclass。
+
+Path 输出有两种互斥结果：完整方案包含 `recommendation` 和所有必需的 `role_reports`；缺信息时只返回 `information_requests`（`role/question/reason`），不生成 `SolutionRevision`。平台只接受冻结 Policy 中已有的责任角色，最多十个不重复问题。修订后的完整方案必须提供 `change_summary`。
+
+`/case/review-feedback.json` 提供当前方案版本收到的修改理由；`/case/human-information.json` 提供已回答的问题、资料和来源。它们是业务输入，不改变 Agent 的工具权限或强制审批义务。
 
 ## 运行时
 

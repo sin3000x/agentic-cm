@@ -1,0 +1,78 @@
+.humanDecisionForm,
+.humanAnswerForm {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.humanDecisionForm > strong {
+  color: #294f49;
+  font-size: var(--text-sm);
+}
+.humanInputField {
+  display: grid;
+  gap: 7px;
+  color: #405e58;
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+.humanInputField textarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 86px;
+  resize: vertical;
+  padding: 10px 12px;
+  border: 1px solid #b8ccc6;
+  border-radius: 7px;
+  background: #fff;
+  color: #233f3a;
+  font: inherit;
+  font-weight: 400;
+  line-height: 1.65;
+}
+.humanInputField textarea:focus-visible {
+  outline: 2px solid #4b9c8b;
+  outline-offset: 2px;
+}
+.humanDecisionForm > small,
+.humanAnswerForm > small {
+  color: #697c76;
+  font-size: var(--text-xs);
+  line-height: 1.6;
+}
+.humanInputError {
+  margin: 0;
+  padding: 9px 11px;
+  color: #963e31;
+  border: 1px solid #e8c6bf;
+  border-radius: 6px;
+  background: #fff5f2;
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+.humanInputActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.humanInputActions button {
+  min-height: 36px;
+  padding: 7px 14px;
+  border: 1px solid #75aa9f;
+  border-radius: 6px;
+  background: #fff;
+  color: #176f64;
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+.humanInputActions .revise {
+  color: #8a5d13;
+  border-color: #d5ad62;
+}
+.humanInputActions .reject {
+  color: #a04234;
+  border-color: #d79a90;
+}
+.humanInputActions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}

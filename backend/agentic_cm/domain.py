@@ -39,6 +39,7 @@ class NodeStatus(StrEnum):
 
 class PathAttemptState(StrEnum):
     PLANNED = "PLANNED"
+    AWAITING_INFORMATION = "AWAITING_INFORMATION"
     AWAITING_COMMITMENT = "AWAITING_COMMITMENT"
     REVISING = "REVISING"
     SUCCEEDED = "SUCCEEDED"
@@ -61,6 +62,8 @@ class CaseEvent(StrEnum):
     MANIFEST_PROPOSED = "manifest.proposed"
     MANIFEST_APPROVED = "manifest.approved"
     SOLUTION_REVISION_PROPOSED = "solution_revision.proposed"
+    INFORMATION_REQUESTED = "information.requested"
+    INFORMATION_ANSWERED = "information.answered"
     COMMITMENT_APPROVED = "commitment.approved"
     COMMITMENT_REVISION_REQUESTED = "commitment.revision_requested"
     COMMITMENT_REJECTED = "commitment.rejected"
@@ -170,6 +173,21 @@ class CommitmentNode(FrozenModel):
     status: NodeStatus
     depends_on: tuple[str, ...] = ()
     path_id: str = ""
+    reviewed_revision: int | None = None
+    decision_reason: str | None = None
+
+
+class InformationQuestion(FrozenModel):
+    role: NonEmptyText
+    question: NonEmptyText
+    reason: NonEmptyText
+
+
+class InformationRequest(InformationQuestion):
+    id: str
+    answer: str | None = None
+    answered_by: str | None = None
+    answered_at: str | None = None
 
 
 class RoleReport(MutableModel):
@@ -181,8 +199,10 @@ class RoleReport(MutableModel):
 class PathAgentResult(MutableModel):
     """Chinese Path recommendation plus one role_report per required contract."""
 
-    recommendation: NonEmptyText
-    role_reports: list[RoleReport]
+    recommendation: str = ""
+    role_reports: list[RoleReport] = Field(default_factory=list)
+    information_requests: list[InformationQuestion] = Field(default_factory=list)
+    change_summary: str = ""
 
     @model_validator(mode="after")
     def validate_unique_keys(self) -> "PathAgentResult":
@@ -202,6 +222,7 @@ class PathAttempt(FrozenModel):
     path_id: str
     state: PathAttemptState
     solution_revision: SolutionRevision | None = None
+    information_requests: list[InformationRequest] = Field(default_factory=list)
 
 
 class PathAssessment(MutableModel):

@@ -50,3 +50,21 @@ def test_manifest_http_endpoints_enforce_owner_boundary(client) -> None:
         )
         assert response.status_code == 403, f"{method.upper()} {path} must reject a non-owner"
     assert client.get(f"/api/cases/{DEMO_CASE_ID}/manifest", params=owner).status_code == 200
+
+
+def test_commitment_http_requires_the_reviewed_revision(client) -> None:
+    assert client.post(f"/api/cases/{DEMO_CASE_ID}/orchestrate", json=OWNER).status_code == 200
+    assert client.post(
+        f"/api/cases/{DEMO_CASE_ID}/manifest/approve", json={"selected_path_ids": ["PATH-01"], **OWNER},
+    ).status_code == 200
+    assert client.post(f"/api/cases/{DEMO_CASE_ID}/paths/PATH-01/execute", json=OWNER).status_code == 200
+    case_before = client.get(f"/api/cases/{DEMO_CASE_ID}", params=OWNER).json()
+    endpoint = f"/api/cases/{DEMO_CASE_ID}/paths/PATH-01/commitments/SUPPLY"
+    assert client.post(f"{endpoint}/approve", json=NON_OWNER).status_code == 422
+    assert client.post(f"{endpoint}/decision", json={"decision": "APPROVE", **NON_OWNER}).status_code == 422
+    assert client.post(f"{endpoint}/approve", json={"expected_revision": 2, **NON_OWNER}).status_code == 409
+    for decision in ("REVISE", "REJECT"):
+        assert client.post(
+            f"{endpoint}/decision", json={"decision": decision, "expected_revision": 1, **NON_OWNER},
+        ).status_code == 409
+    assert client.get(f"/api/cases/{DEMO_CASE_ID}", params=OWNER).json() == case_before

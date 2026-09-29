@@ -3411,3 +3411,81 @@ button:disabled {
 .threadEvent > p > span { color: #526b64; line-height: 1.65; }
 .threadEvent:has(.botEvent) > p { border-left: 3px solid #82afa3; }
 .pathContext > summary:focus-visible { outline: 2px solid var(--teal); outline-offset: 4px; }
+
+.caseInformationRequests {
+  display: grid;
+  gap: 14px;
+  margin: 18px 0;
+}
+.caseInformationRequest {
+  padding: 18px;
+  border: 1px solid #d9c9a6;
+  border-left: 3px solid #b3914f;
+  border-radius: 8px;
+  background: #fffdf6;
+}
+.caseInformationRequest > header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 9px;
+}
+.caseInformationRequest > header > span {
+  color: #806125;
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+.caseInformationRequest > header > small,
+.informationWaiting {
+  color: #7a6b4e;
+  font-size: var(--text-xs);
+  line-height: 1.7;
+}
+.caseInformationRequest > h3 {
+  margin: 12px 0 8px;
+  font-size: var(--text-base);
+  line-height: 1.6;
+}
+.caseInformationRequest > p {
+  margin: 0 0 16px;
+  color: #655e50;
+  font-size: var(--text-sm);
+  line-height: 1.75;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.caseInformationRequest .humanAnswerForm {
+  padding-top: 13px;
+  border-top: 1px solid #e7dec9;
+}
+.pathExplorationProgress article.waiting {
+  border-color: #e0cfaa;
+  background: #fffaf0;
+}
+.pathExplorationProgress article.waiting > span {
+  color: #89692b;
+  background: #f4e6c8;
+}
+.approvalReviewBody .humanDecisionForm {
+  padding: 16px;
+  border: 1px solid #bfd4cc;
+  border-radius: 9px;
+  background: #fff;
+}
+.threadEvent > p > .threadContent {
+  color: #304a42;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.solutionChangeSummary {
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid #d8e3de;
+  border-radius: 7px;
+  background: #fbfdfb;
+  color: #425c52;
+  font-size: var(--text-xs);
+  line-height: 1.7;
+}
+.solutionChangeSummary p { margin: 5px 0 0; white-space: pre-wrap; }

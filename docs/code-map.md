@@ -22,6 +22,7 @@ Defined in `backend/agentic_cm/domain.py` and persisted as JSON on `Case`:
 | Path Agent output | `PathAgentResult` | LLM schema; `SolutionRevision` adds revision + `generated_by` |
 | Synthesis output | `SynthesisResult` | LLM schema; `SynthesisReport` adds revision + `generated_by` |
 | Human node | `CommitmentNode` | Status is the DAG |
+| Human information | `InformationQuestion` / `InformationRequest` | Agent proposes questions; platform adds ID and human answer provenance |
 | Final call | `OwnerDecision` | |
 
 Do not add parallel dataclasses, prompt-context clones, or a flattened `ManifestPath.skills` field. If a caller needs every Skill ref, call `path.skill_refs()`.
@@ -51,3 +52,5 @@ INTAKE → MANIFEST_REVIEW → PATH_EXPLORATION → PROFESSIONAL_COMMITMENT → 
 ```
 
 Agents propose. Humans approve commitments and the Owner decision. The platform owns Case state.
+
+During Path exploration, `AWAITING_INFORMATION` pauses a Path for role-scoped human answers. It creates no solution revision or approval. Revision requests include reasons; all commitments bind the reviewed solution revision and are renewed for a new version.

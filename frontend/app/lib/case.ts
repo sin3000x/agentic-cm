@@ -67,6 +67,7 @@ export type CommitmentNode = {
   status: "BLOCKED" | "PENDING" | "READY" | "STALE" | "REJECTED";
   depends_on: string[];
   path_id: string;
+  reviewed_revision: number | null;
 };
 
 export type CommitmentDecision = "APPROVE" | "REVISE" | "REJECT";
@@ -74,6 +75,7 @@ export type CommitmentDecision = "APPROVE" | "REVISE" | "REJECT";
 export type SolutionRevision = {
   revision: number;
   recommendation: string;
+  change_summary: string;
   role_reports: Array<{ role: string; dimension: string; report: string }>;
   generated_by: string;
 };
@@ -94,9 +96,44 @@ export type ApprovalReview = {
 
 export type PathAttempt = {
   path_id: string;
-  state: "PLANNED" | "AWAITING_COMMITMENT" | "REVISING" | "SUCCEEDED" | "REJECTED";
+  state: "PLANNED" | "AWAITING_INFORMATION" | "AWAITING_COMMITMENT" | "REVISING" | "SUCCEEDED" | "REJECTED";
   solution_revision: SolutionRevision | null;
+  information_requests: InformationRequest[];
 };
+
+export type InformationRequest = {
+  id: string;
+  role: string;
+  question: string;
+  reason: string;
+  answer: string | null;
+  answered_by: string | null;
+  answered_at: string | null;
+};
+
+type InboxCase = {
+  case_id: string;
+  case_title: string;
+  path_id: string;
+  path_title: string;
+};
+
+export type CommitmentInboxItem = InboxCase & {
+  kind: "commitment";
+  node: CommitmentNode;
+  approval_context: ApprovalContext;
+};
+
+export type InformationInboxItem = InboxCase & {
+  kind: "information_request";
+  information_request: InformationRequest;
+};
+
+export type InboxItem = CommitmentInboxItem | InformationInboxItem;
+
+export function isPathRunnable(attempt: PathAttempt | undefined) {
+  return !attempt || attempt.state === "PLANNED" || attempt.state === "REVISING";
+}
 
 export type SynthesisReport = {
   revision: number;
@@ -192,6 +229,8 @@ export type TimelineEvent = {
     | "manifest.proposed"
     | "manifest.approved"
     | "solution_revision.proposed"
+    | "information.requested"
+    | "information.answered"
     | "commitment.approved"
     | "commitment.revision_requested"
     | "commitment.rejected"
@@ -210,6 +249,11 @@ export type TimelineEvent = {
     action?: "CLOSE" | "KEEP_OPEN" | "MODIFY";
     synthesis_revision?: number;
     guidance?: string;
+    reason?: string;
+    request_id?: string;
+    question?: string;
+    answer?: string;
+    change_summary?: string;
   };
 };
 
