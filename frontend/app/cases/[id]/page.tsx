@@ -1286,8 +1286,7 @@ export default function Home() {
           </div>
           <div className="topActions">
             <button className="ghost" onClick={() => {
-              const history = document.getElementById("audit") as HTMLDetailsElement | null;
-              if (history) { history.open = true; history.scrollIntoView({ block: "start" }); }
+              document.getElementById("audit")?.scrollIntoView({ block: "start" });
             }}>流转记录</button>
             <button className="ghost" disabled={busy} onClick={resetDemo}>
               重置 Demo
@@ -1328,12 +1327,192 @@ export default function Home() {
           </section>
 
           <div className="mainGrid threadLayout">
-            <section className="caseThread" aria-label="Case 完整流转 Thread">
+            <section className="caseThread" id="audit" aria-label="Case 完整流转 Thread">
               {message && (
                 <div className="toast" role="status">
                   {message}
                 </div>
               )}
+
+              <article className="threadItem commentItem">
+                <PersonIcon
+                  name={humanProposal.author}
+                  fallback="陈"
+                  className="threadAvatar humanAvatar"
+                />
+                <div className="commentBox">
+                  <header>
+                    <strong>{humanProposal.author}</strong>
+                    <span>Case Owner · {formatThreadTime(caseCreatedAt)}</span>
+                    <b>Human Proposal v{humanProposal.revision}</b>
+                  </header>
+                  <div className="commentBody">
+                    <p>{caseDetails?.description ?? "正在同步 Case 事实。"}</p>
+                    <h3>Human Proposal</h3>
+                    <blockquote>{humanProposal.content}</blockquote>
+                    <div className="factChips">
+                      {caseDetails?.business_payload?.material && (
+                        <span>{caseDetails.business_payload.material}</span>
+                      )}
+                      {caseDetails?.business_payload?.gap_quantity !== undefined && (
+                        <span>
+                          缺口 {formatQuantity(caseDetails.business_payload.gap_quantity)} pcs
+                        </span>
+                      )}
+                      {caseDetails?.business_payload?.target_date && (
+                        <span>目标 {caseDetails.business_payload.target_date}</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </article>
+
+              <div className="threadEvent completedEvent">
+                <span className="eventIcon">✓</span>
+                <p>
+                  <strong>平台完成 Case 受理</strong>
+                  <span>事实已固化，责任人为{caseDetails?.owner ?? "Case Owner"} · {formatThreadTime(caseCreatedAt)}</span>
+                </p>
+              </div>
+
+              {timelineEvents.map((event) => {
+                if (event.event_type === "manifest.proposed") {
+                  return (
+                    <div className="threadEvent completedEvent" key={event.id}>
+                      <BotIcon kind="orchestrator" className="eventIcon botEvent" />
+                      <p>
+                        <strong>Orchestrator 生成 Manifest v{event.details.revision ?? 1}</strong>
+                        <span>
+                          匹配组织能力并冻结 Policy / Skill / Knowledge 快照 ·{" "}
+                          {formatThreadTime(event.created_at)}
+                        </span>
+                      </p>
+                    </div>
+                  );
+                }
+                if (event.event_type === "manifest.approved") {
+                  return (
+                    <div className="threadEvent completedEvent" key={event.id}>
+                      <PersonIcon
+                        name={event.details.actor}
+                        fallback={event.details.actor?.slice(0, 1) ?? "人"}
+                        className="eventIcon humanEvent"
+                      />
+                      <p>
+                        <strong>{event.details.actor ?? "Case Owner"}（Case Owner）批准 Manifest</strong>
+                        <span>
+                          启动已批准的 PathAttempt，最终业务决定尚未作出 ·{" "}
+                          {formatThreadTime(event.created_at)}
+                        </span>
+                      </p>
+                    </div>
+                  );
+                }
+                if (event.event_type === "solution_revision.proposed") {
+                  const eventPath = manifestPaths.find((path) => path.id === event.details.path_id);
+                  return (
+                    <div className="threadEvent completedEvent" key={event.id}>
+                      <BotIcon kind="path" className="eventIcon botEvent" />
+                      <p>
+                        <strong>Path Agent 生成推荐方案 v{event.details.revision ?? 1}</strong>
+                        <span>
+                          {eventPath ? pathLabel(eventPath) : event.details.path_id} · 提交推荐方案供专业角色评审
+                          · {formatThreadTime(event.created_at)}
+                        </span>
+                      </p>
+                    </div>
+                  );
+                }
+                if (event.event_type === "commitment.approved") {
+                  return (
+                    <div className="threadEvent completedEvent" key={event.id}>
+                      <PersonIcon
+                        name={event.details.actor}
+                        fallback={event.details.actor?.slice(0, 1) ?? "人"}
+                        className="eventIcon humanEvent"
+                      />
+                      <p>
+                        <strong>
+                          {event.details.actor}（{event.details.role}）批准 {event.details.node_id}
+                        </strong>
+                        <span>
+                          {commitmentCopy[event.details.node_id ?? ""] ?? "专业责任节点"}
+                          已确认，节点变为 READY · {formatThreadTime(event.created_at)}
+                        </span>
+                      </p>
+                    </div>
+                  );
+                }
+                if (
+                  event.event_type === "commitment.revision_requested" ||
+                  event.event_type === "commitment.rejected"
+                ) {
+                  const isRevision = event.event_type === "commitment.revision_requested";
+                  return (
+                    <div className="threadEvent" key={event.id}>
+                      <PersonIcon
+                        name={event.details.actor}
+                        fallback={event.details.actor?.slice(0, 1) ?? "人"}
+                        className="eventIcon humanEvent"
+                      />
+                      <p>
+                        <strong>
+                          {event.details.actor}（{event.details.role}）
+                          {isRevision ? "要求修改" : "否决"} {event.details.node_id}
+                        </strong>
+                        <span>
+                          {isRevision ? "PathAttempt 进入 REVISING" : "当前 PathAttempt 已结束"} ·{" "}
+                          {formatThreadTime(event.created_at)}
+                        </span>
+                      </p>
+                    </div>
+                  );
+                }
+                if (event.event_type === "synthesis.proposed") {
+                  return (
+                    <div className="threadEvent completedEvent" key={event.id}>
+                      <BotIcon kind="synthesis" className="eventIcon botEvent" />
+                      <p>
+                        <strong>Synthesis Agent 生成汇总报告 v{event.details.revision ?? 1}</strong>
+                        <span>
+                          {event.details.successful_path_count ?? 0} 条成功 ·{" "}
+                          {event.details.failed_path_count ?? 0} 条失败；等待 Case Owner 决策 ·{" "}
+                          {formatThreadTime(event.created_at)}
+                        </span>
+                      </p>
+                    </div>
+                  );
+                }
+                if (event.event_type === "owner.decision") {
+                  const copy =
+                    event.details.action === "CLOSE"
+                      ? "关闭 Case"
+                      : event.details.action === "KEEP_OPEN"
+                        ? "保持 Case Open"
+                        : "修改并打回 Orchestrator";
+                  return (
+                    <div className="threadEvent completedEvent" key={event.id}>
+                      <PersonIcon
+                        name={event.details.actor}
+                        fallback={event.details.actor?.slice(0, 1) ?? "人"}
+                        className="eventIcon humanEvent"
+                      />
+                      <p>
+                        <strong>
+                          {event.details.actor ?? "Case Owner"}（{event.details.role ?? "Case Owner"}）决定：{copy}
+                        </strong>
+                        <span>
+                          {event.details.guidance ? `指导：${event.details.guidance} · ` : ""}基于
+                          Synthesis v{event.details.synthesis_revision ?? 1} ·{" "}
+                          {formatThreadTime(event.created_at)}
+                        </span>
+                      </p>
+                    </div>
+                  );
+                }
+                return null;
+              })}
+
 
               <article className="threadItem commentItem currentThreadItem" id="current-action" tabIndex={-1}>
                 <BotIcon
@@ -1500,194 +1679,7 @@ export default function Home() {
                 </div>
               </article>
 
-              <details className="caseHistory" id="audit">
-                <summary><strong>流转记录与原始提案</strong><span>{timelineEvents.length} 条事件 · 提案与操作留痕</span></summary>
-                <div className="historyTimeline">
-              <article className="threadItem commentItem">
-                <PersonIcon
-                  name={humanProposal.author}
-                  fallback="陈"
-                  className="threadAvatar humanAvatar"
-                />
-                <div className="commentBox">
-                  <header>
-                    <strong>{humanProposal.author}</strong>
-                    <span>Case Owner · {formatThreadTime(caseCreatedAt)}</span>
-                    <b>Human Proposal v{humanProposal.revision}</b>
-                  </header>
-                  <div className="commentBody">
-                    <p>{caseDetails?.description ?? "正在同步 Case 事实。"}</p>
-                    <h3>Human Proposal</h3>
-                    <blockquote>{humanProposal.content}</blockquote>
-                    <div className="factChips">
-                      {caseDetails?.business_payload?.material && (
-                        <span>{caseDetails.business_payload.material}</span>
-                      )}
-                      {caseDetails?.business_payload?.gap_quantity !== undefined && (
-                        <span>
-                          缺口 {formatQuantity(caseDetails.business_payload.gap_quantity)} pcs
-                        </span>
-                      )}
-                      {caseDetails?.business_payload?.target_date && (
-                        <span>目标 {caseDetails.business_payload.target_date}</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </article>
 
-              <div className="threadEvent completedEvent">
-                <span className="eventIcon">✓</span>
-                <p>
-                  <strong>平台完成 Case 受理</strong>
-                  <span>事实已固化，责任人为陈澄 · {formatThreadTime(caseCreatedAt)}</span>
-                </p>
-              </div>
-
-              {timelineEvents.map((event) => {
-                if (event.event_type === "manifest.proposed") {
-                  return (
-                    <div className="threadEvent completedEvent" key={event.id}>
-                      <BotIcon kind="orchestrator" className="eventIcon botEvent" />
-                      <p>
-                        <strong>Orchestrator 生成 Manifest v{event.details.revision ?? 1}</strong>
-                        <span>
-                          匹配组织能力并冻结 Policy / Skill / Knowledge 快照 ·{" "}
-                          {formatThreadTime(event.created_at)}
-                        </span>
-                      </p>
-                    </div>
-                  );
-                }
-                if (event.event_type === "manifest.approved") {
-                  return (
-                    <div className="threadEvent completedEvent" key={event.id}>
-                      <PersonIcon
-                        name={event.details.actor}
-                        fallback={event.details.actor?.slice(0, 1) ?? "人"}
-                        className="eventIcon humanEvent"
-                      />
-                      <p>
-                        <strong>{event.details.actor ?? "Case Owner"} 批准 Manifest</strong>
-                        <span>
-                          启动已批准的 PathAttempt，最终业务决定尚未作出 ·{" "}
-                          {formatThreadTime(event.created_at)}
-                        </span>
-                      </p>
-                    </div>
-                  );
-                }
-                if (event.event_type === "solution_revision.proposed") {
-                  const explorationCompleted =
-                    event.details.next_phase === "PROFESSIONAL_COMMITMENT";
-                  return (
-                    <div className="threadEvent completedEvent" key={event.id}>
-                      <BotIcon kind="path" className="eventIcon botEvent" />
-                      <p>
-                        <strong>Path Agent 生成推荐方案 v{event.details.revision ?? 1}</strong>
-                        <span>
-                          {event.details.path_id}；
-                          {explorationCompleted
-                            ? "Path 探索完成，进入专业承诺"
-                            : "继续探索其余 Path"}{" "}
-                          · {formatThreadTime(event.created_at)}
-                        </span>
-                      </p>
-                    </div>
-                  );
-                }
-                if (event.event_type === "commitment.approved") {
-                  return (
-                    <div className="threadEvent completedEvent" key={event.id}>
-                      <PersonIcon
-                        name={event.details.actor}
-                        fallback={event.details.actor?.slice(0, 1) ?? "人"}
-                        className="eventIcon humanEvent"
-                      />
-                      <p>
-                        <strong>
-                          {event.details.actor}（{event.details.role}）批准 {event.details.node_id}
-                        </strong>
-                        <span>
-                          {commitmentCopy[event.details.node_id ?? ""] ?? "专业责任节点"}
-                          已确认，节点变为 READY · {formatThreadTime(event.created_at)}
-                        </span>
-                      </p>
-                    </div>
-                  );
-                }
-                if (
-                  event.event_type === "commitment.revision_requested" ||
-                  event.event_type === "commitment.rejected"
-                ) {
-                  const isRevision = event.event_type === "commitment.revision_requested";
-                  return (
-                    <div className="threadEvent" key={event.id}>
-                      <PersonIcon
-                        name={event.details.actor}
-                        fallback={event.details.actor?.slice(0, 1) ?? "人"}
-                        className="eventIcon humanEvent"
-                      />
-                      <p>
-                        <strong>
-                          {event.details.actor}（{event.details.role}）
-                          {isRevision ? "要求修改" : "否决"} {event.details.node_id}
-                        </strong>
-                        <span>
-                          {isRevision ? "PathAttempt 进入 REVISING" : "当前 PathAttempt 已结束"} ·{" "}
-                          {formatThreadTime(event.created_at)}
-                        </span>
-                      </p>
-                    </div>
-                  );
-                }
-                if (event.event_type === "synthesis.proposed") {
-                  return (
-                    <div className="threadEvent completedEvent" key={event.id}>
-                      <BotIcon kind="synthesis" className="eventIcon botEvent" />
-                      <p>
-                        <strong>Synthesis Agent 生成汇总报告 v{event.details.revision ?? 1}</strong>
-                        <span>
-                          {event.details.successful_path_count ?? 0} 条成功 ·{" "}
-                          {event.details.failed_path_count ?? 0} 条失败；等待 Case Owner 决策 ·{" "}
-                          {formatThreadTime(event.created_at)}
-                        </span>
-                      </p>
-                    </div>
-                  );
-                }
-                if (event.event_type === "owner.decision") {
-                  const copy =
-                    event.details.action === "CLOSE"
-                      ? "关闭 Case"
-                      : event.details.action === "KEEP_OPEN"
-                        ? "保持 Case Open"
-                        : "修改并打回 Orchestrator";
-                  return (
-                    <div className="threadEvent completedEvent" key={event.id}>
-                      <PersonIcon
-                        name={event.details.actor}
-                        fallback={event.details.actor?.slice(0, 1) ?? "人"}
-                        className="eventIcon humanEvent"
-                      />
-                      <p>
-                        <strong>
-                          {event.details.actor ?? "Case Owner"} 决定：{copy}
-                        </strong>
-                        <span>
-                          {event.details.guidance ? `指导：${event.details.guidance} · ` : ""}基于
-                          Synthesis v{event.details.synthesis_revision ?? 1} ·{" "}
-                          {formatThreadTime(event.created_at)}
-                        </span>
-                      </p>
-                    </div>
-                  );
-                }
-                return null;
-              })}
-
-                </div>
-              </details>
 
               {activeStageIndex < 4 && (
                 <div className="futureFlow" aria-label="后续流程">

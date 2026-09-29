@@ -3350,7 +3350,7 @@ button:disabled {
   }
 }
 
-/* Keep the live decision ahead of the historical record. */
+/* A continuous discussion thread, with the current action at its end. */
 .decisionFocus {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -3367,17 +3367,11 @@ button:disabled {
 .decisionFocus h2 { margin: 3px 0 0; font-size: var(--text-xl); }
 .decisionFocus p { margin: 0; color: #405e58; font-size: var(--text-sm); }
 .decisionFocus a { color: var(--teal-dark); font-weight: 700; text-decoration: none; white-space: nowrap; }
-.caseThread:before { display: none; }
-.currentThreadItem { grid-template-columns: minmax(0, 1fr); scroll-margin-top: 24px; }
-.currentThreadItem > .threadAvatar { display: none; }
+
+.currentThreadItem { scroll-margin-top: 24px; }
+
 .currentThreadItem .activeComment { border-color: #c7d9d3; box-shadow: none; }
 .currentThreadItem .actionBody { padding: 20px; }
-.caseHistory { margin: 20px 0; border-block: 1px solid var(--line); scroll-margin-top: 24px; }
-.caseHistory > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 17px 0; cursor: pointer; }
-.caseHistory > summary:after { content: "+"; color: var(--teal); font-size: 20px; }
-.caseHistory[open] > summary:after { content: "−"; }
-.caseHistory > summary span { margin-left: auto; color: #596e69; font-size: var(--text-xs); }
-.historyTimeline { padding-top: 12px; }
 .pathCard { padding: 12px 16px; background: #fff; }
 .pathCard.selected { background: #f3f9f6; border-color: #438878; box-shadow: none; }
 .pathCard h3 { margin: 5px 0 7px; font-size: var(--text-lg); }
@@ -3393,11 +3387,27 @@ button:disabled {
 .issueHeader { padding-bottom: 16px; }
 .currentThreadItem .lead { margin: 10px 0 16px; color: #4e635d; font-size: var(--text-sm); }
 .currentThreadItem .approvalBox { margin: 0 0 16px; padding: 12px; }
-.caseHistory > summary:focus-visible, .pathContext > summary:focus-visible { outline: 2px solid var(--teal); outline-offset: 4px; }
 @media (max-width: 760px) {
   .decisionFocus { grid-template-columns: 1fr; gap: 9px; padding: 15px; }
   .currentThreadItem .actionBody { padding: 14px; }
-  .caseHistory > summary { flex-wrap: wrap; }
-  .caseHistory > summary span { margin-left: 0; }
   .pathContext > summary span { display: block; margin-left: 0; margin-top: 4px; }
 }
+
+.caseThread { scroll-margin-top: 24px; }
+.caseThread:before { top: 24px; bottom: 24px; }
+.threadEvent { align-items: start; margin: 0 0 16px; }
+.threadEvent .eventIcon { width: 36px; height: 36px; margin: 8px 0 0 2px; }
+.threadEvent > p {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 7px;
+  padding: 15px 18px;
+  border: 1px solid #d8e1df;
+  border-radius: 8px;
+  background: #fff;
+}
+.threadEvent > p > strong { color: #233c36; line-height: 1.6; }
+.threadEvent > p > span { color: #526b64; line-height: 1.65; }
+.threadEvent:has(.botEvent) > p { border-left: 3px solid #82afa3; }
+.pathContext > summary:focus-visible { outline: 2px solid var(--teal); outline-offset: 4px; }
