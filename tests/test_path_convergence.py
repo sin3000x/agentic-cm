@@ -236,3 +236,118 @@ def test_output_repair_keeps_evidence_and_only_binds_submission(failure):
     assert sum(e[0] == "deepagent.runtime.started" for e in events) == 1
     assert sum(e[0] == "deepagent.tool.completed" for e in events) == 1
     assert sum(e[0] == "agent.repair_completed" for e in events) == 1
+
+
+def test_supply_scope_repair_receives_exact_case_values_without_new_queries():
+    class ScopeModel(BaseChatModel):
+        calls: int = 0
+        available: list[str] = []
+
+        @property
+        def _llm_type(self):
+            return "scope-repair"
+
+        def _get_ls_params(self, **kwargs):
+            return {"ls_provider": "agentic-cm", "ls_model_name": "scope-repair"}
+
+        def bind_tools(self, tools, **kwargs):
+            self.available = [tool.name for tool in tools]
+            return self
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                name, args = "lookup_material_substitutes", {"material_id": "SOURCE"}
+                assert "2026-11-15" in str(messages[1].content)
+            else:
+                name = "PathAgentResult"
+                if self.calls == 3:
+                    assert self.available == ["PathAgentResult"]
+                    feedback = messages[-1].content
+                    for value in ("information_requests[0]", "WRONG", "2026-10-01", "ALTERNATIVE", "2026-11-15"):
+                        assert value in feedback
+                    assert "OTHER-CASE-CANDIDATE" not in feedback
+                args = {"information_requests": [{"role": "主计划", "question": "请确认截止日前可供数量。",
+                        "reason": "缺少日期供货确认。", "material_id": "WRONG" if self.calls == 2 else "ALTERNATIVE",
+                        "required_by": "2026-10-01" if self.calls == 2 else "2026-11-15"}]}
+            return ChatResult(generations=[ChatGeneration(message=AIMessage(content="", tool_calls=[{
+                "name": name, "args": args, "id": f"scope-{self.calls}", "type": "tool_call",
+            }]))])
+
+    context = replace(context_for(), case_snapshot={"business_payload": {"material": "SOURCE", "target_date": "2026-11-15"}},
+                      tool_contracts=({**context_for().tool_contracts[0], "records": {
+                          "SOURCE": {"candidates": [{"material_id": "ALTERNATIVE"}]},
+                          "OTHER": {"candidates": [{"material_id": "OTHER-CASE-CANDIDATE"}]},
+                      }},))
+    events = []
+    model = ScopeModel()
+    result = asyncio.run(DeepAgentPathAdapter(model, profile="test/scope").generate(context, lambda *args: events.append(args)))
+    assert result.information_requests[0].material_id == "ALTERNATIVE"
+    assert sum(e[0] == "deepagent.tool.completed" for e in events) == 1
+    assert model.calls == 3
+
+
+def test_candidate_tools_unlock_only_after_discovery_and_reject_guessed_ids():
+    class DiscoveryModel(BaseChatModel):
+        calls: int = 0
+        available: list[str] = []
+
+        @property
+        def _llm_type(self):
+            return "discovery-gate"
+
+        def _get_ls_params(self, **kwargs):
+            return {"ls_provider": "agentic-cm", "ls_model_name": "discovery-gate"}
+
+        def bind_tools(self, tools, **kwargs):
+            self.available = [tool.name for tool in tools]
+            return self
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                assert "lookup_customer_acceptance" not in self.available
+                # A provider may still emit a tool absent from its current schema.
+                calls = [("lookup_customer_acceptance", {"material_id": "GUESS"}),
+                         ("lookup_material_substitutes", {"material_id": "SOURCE"})]
+            elif self.calls == 2:
+                assert "lookup_customer_acceptance" in self.available
+                rejected = next(m for m in messages if isinstance(m, ToolMessage) and m.tool_call_id == "gate-1-0")
+                assert rejected.status == "error"
+                calls = [("lookup_customer_acceptance", {"material_id": "ALTERNATIVE"})]
+            else:
+                calls = [("PathAgentResult", {"recommendation": "建议评估候选。", "role_reports": []})]
+            return ChatResult(generations=[ChatGeneration(message=AIMessage(content="", tool_calls=[{
+                "name": name, "args": args, "id": f"gate-{self.calls}-{i}", "type": "tool_call",
+            } for i, (name, args) in enumerate(calls)]))])
+
+    context = replace(context_for(), required_role_reports=(), tool_contracts=(
+        {**context_for().tool_contracts[0], "records": {"SOURCE": {"candidates": [{"material_id": "ALTERNATIVE"}]}}},
+        {"id": "lookup_customer_acceptance", "description": "查询客户记录", "input_key": "material_id",
+         "records": {"ALTERNATIVE": {"accepted": False}, "GUESS": {"accepted": True}}},
+    ))
+    events = []
+    result = asyncio.run(DeepAgentPathAdapter(DiscoveryModel(), profile="test/discovery").generate(context, lambda *args: events.append(args)))
+    assert result.recommendation
+    queries = [e[3]["input"] for e in events if e[0] == "deepagent.tool.started"]
+    assert {"material_id": "GUESS"} not in queries
+    assert queries == [{"material_id": "SOURCE"}, {"material_id": "ALTERNATIVE"}]
+
+
+def test_candidate_discovery_question_is_not_a_supply_quantity_question():
+    from agentic_cm.domain import PathAgentResult
+    from agentic_cm.path_agent import _validate_result_against_context
+
+    context = replace(context_for(),
+        case_snapshot={"business_payload": {"material": "MCU-X7", "target_date": "2026-08-24"}},
+        required_role_reports=({"role": "研发", "dimension": "技术"},), tool_contracts=())
+    question = {"role": "研发", "question": "请确认 MCU-X7 是否有已认证替代候选，并提供编码。",
+                "reason": "未取得替代候选，无法继续评估。"}
+    invalid = PathAgentResult(information_requests=[{**question,
+        "material_id": "47.100.200.0130.1004", "required_by": "2026-08-24"}])
+    with pytest.raises(AgentOutputError, match="47.100.200.0130.1004"):
+        _validate_result_against_context(invalid, context)
+    corrected = PathAgentResult(information_requests=[question])
+    _validate_result_against_context(corrected, context)
+    assert corrected.information_requests[0].material_id is None
+    assert corrected.information_requests[0].required_by is None
