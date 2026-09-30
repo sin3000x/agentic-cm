@@ -22,6 +22,7 @@ import {
   isSolutionRevision,
   isPathRunnable,
   pathLabel,
+  pathIdForRun,
   skillLabel,
   stages,
   type AgentRun,
@@ -714,7 +715,15 @@ export default function Home() {
     ? allLiveAgentRuns.filter((run) => run.started_at >= aiRunStartedAt)
     : [];
   const latestFailedOrchestratorRuns = agentRuns[0]?.status === "FAILED" ? [agentRuns[0]] : [];
-  const latestFailedPathRuns = pathAgentRuns[0]?.status === "FAILED" ? [pathAgentRuns[0]] : [];
+  // Exploration already shows every Path run, including failures and retries.
+  const latestFailedPathRuns = phase === "PATH_EXPLORATION"
+    ? []
+    : pathAgentRuns.filter((run, index, runs) =>
+        run.status === "FAILED" &&
+        runs.findIndex((candidate) =>
+          (pathIdForRun(candidate) ?? candidate.id) === (pathIdForRun(run) ?? run.id),
+        ) === index,
+      );
   const latestFailedSynthesisRuns =
     synthesisAgentRuns[0]?.status === "FAILED" ? [synthesisAgentRuns[0]] : [];
   const latestFailedRunCount =
@@ -911,6 +920,9 @@ export default function Home() {
         <strong>阶段出口</strong>
         <p>全部路径完成后进入专业评审。</p>
       </div>
+      {canViewManifest && pathAgentRuns.length > 0 && (
+        <AgentTracePanel runs={pathAgentRuns} agentType="path" paths={manifestPaths} autoExpand />
+      )}
       {canViewManifest && pendingExplorationPathIds.length > 0 && (
         <button
           className="primary explorationRetry"
