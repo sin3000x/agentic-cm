@@ -181,8 +181,14 @@ class InformationQuestion(FrozenModel):
     role: NonEmptyText
     question: NonEmptyText
     reason: NonEmptyText
-    material_id: NonEmptyText | None = None
-    required_by: str | None = None
+    material_id: NonEmptyText | None = Field(
+        default=None,
+        description="仅用于询问已发现替代候选在指定日期前的可供数量，填写候选料号。询问原料替代候选、技术验证或客户反馈时省略或为 null，不填原料编码。",
+    )
+    required_by: str | None = Field(
+        default=None,
+        description="仅与供货数量问题的候选 material_id 一起填写 Case 截止日期；其他事实问题省略或为 null。",
+    )
 
     @model_validator(mode="after")
     def validate_supply_scope(self) -> "InformationQuestion":

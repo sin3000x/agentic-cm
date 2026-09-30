@@ -332,3 +332,22 @@ def test_candidate_tools_unlock_only_after_discovery_and_reject_guessed_ids():
     queries = [e[3]["input"] for e in events if e[0] == "deepagent.tool.started"]
     assert {"material_id": "GUESS"} not in queries
     assert queries == [{"material_id": "SOURCE"}, {"material_id": "ALTERNATIVE"}]
+
+
+def test_candidate_discovery_question_is_not_a_supply_quantity_question():
+    from agentic_cm.domain import PathAgentResult
+    from agentic_cm.path_agent import _validate_result_against_context
+
+    context = replace(context_for(),
+        case_snapshot={"business_payload": {"material": "MCU-X7", "target_date": "2026-08-24"}},
+        required_role_reports=({"role": "研发", "dimension": "技术"},), tool_contracts=())
+    question = {"role": "研发", "question": "请确认 MCU-X7 是否有已认证替代候选，并提供编码。",
+                "reason": "未取得替代候选，无法继续评估。"}
+    invalid = PathAgentResult(information_requests=[{**question,
+        "material_id": "47.100.200.0130.1004", "required_by": "2026-08-24"}])
+    with pytest.raises(AgentOutputError, match="47.100.200.0130.1004"):
+        _validate_result_against_context(invalid, context)
+    corrected = PathAgentResult(information_requests=[question])
+    _validate_result_against_context(corrected, context)
+    assert corrected.information_requests[0].material_id is None
+    assert corrected.information_requests[0].required_by is None
