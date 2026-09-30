@@ -88,12 +88,12 @@ def test_filesystem_loop_reaches_bounded_finalization_instead_of_graph_limit():
         replace(context_for(), tool_contracts=()), lambda *args: None,
     ))
     assert result.information_requests
-    assert model.calls == 13
+    assert model.calls == 5
 
 
 def test_invalid_finalization_stops_after_two_attempts():
     model = ConvergenceModel(mode="invalid")
-    with pytest.raises(AgentOutputError, match="限定收尾轮次"):
+    with pytest.raises(AgentOutputError, match="role_reports"):
         asyncio.run(DeepAgentPathAdapter(model, profile="test/invalid-final").generate(
             context_for(), lambda *args: None,
         ))
@@ -153,7 +153,7 @@ def test_cache_replay_preserves_ordered_tool_history_on_the_wire():
                 http_async_client=client, max_retries=0,
             )
             return await DeepAgentPathAdapter(model, profile="test/wire-history").generate(
-                context_for(), lambda *args: None,
+                replace(context_for(), required_role_reports=()), lambda *args: None,
             )
 
     assert asyncio.run(run()).recommendation
@@ -165,3 +165,74 @@ def test_cache_replay_preserves_ordered_tool_history_on_the_wire():
             call, result = history[index * 2:index * 2 + 2]
             assert call["tool_calls"][0]["id"] == result["tool_call_id"] == f"call-{index + 1}"
             assert json.loads(result["content"]) == {"candidate": "FIRST"}
+
+
+@pytest.mark.parametrize("failure", ["missing_summary", "mixed_summary", "mixed_recommendation", "invalid_schema"])
+def test_output_repair_keeps_evidence_and_only_binds_submission(failure):
+    from agentic_cm.domain import SolutionRevision
+
+    report = {"role": "主计划", "dimension": "供应", "report": "供应数量仍待确认。"}
+    question = {"role": "主计划", "question": "请提供到货日期。", "reason": "缺少日期证据。"}
+    corrected = ({"recommendation": "建议评估候选。", "role_reports": [report],
+                  "change_summary": "已回应意见，明确供货条件。"}
+                 if failure == "missing_summary" else
+                 {"information_requests": [question]})
+    rejected = ({"recommendation": "建议评估候选。", "role_reports": [report]}
+                if failure == "missing_summary" else
+                {"information_requests": [question],
+                 "change_summary": "已修改。" if failure == "mixed_summary" else "",
+                 "recommendation": "建议评估候选。" if failure == "mixed_recommendation" else "",
+                 "role_reports": "invalid" if failure == "invalid_schema" else []})
+
+    class RepairModel(BaseChatModel):
+        calls: int = 0
+        available: list[str] = []
+
+        @property
+        def _llm_type(self):
+            return "repair-with-evidence"
+
+        def bind_tools(self, tools, **kwargs):
+            self.available = [tool.name for tool in tools]
+            return self
+
+        def _get_ls_params(self, **kwargs):
+            return {"ls_provider": "agentic-cm", "ls_model_name": "repair-with-evidence"}
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                name, args = "lookup_material_substitutes", {"material_id": "SOURCE"}
+            else:
+                name, args = "PathAgentResult", rejected if self.calls == 2 else corrected
+                if self.calls == 3:
+                    assert self.available == ["PathAgentResult"]
+                    evidence = [m for m in messages if isinstance(m, ToolMessage)
+                                and m.tool_call_id == "repair-1"]
+                    assert len(evidence) == 1 and json.loads(evidence[0].content) == {"candidate": "FIRST"}
+                    feedback = messages[-1]
+                    assert isinstance(feedback, ToolMessage) and feedback.status == "error"
+                    assert "禁止重新取证" in feedback.content
+                    assert ("recommendation" if failure == "mixed_recommendation" else
+                            "role_reports" if failure == "invalid_schema" else "change_summary") in feedback.content
+                    if failure == "missing_summary":
+                        assert "说明供货条件" in feedback.content
+            return ChatResult(generations=[ChatGeneration(message=AIMessage(content="", tool_calls=[{
+                "name": name, "args": args, "id": f"repair-{self.calls}", "type": "tool_call",
+            }]))])
+
+    context = context_for()
+    if failure == "missing_summary":
+        context = replace(context, previous_solution_revision=SolutionRevision(
+            recommendation="旧方案。", role_reports=[report], revision=1, generated_by="test",
+        ), revision_feedback=({"reason": "说明供货条件"},))
+    model = RepairModel()
+    events = []
+    result = asyncio.run(DeepAgentPathAdapter(model, profile="test/repair").generate(
+        context, lambda *args: events.append(args),
+    ))
+    assert model.calls == 3
+    assert result.model_dump(exclude_defaults=True) == corrected
+    assert sum(e[0] == "deepagent.runtime.started" for e in events) == 1
+    assert sum(e[0] == "deepagent.tool.completed" for e in events) == 1
+    assert sum(e[0] == "agent.repair_completed" for e in events) == 1
