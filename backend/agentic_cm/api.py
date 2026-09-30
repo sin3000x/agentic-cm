@@ -70,6 +70,7 @@ class InformationAnswerRequest(BaseModel):
     actor: str
     role: str
     answer: str
+    quantity: int | None = Field(default=None, ge=0, strict=True)
 
 
 class OwnerDecisionRequest(OwnerActionRequest):
@@ -280,6 +281,7 @@ def answer_information_request(
 ):
     service.answer_information_request(
         case_id, path_id, request_id, actor=request.actor, role=request.role, answer=request.answer,
+        quantity=request.quantity,
     )
     return service.get_case_view(case_id, actor=request.actor, role=request.role)
 

@@ -2,15 +2,18 @@ from .domain import Case, CaseStatus, OrchestrationPhase
 
 
 DEMO_DATASET_ID = "supply-chain-golden-path-v1"
+SUPPLY_INFORMATION_DATASET_ID = "supply-chain-supply-information-v1"
 
 
-def demo_cases() -> list[Case]:
+def demo_cases(dataset_id: str = DEMO_DATASET_ID) -> list[Case]:
+    if dataset_id not in {DEMO_DATASET_ID, SUPPLY_INFORMATION_DATASET_ID}:
+        raise ValueError("Unknown demo dataset")
     common = {
         "owner": "陈澄",
         "owner_role": "订单统筹经理",
         "phase": OrchestrationPhase.INTAKE,
     }
-    return [
+    cases = [
         Case(
             id="CM-2026-014",
             title="Northstar Mobility MCU-X7 订单预计延期 12 天",
@@ -91,3 +94,12 @@ def demo_cases() -> list[Case]:
             **common,
         ),
     ]
+    if dataset_id == SUPPLY_INFORMATION_DATASET_ID:
+        case = cases[0]
+        case.business_payload["substitute_supply"] = [{
+            "material_id": "MCU-X7A",
+            "required_by": case.business_payload["target_date"],
+            "quantity": None,
+            "source": "供应方尚未确认该日期前可供货的数量；冻结库存与补货周期不等于日期供货确认。",
+        }]
+    return cases

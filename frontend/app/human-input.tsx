@@ -79,18 +79,24 @@ export function CommitmentDecisionForm({
 export function InformationAnswerForm({
   busy,
   onAnswer,
+  request,
 }: {
   busy: boolean;
-  onAnswer: (answer: string) => Promise<void>;
+  onAnswer: (answer: string, quantity?: number) => Promise<void>;
+  request?: { material_id?: string | null; required_by?: string | null };
 }) {
   const fieldId = useId();
   const [answer, setAnswer] = useState("");
   const [error, setError] = useState("");
+  const [quantity, setQuantity] = useState("");
+  const isSupplyQuestion = Boolean(request?.material_id && request.required_by);
+  const numericQuantity = quantity.trim() === "" ? undefined : Number(quantity);
+  const validQuantity = numericQuantity !== undefined && Number.isSafeInteger(numericQuantity) && numericQuantity >= 0;
 
   async function submit() {
     setError("");
     try {
-      await onAnswer(answer.trim());
+      await onAnswer(answer.trim(), isSupplyQuestion ? numericQuantity : undefined);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "回答提交失败，请重试。");
     }
@@ -98,13 +104,31 @@ export function InformationAnswerForm({
 
   return (
     <section className="humanAnswerForm" aria-label="回答 Agent 的信息请求">
+      {isSupplyQuestion && (
+        <>
+          <strong>{request?.material_id} · {request?.required_by} 前</strong>
+          <label className="humanInputField" htmlFor={`${fieldId}-quantity`}>
+            可供货数量（件）
+            <input
+              id={`${fieldId}-quantity`}
+              type="number"
+              min="0"
+              step="1"
+              value={quantity}
+              onChange={(event) => setQuantity(event.target.value)}
+              placeholder="无法供货时填写 0"
+              disabled={busy}
+            />
+          </label>
+        </>
+      )}
       <label className="humanInputField" htmlFor={fieldId}>
-        补充信息
+        {isSupplyQuestion ? "确认依据" : "补充信息"}
         <textarea
           id={fieldId}
           value={answer}
           onChange={(event) => setAnswer(event.target.value)}
-          placeholder="提供已确认的信息、来源或仍然无法确认的情况。"
+          placeholder={isSupplyQuestion ? "说明供应来源、可到货日期及确认依据，例如供应商书面回复。" : "提供已确认的信息、来源或仍然无法确认的情况。"}
           rows={4}
           disabled={busy}
         />
@@ -118,7 +142,7 @@ export function InformationAnswerForm({
         <button
           type="button"
           className="approve"
-          disabled={busy || !answer.trim()}
+          disabled={busy || !answer.trim() || (isSupplyQuestion && !validQuantity)}
           onClick={() => void submit()}
         >
           提交补充信息

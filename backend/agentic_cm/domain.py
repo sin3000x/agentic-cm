@@ -181,6 +181,16 @@ class InformationQuestion(FrozenModel):
     role: NonEmptyText
     question: NonEmptyText
     reason: NonEmptyText
+    material_id: NonEmptyText | None = None
+    required_by: str | None = None
+
+    @model_validator(mode="after")
+    def validate_supply_scope(self) -> "InformationQuestion":
+        if (self.material_id is None) != (self.required_by is None):
+            raise ValueError("Supply questions require both material_id and required_by")
+        if self.required_by is not None:
+            datetime.strptime(self.required_by, "%Y-%m-%d")
+        return self
 
 
 class InformationRequest(InformationQuestion):
@@ -188,6 +198,7 @@ class InformationRequest(InformationQuestion):
     answer: str | None = None
     answered_by: str | None = None
     answered_at: str | None = None
+    answer_quantity: int | None = Field(default=None, ge=0, strict=True)
 
 
 class RoleReport(MutableModel):

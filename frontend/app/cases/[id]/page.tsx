@@ -504,10 +504,10 @@ export default function Home() {
     }
   }
 
-  async function resetDemo() {
+  async function resetDemo(datasetId = "supply-chain-golden-path-v1") {
     setBusy(true);
     try {
-      await apiPost<void>("/api/demo/reset", { dataset_id: "supply-chain-golden-path-v1" });
+      await apiPost<void>("/api/demo/reset", { dataset_id: datasetId });
       setApproved(false);
       setPhase("INTAKE");
       setCapabilities(null);
@@ -541,7 +541,9 @@ export default function Home() {
       setFailedAiRun(null);
       automaticRunsRef.current.clear();
       setCaseRefreshKey((current) => current + 1);
-      setMessage("Golden Path 演示数据已重置。 ");
+      setMessage(datasetId === "supply-chain-supply-information-v1"
+        ? "供货信息补充演示已准备；批准物料替代 Path 后，将询问指定日期前的可供货数量。"
+        : "Golden Path 演示数据已重置。 ");
     } catch {
       setMessage("重置失败：本地 API 未连接。 ");
     } finally {
@@ -637,13 +639,13 @@ export default function Home() {
     }
   }
 
-  async function answerInformation(pathId: string, request: InformationRequest, answer: string) {
+  async function answerInformation(pathId: string, request: InformationRequest, answer: string, quantity?: number) {
     setBusy(true);
     setMessage("");
     try {
       const data = await apiPost<CaseDetails>(
         `/api/cases/${activeCaseId}/paths/${pathId}/information-requests/${request.id}/answer`,
-        { actor: currentIdentity.name, role: currentIdentity.role, answer },
+        { actor: currentIdentity.name, role: currentIdentity.role, answer, quantity },
       );
       setCaseDetails(data);
       setPathAttempts(data.path_attempts ?? []);
@@ -870,7 +872,8 @@ export default function Home() {
                 <InformationAnswerForm
                   key={`${currentIdentity.name}-${pathId}-${request.id}`}
                   busy={busy}
-                  onAnswer={(answer) => answerInformation(pathId, request, answer)}
+                  request={request}
+                  onAnswer={(answer, quantity) => answerInformation(pathId, request, answer, quantity)}
                 />
               ) : <small className="informationWaiting">等待{request.role}补充，可在其“我的待办”中处理。</small>}
             </article>
@@ -1319,7 +1322,10 @@ export default function Home() {
             <button className="ghost" onClick={() => {
               document.getElementById("audit")?.scrollIntoView({ block: "start" });
             }}>流转记录</button>
-            <button className="ghost" disabled={busy} onClick={resetDemo}>
+            <button className="ghost" disabled={busy} onClick={() => resetDemo("supply-chain-supply-information-v1")}>
+              演示供货信息补充
+            </button>
+            <button className="ghost" disabled={busy} onClick={() => resetDemo()}>
               重置 Demo
             </button>
           </div>

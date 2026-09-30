@@ -92,6 +92,11 @@ _PATH_AGENT_SYSTEM_PROMPT = (
     "role 只能从 required-role-reports.json 的责任角色中选择。"
     "此时 recommendation 留空、role_reports 返回空数组，不编造方案，也不要求人批准。"
     "问题应询问事实，例如数量、日期、测试结果或客户反馈，不得把专业审批伪装成信息请求。"
+    "物料替代中，重点确认具体候选在截止日期前可供货的数量；"
+    "现有库存或历史补货周期不能替代该物料在指定日期前的供货确认。"
+    "此类信息请求必须填写 material_id 和 required_by（YYYY-MM-DD），"
+    "物料来自 Case 或授权工具返回的候选，日期来自 Case 交付约束；"
+    "例如询问 MCU-X7A 在目标日期前可供货多少件，由责任角色填写数量与确认依据。"
     "收到 /case/human-information.json 时，核对其中的问题、回答和来源，"
     "人的回答是带来源的补充资料，不代表审批通过，不可重复索要已充分回答的信息。"
     "修订时读取 /case/review-feedback.json 与旧方案，逐项处理人的修改理由；"
@@ -816,6 +821,7 @@ class _DeterministicPathChatModel(BaseChatModel):
             "deterministic-reports": "/evidence/required-role-reports.json",
         }
         for key, path in (
+            ("deterministic-path", "/case/path.json"),
             ("deterministic-information", "/case/human-information.json"),
             ("deterministic-feedback", "/case/review-feedback.json"),
             ("deterministic-previous", "/case/previous-solution-revision.json"),
@@ -847,25 +853,55 @@ class _DeterministicPathChatModel(BaseChatModel):
         information = read_json("deterministic-information") if "deterministic-information" in tool_messages else []
         feedback = read_json("deterministic-feedback") if "deterministic-feedback" in tool_messages else []
         business = case_snapshot.get("business_payload", {})
-        missing = [label for key, label in (("gap_quantity", "缺料数量"), ("target_date", "需要到料日期")) if business.get(key) is None]
+        path = read_json("deterministic-path") if "deterministic-path" in tool_messages else {}
+        supply_questions = [
+            supply for supply in business.get("substitute_supply", [])
+            if path.get("definition") == "MaterialSubstitution"
+            and supply.get("quantity") is None
+            and not any(
+                item.get("material_id") == supply["material_id"]
+                and item.get("required_by") == supply["required_by"]
+                and item.get("answer_quantity") is not None
+                for item in information
+            )
+        ]
         option_reference = str(business.get("material") or "当前缺料")
         information_note = ""
         if information:
             information_note = " 已收到人工补充：" + "；".join(
                 f"{item['role']}提供{item['answer']}" for item in information
             ) + "；仍需独立完成专业审批。"
-        if missing and not information:
+        if supply_questions:
+            supply_role = next(
+                (contract["role"] for contract in required_role_reports if contract["role"] == "主计划"),
+                required_role_reports[0]["role"],
+            )
             result = PathAgentResult(information_requests=[InformationQuestion(
-                role=required_role_reports[0]["role"],
-                question=f"请补充{option_reference}的{'、'.join(missing)}。",
-                reason="当前 Case 缺少制定方案所需的基础事实，不能推测数量或日期。",
-            )])
+                role=supply_role,
+                material_id=supply["material_id"],
+                required_by=supply["required_by"],
+                question=f"请确认替代料 {supply['material_id']} 在 {supply['required_by']} 前可供货多少件，并提供确认依据。",
+                reason="库存快照无法确定指定日期前可供货的数量，需要据此判断能否覆盖订单缺口。",
+            ) for supply in supply_questions])
         else:
+            recommendation = (
+                f"已依据 Manifest 冻结的执行 Skill 对{option_reference}形成推荐方案草案；"
+                "尚未作出业务承诺，待责任角色按各维度确认。"
+            )
+            confirmed_supply = next((
+                item for item in information
+                if item.get("answer_quantity") is not None and item.get("material_id")
+            ), None)
+            if confirmed_supply and isinstance(business.get("gap_quantity"), int):
+                quantity = confirmed_supply["answer_quantity"]
+                remaining = max(0, business["gap_quantity"] - quantity)
+                recommendation = (
+                    f"{confirmed_supply['material_id']} 在 {confirmed_supply['required_by']} 前可供货 {quantity:,} 件，"
+                    f"剩余缺口 {remaining:,} 件；"
+                    + ("需继续评估补量或其他路径，并完成技术与客户审批。" if remaining else "供货数量可覆盖缺口，仍需完成技术与客户审批。")
+                )
             result = PathAgentResult(
-                recommendation=(
-                    f"已依据 Manifest 冻结的执行 Skill 对{option_reference}形成推荐方案草案；"
-                    "尚未作出业务承诺，待责任角色按各维度确认。"
-                ),
+                recommendation=recommendation,
                 change_summary=(
                     "演示修订：已纳入本轮意见，重新整理各角色评审依据。"
                     + "；".join(str(item.get("reason", "")) for item in feedback)
@@ -1138,6 +1174,22 @@ def _validate_result_against_context(result: PathAgentResult, context: PathAgent
             raise AgentOutputError("Information requests must target a frozen Policy role")
         if len(questions) > 10 or len(set(questions)) != len(questions):
             raise AgentOutputError("Return at most ten distinct information requests")
+        business = context.case_snapshot.get("business_payload", {})
+        supply = business.get("substitute_supply", [])
+        known_materials = {item["material_id"] for item in supply}
+        for tool in context.tool_contracts:
+            if tool["id"] == "lookup_material_substitutes":
+                for record in tool["records"].values():
+                    known_materials.update(item["material_id"] for item in record.get("candidates", []))
+        known_dates = {business.get("target_date"), *(item["required_by"] for item in supply)}
+        scopes = []
+        for question in result.information_requests:
+            if question.material_id is not None:
+                if question.material_id not in known_materials or question.required_by not in known_dates:
+                    raise AgentOutputError("Supply questions must use an authorized candidate and a Case delivery date")
+                scopes.append((question.material_id, question.required_by))
+        if len(scopes) != len(set(scopes)):
+            raise AgentOutputError("Do not request the same material and supply date more than once")
         return
     if not result.recommendation.strip():
         raise AgentOutputError("A completed solution requires a recommendation")

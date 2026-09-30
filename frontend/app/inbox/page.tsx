@@ -91,13 +91,13 @@ export default function InboxPage() {
     }
   }
 
-  async function answer(item: InformationInboxItem, content: string) {
+  async function answer(item: InformationInboxItem, content: string, quantity?: number) {
     setBusyKey(itemKey(item));
     setMessage("");
     try {
       await apiPost(
         `/api/cases/${item.case_id}/paths/${item.path_id}/information-requests/${item.information_request.id}/answer`,
-        { actor: currentIdentity.name, role: currentIdentity.role, answer: content },
+        { actor: currentIdentity.name, role: currentIdentity.role, answer: content, quantity },
       );
       await finishItem(item, "补充信息已记录；全部问题回答后，由 Case Owner 继续 Path 推演。");
     } finally {
@@ -288,7 +288,8 @@ export default function InboxPage() {
                     <InformationAnswerForm
                       key={`${currentIdentity.name}-${itemKey(reviewItem)}`}
                       busy={busyKey !== null}
-                      onAnswer={(content) => answer(reviewItem, content)}
+                      request={reviewItem.information_request}
+                      onAnswer={(content, quantity) => answer(reviewItem, content, quantity)}
                     />
                   )}
                 </>

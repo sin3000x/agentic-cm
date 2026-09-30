@@ -368,12 +368,60 @@ def test_human_information_request_answer_resume_and_approval(client, monkeypatc
     assert service.get_inbox("主计划")[0]["kind"] == "commitment"
     for node_id, actor, role in (("SUPPLY", "王淼", "主计划"), ("TECH", "林乔", "研发"), ("CUSTOMER", "赵宁", "供应经理")):
         service.approve_commitment(DEMO_CASE_ID, "PATH-01", node_id, actor=actor, role=role, expected_revision=1)
+
     assert service.get_case(DEMO_CASE_ID).phase is OrchestrationPhase.FINAL_REVIEW
     timeline = service.get_case_timeline(DEMO_CASE_ID)
     assert sum(event["event_type"] == "information.requested" for event in timeline) == 2
     assert sum(event["event_type"] == "information.answered" for event in timeline) == 2
     initial_run = service.get_agent_runs(DEMO_CASE_ID, **OWNER, agent_type="path")[-1]
     assert initial_run["status"] == "SUCCEEDED"
+
+
+@pytest.mark.parametrize("quantity", [0, 12000, 18400])
+def test_supply_information_is_scoped_to_substitute_and_deadline(client, quantity: int) -> None:
+    from agentic_cm import api
+    from agentic_cm.demo import SUPPLY_INFORMATION_DATASET_ID
+
+    assert client.post("/api/demo/reset", json={"dataset_id": SUPPLY_INFORMATION_DATASET_ID}).status_code == 204
+    original = api.service.get_case(DEMO_CASE_ID).business_payload.copy()
+    assert original["gap_quantity"] == 18400
+    assert original["target_date"]
+    assert client.post(f"/api/cases/{DEMO_CASE_ID}/orchestrate", json=OWNER).status_code == 200
+    assert client.post(
+        f"/api/cases/{DEMO_CASE_ID}/manifest/approve", json={"selected_path_ids": ["PATH-01"], **OWNER},
+    ).status_code == 200
+    waiting = client.post(f"/api/cases/{DEMO_CASE_ID}/paths/PATH-01/execute", json=OWNER)
+    assert waiting.status_code == 200
+    attempt = waiting.json()["path_attempts"][0]
+    assert attempt["state"] == "AWAITING_INFORMATION"
+    assert attempt["solution_revision"] is None
+    request = api.service.get_inbox("主计划")[0]["information_request"]
+    assert request["material_id"] == "MCU-X7A"
+    assert request["required_by"] == original["target_date"]
+    endpoint = f"/api/cases/{DEMO_CASE_ID}/paths/PATH-01/information-requests/{request['id']}/answer"
+    body = {"actor": "王淼", "role": "主计划", "answer": "供应方书面确认，按指定日期到货。"}
+    before = api.service.get_case(DEMO_CASE_ID).to_dict()
+    assert client.post(endpoint, json=body).status_code == 409
+    for invalid in (-1, 1.5, True):
+        assert client.post(endpoint, json={**body, "quantity": invalid}).status_code == 422
+    assert api.service.get_case(DEMO_CASE_ID).to_dict() == before
+    answered = client.post(endpoint, json={**body, "quantity": quantity})
+    assert answered.status_code == 200
+    confirmation = answered.json()["path_attempts"][0]["information_requests"][0]
+    assert confirmation["answer_quantity"] == quantity
+    assert confirmation["answered_by"] == "王淼"
+    assert confirmation["material_id"] == "MCU-X7A"
+    assert confirmation["required_by"] == original["target_date"]
+    assert all(node["status"] != "READY" for node in answered.json()["commitment_nodes"])
+    completed = client.post(f"/api/cases/{DEMO_CASE_ID}/paths/PATH-01/execute", json=OWNER)
+    assert completed.status_code == 200
+    solution = completed.json()["path_attempts"][0]["solution_revision"]
+    assert solution["revision"] == 1
+    assert "MCU-X7A" in solution["recommendation"]
+    assert original["target_date"] in solution["recommendation"]
+    assert f"{quantity:,}" in solution["recommendation"]
+    assert f"{18400 - quantity:,}" in solution["recommendation"]
+    assert api.service.get_case(DEMO_CASE_ID).business_payload == original
 
 
 def test_case_payload_without_new_review_fields_remains_readable(tmp_path) -> None:

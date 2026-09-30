@@ -7,7 +7,7 @@ from .agent_run import adapter_profile_of, agent_run
 from .agent_runtime import AgentError
 from .capabilities import CapabilityConfigurationError, CapabilityRegistry, default_registry
 from .config import agent_adapter_from_environment, path_execution_mode_from_environment, path_max_concurrency_from_environment
-from .demo import DEMO_DATASET_ID, demo_cases
+from .demo import demo_cases
 from .domain import (
     CaseEvent,
     CaseStatus,
@@ -213,8 +213,8 @@ class CaseService:
             CaseEvent.MANIFEST_PROPOSED: ("revision",),
             CaseEvent.MANIFEST_APPROVED: ("actor",),
             CaseEvent.SOLUTION_REVISION_PROPOSED: ("path_id", "revision", "change_summary"),
-            CaseEvent.INFORMATION_REQUESTED: ("path_id", "request_id", "role", "question", "reason"),
-            CaseEvent.INFORMATION_ANSWERED: ("path_id", "request_id", "role", "actor", "question", "answer"),
+            CaseEvent.INFORMATION_REQUESTED: ("path_id", "request_id", "role", "question", "reason", "material_id", "required_by"),
+            CaseEvent.INFORMATION_ANSWERED: ("path_id", "request_id", "role", "actor", "question", "answer", "material_id", "required_by", "quantity"),
             CaseEvent.COMMITMENT_APPROVED: ("actor", "role", "node_id", "path_id", "revision", "reason"),
             CaseEvent.COMMITMENT_REVISION_REQUESTED: ("actor", "role", "node_id", "path_id", "revision", "reason"),
             CaseEvent.COMMITMENT_REJECTED: ("actor", "role", "node_id", "path_id", "revision", "reason"),
@@ -516,6 +516,8 @@ class CaseService:
                             "role": request.role,
                             "question": request.question,
                             "reason": request.reason,
+                            "material_id": request.material_id,
+                            "required_by": request.required_by,
                         })
                     run.complete(
                         "信息补充请求已持久化，等待责任角色提供资料",
@@ -624,6 +626,7 @@ class CaseService:
 
     def answer_information_request(
         self, case_id: str, path_id: str, request_id: str, *, actor: str, role: str, answer: str,
+        quantity: int | None = None,
     ):
         case = self.get_case(case_id)
         attempt = next((item for item in case.path_attempts if item.path_id == path_id), None)
@@ -640,9 +643,16 @@ class CaseService:
             raise InvalidTransitionError("Information request has already been answered")
         if case.status is not CaseStatus.OPEN or attempt.state is not PathAttemptState.AWAITING_INFORMATION:
             raise InvalidTransitionError("Path is not waiting for information")
+        if request.material_id is not None:
+            if type(quantity) is not int or quantity < 0:
+                raise InvalidTransitionError("请填写该替代料在指定日期前可供货的数量，无法供货时填写 0。")
+            answer = f"{request.material_id} 在 {request.required_by} 前可供货 {quantity:,} 件。确认依据：{answer.strip()}"
+        elif quantity is not None:
+            raise InvalidTransitionError("This information request does not ask for a supply quantity")
         requests = [
             item.model_copy(update={
                 "answer": answer.strip(), "answered_by": actor, "answered_at": utc_now(),
+                "answer_quantity": quantity,
             }) if item.id == request_id else item
             for item in attempt.information_requests
         ]
@@ -657,6 +667,7 @@ class CaseService:
         self.repository.save(case, CaseEvent.INFORMATION_ANSWERED, {
             "path_id": path_id, "request_id": request_id, "role": role,
             "actor": actor, "question": request.question, "answer": answer.strip(),
+            "material_id": request.material_id, "required_by": request.required_by, "quantity": quantity,
         })
         return case
 
@@ -892,9 +903,7 @@ class CaseService:
         ]
 
     def reset_demo(self, dataset_id: str):
-        if dataset_id != DEMO_DATASET_ID:
-            raise ValueError("Unknown demo dataset")
-        self.repository.reset(demo_cases())
+        self.repository.reset(demo_cases(dataset_id))
 
     def get_case_capabilities(self, case_id: str, path_id: str | None = None) -> dict:
         case = self.get_case(case_id)

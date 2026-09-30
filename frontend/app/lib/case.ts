@@ -109,6 +109,9 @@ export type InformationRequest = {
   answer: string | null;
   answered_by: string | null;
   answered_at: string | null;
+  material_id?: string | null;
+  required_by?: string | null;
+  answer_quantity?: number | null;
 };
 
 type InboxCase = {
