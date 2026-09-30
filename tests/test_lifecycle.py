@@ -421,6 +421,11 @@ def test_supply_information_is_scoped_to_substitute_and_deadline(client, quantit
     assert original["target_date"] in solution["recommendation"]
     assert f"{quantity:,}" in solution["recommendation"]
     assert f"{18400 - quantity:,}" in solution["recommendation"]
+    reports = {item["role"]: item["report"] for item in solution["role_reports"]}
+    supply_report = reports["主计划"]
+    for fact in ("MCU-X7A", original["target_date"], f"{quantity:,}", f"{18400 - quantity:,}", body["answer"], "王淼"):
+        assert fact in supply_report
+    assert body["answer"] not in reports["研发"]
     assert api.service.get_case(DEMO_CASE_ID).business_payload == original
 
 

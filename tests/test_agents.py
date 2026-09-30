@@ -1498,3 +1498,19 @@ def test_path_tool_feedback_corrects_or_stops_repeated_errors(correct_after_feed
             assert any(event[0] == "deepagent.tool.loop_aborted" for event in events)
         feedback = [event for event in events if event[0] == "deepagent.tool.feedback"]
         assert [event[3]["failure_count"] for event in feedback] == [1, 2]
+
+
+def test_deterministic_substitution_reports_use_role_specific_business_evidence(tmp_path: Path) -> None:
+    service = make_service(tmp_path, path_agent=deterministic_path_adapter())
+    orchestrate(service)
+    service.approve_manifest(DEMO_CASE_ID, ["PATH-01"], actor=OWNER_ACTOR, role=OWNER_ROLE)
+    asyncio.run(service.execute_path(DEMO_CASE_ID, "PATH-01", actor=OWNER_ACTOR, role=OWNER_ROLE))
+    solution = service.get_case(DEMO_CASE_ID).path_attempts[0].solution_revision
+    assert solution is not None
+    reports = {item.role: item.report for item in solution.role_reports}
+    for fact in ("MCU-X7A", "18,400", "2026-08-24", "12,000", "6,400"):
+        assert fact in reports["主计划"]
+    assert "QFN-48" in reports["研发"]
+    assert "QFN-48" not in reports["主计划"]
+    assert "AVL" in reports["供应经理"]
+    assert "AVL" not in reports["主计划"]

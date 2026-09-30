@@ -87,6 +87,12 @@ _PATH_AGENT_SYSTEM_PROMPT = (
     "/evidence/required-role-reports.json, with no missing or extra role/dimension pair; each "
     "report explains why this recommendation should be approved from that role's dimension and "
     "what that role still needs to confirm. "
+    "报告先给出本角色的业务判断，再列出具体事实、来源和待确认事项；禁止用执行了 Skill、"
+    "依据 Manifest、冻结记录待核验、尚未承诺等流程套话代替业务依据。"
+    "主计划只评估替代料供应：明确料号、需求数量与截止日期、可供数量、供应来源及到货日期、"
+    "缺口计算和能否按期满足需求；区分库存、预计补货和已确认的日期供货量。"
+    "缺失的来源或日期明确写未知，不得用库存和相对补货周期推断按期到货。"
+    "技术验证写在研发报告，客户接受度写在客户责任角色报告，不要在主计划报告重复。"
     "如果工具和现有资料无法提供形成方案必需的事实，返回 information_requests，"
     "每项写明 role、具体 question 和缺失信息为何阻碍分析的 reason；"
     "role 只能从 required-role-reports.json 的责任角色中选择。"
@@ -777,6 +783,7 @@ class DeepAgentPathAdapter:
 
 class _DeterministicPathChatModel(BaseChatModel):
     delay_seconds: float = 0.0
+    available_tools: tuple[str, ...] = ()
 
     @property
     def _llm_type(self) -> str:
@@ -789,7 +796,13 @@ class _DeterministicPathChatModel(BaseChatModel):
         }
 
     def bind_tools(self, tools: Any, *, tool_choice: Any = None, **kwargs: Any) -> BaseChatModel:
-        return self
+        names = tuple(
+            tool.name if isinstance(tool, BaseTool) else
+            tool.get("function", tool).get("name", "") if isinstance(tool, dict) else
+            getattr(tool, "__name__", "")
+            for tool in tools
+        )
+        return self.model_copy(update={"available_tools": names})
 
     def _generate(
         self,
@@ -866,11 +879,27 @@ class _DeterministicPathChatModel(BaseChatModel):
             )
         ]
         option_reference = str(business.get("material") or "当前缺料")
-        information_note = ""
-        if information:
-            information_note = " 已收到人工补充：" + "；".join(
-                f"{item['role']}提供{item['answer']}" for item in information
-            ) + "；仍需独立完成专业审批。"
+        candidate = None
+        records: dict[str, Any] = {}
+        if path.get("definition") == "MaterialSubstitution":
+            queries = [("lookup_material_substitutes", option_reference)]
+            relation_key = "deterministic-lookup_material_substitutes"
+            if relation_key in tool_messages:
+                candidates = read_json(relation_key).get("candidates", [])
+                candidate = candidates[0]["material_id"] if candidates else None
+                if candidate:
+                    queries += [(name, candidate) for name in (
+                        "lookup_supply_snapshot", "lookup_material_master", "lookup_customer_acceptance",
+                    )]
+            calls = [{
+                "name": name, "args": {"material_id": material},
+                "id": f"deterministic-{name}", "type": "tool_call",
+            } for name, material in queries
+                if name in self.available_tools and f"deterministic-{name}" not in tool_messages]
+            if calls:
+                return AIMessage(content="", tool_calls=calls)
+            records = {name: read_json(f"deterministic-{name}") for name, _ in queries
+                       if f"deterministic-{name}" in tool_messages}
         if supply_questions:
             supply_role = next(
                 (contract["role"] for contract in required_role_reports if contract["role"] == "主计划"),
@@ -884,22 +913,55 @@ class _DeterministicPathChatModel(BaseChatModel):
                 reason="库存快照无法确定指定日期前可供货的数量，需要据此判断能否覆盖订单缺口。",
             ) for supply in supply_questions])
         else:
-            recommendation = (
-                f"已依据 Manifest 冻结的执行 Skill 对{option_reference}形成推荐方案草案；"
-                "尚未作出业务承诺，待责任角色按各维度确认。"
-            )
-            confirmed_supply = next((
-                item for item in information
-                if item.get("answer_quantity") is not None and item.get("material_id")
-            ), None)
-            if confirmed_supply and isinstance(business.get("gap_quantity"), int):
-                quantity = confirmed_supply["answer_quantity"]
-                remaining = max(0, business["gap_quantity"] - quantity)
-                recommendation = (
-                    f"{confirmed_supply['material_id']} 在 {confirmed_supply['required_by']} 前可供货 {quantity:,} 件，"
-                    f"剩余缺口 {remaining:,} 件；"
-                    + ("需继续评估补量或其他路径，并完成技术与客户审批。" if remaining else "供货数量可覆盖缺口，仍需完成技术与客户审批。")
+            recommendation = f"评估{option_reference}的{path.get('title', '供货方案')}，当前资料不足以确认数量与交付日期。"
+            reports: dict[str, str] = {}
+            if candidate:
+                gap = business.get("gap_quantity")
+                deadline = business.get("target_date")
+                supply = records.get("lookup_supply_snapshot", {})
+                confirmed_supply = next((
+                    item for item in information
+                    if item.get("material_id") == candidate
+                    and item.get("required_by") == deadline
+                    and item.get("answer_quantity") is not None
+                ), None)
+                case_supply = next((
+                    item for item in business.get("substitute_supply", [])
+                    if item.get("material_id") == candidate and item.get("required_by") == deadline
+                    and item.get("quantity") is not None
+                ), None)
+                quantity = confirmed_supply["answer_quantity"] if confirmed_supply else (
+                    case_supply["quantity"] if case_supply else None
                 )
+                demand = f"{candidate}：需求 {gap:,} 件，截止 {deadline}。" if isinstance(gap, int) else f"{candidate}：需求数量未知，截止 {deadline or '未知'}。"
+                if quantity is not None and isinstance(gap, int):
+                    remaining = max(0, gap - quantity)
+                    recommendation = f"{candidate} 在 {deadline} 前可供 {quantity:,} 件，剩余缺口 {remaining:,} 件。"
+                    source = (f"{confirmed_supply.get('answered_by', confirmed_supply['role'])}补充：{confirmed_supply['answer']}"
+                              if confirmed_supply else str(case_supply.get("source") or "未提供来源"))
+                    reports["主计划"] = (
+                        demand + f"按期可供 {quantity:,} 件，剩余缺口 {remaining:,} 件，"
+                        + ("数量可覆盖需求。" if remaining == 0 else "不能覆盖全部需求，需确认缺口补量及到货日期。")
+                        + f"依据：{source}"
+                    )
+                else:
+                    recommendation = f"优先评估以{candidate}替代{option_reference}，需确认其在{deadline or '需求日期'}前的供货数量。"
+                    facts = []
+                    for key, label, unit in (
+                        ("available_quantity", "库存可用", "件"),
+                        ("transfer_lead_days", "调拨周期", "天"),
+                        ("additional_quantity", "预计补货", "件"),
+                        ("additional_lead_days", "补货周期", "天"),
+                    ):
+                        if key in supply:
+                            facts.append(f"{label} {supply[key]:,} {unit}")
+                    reports["主计划"] = demand + (
+                        "供应快照：" + "，".join(facts) + "。" if facts else "缺少供应数量记录。"
+                    ) + "供应来源、实际到货日期及截止日前可供数量未确认，无法判定按期覆盖及剩余缺口。需确认上述供应信息。"
+                master = records.get("lookup_material_master", {})
+                reports["研发"] = f"{candidate}：封装 {master.get('package', '未知')}；固件改动：{master.get('firmware_change', '未知')}；验证情况：{master.get('qualification', '缺少技术验证记录')}。"
+                customer = records.get("lookup_customer_acceptance", {})
+                reports["供应经理"] = f"{candidate}：客户准入情况：{customer.get('avl_status', '未知')}；待办：{customer.get('approval_route', '需取得客户接受该替代料的确认依据')}。"
             result = PathAgentResult(
                 recommendation=recommendation,
                 change_summary=(
@@ -911,10 +973,9 @@ class _DeterministicPathChatModel(BaseChatModel):
                     RoleReport(
                         role=contract["role"],
                         dimension=contract["dimension"],
-                        report=(
-                            f"{contract['role']}维度：推荐方案已按{contract['dimension']}对照"
-                            f"{option_reference}形成判断，但冻结查询记录仍须由"
-                            f"{contract['role']}核验后才能形成业务承诺。{information_note}"
+                        report=reports.get(
+                            contract["role"],
+                            f"{option_reference}：缺少{contract['dimension']}的具体业务依据，无法判断该方案是否满足要求。",
                         ),
                     )
                     for contract in required_role_reports
