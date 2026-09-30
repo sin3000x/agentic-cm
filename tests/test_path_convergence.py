@@ -1,13 +1,15 @@
 import asyncio
+import json
 from dataclasses import replace
 
+import httpx
 import pytest
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
 from agentic_cm.agent_runtime import AgentOutputError
-from agentic_cm.path_agent import DeepAgentPathAdapter, PathAgentContext, _DeterministicPathChatModel
+from agentic_cm.path_agent import DeepAgentPathAdapter, PathAgentContext, _DeterministicPathChatModel, _PathChatOpenAI
 
 
 class ConvergenceModel(BaseChatModel):
@@ -122,3 +124,44 @@ def test_demo_model_reads_supported_file_formats(numbered):
     ])
     assert reply.tool_calls[0]["name"] == "PathAgentResult"
     assert reply.tool_calls[0]["args"]["recommendation"]
+
+
+def test_cache_replay_preserves_ordered_tool_history_on_the_wire():
+    requests = []
+
+    def respond(request):
+        body = json.loads(request.content)
+        requests.append(body)
+        turn = len(requests)
+        if turn <= 4:
+            name, args = "lookup_material_substitutes", {"material_id": "SOURCE"}
+        else:
+            name, args = "PathAgentResult", {"recommendation": "需要核实供货数量。", "role_reports": []}
+        return httpx.Response(200, json={
+            "id": f"completion-{turn}", "object": "chat.completion", "created": 1,
+            "model": "test-path", "choices": [{"index": 0, "finish_reason": "tool_calls",
+                "message": {"role": "assistant", "content": "", "tool_calls": [{
+                    "id": f"call-{turn}", "type": "function",
+                    "function": {"name": name, "arguments": json.dumps(args)},
+                }]}}],
+        })
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            model = _PathChatOpenAI(
+                model="test-path", api_key="test", base_url="https://mock.invalid/v1",
+                http_async_client=client, max_retries=0,
+            )
+            return await DeepAgentPathAdapter(model, profile="test/wire-history").generate(
+                context_for(), lambda *args: None,
+            )
+
+    assert asyncio.run(run()).recommendation
+    assert len(requests) == 5
+    for turn, request in enumerate(requests, start=1):
+        history = [m for m in request["messages"] if m["role"] in {"assistant", "tool"}]
+        assert [m["role"] for m in history] == ["assistant", "tool"] * (turn - 1)
+        for index in range(turn - 1):
+            call, result = history[index * 2:index * 2 + 2]
+            assert call["tool_calls"][0]["id"] == result["tool_call_id"] == f"call-{index + 1}"
+            assert json.loads(result["content"]) == {"candidate": "FIRST"}

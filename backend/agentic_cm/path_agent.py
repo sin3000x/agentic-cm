@@ -253,6 +253,9 @@ class _PathToolFeedbackMiddleware(AgentMiddleware):
                         {"tool": name, "input": arguments},
                     )
                     return cached.model_copy(update={
+                        # add_messages replaces messages with the same ID. A cache
+                        # replay is a new observation, not an edit of the old one.
+                        "id": None,
                         "tool_call_id": request.tool_call["id"],
                     })
                 result = await handler(request)
