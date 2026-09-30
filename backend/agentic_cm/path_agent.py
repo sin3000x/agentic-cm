@@ -26,9 +26,9 @@ from langchain_core.callbacks import (
     CallbackManagerForLLMRun,
 )
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain.agents.middleware import AgentMiddleware
-from langchain.agents.middleware.types import ToolCallRequest
+from langchain.agents.middleware.types import ModelRequest, ModelResponse, ToolCallRequest
 from langchain_core.outputs import ChatGeneration, ChatResult, LLMResult
 from langchain_core.tools import BaseTool, StructuredTool
 from langchain_openai import ChatOpenAI
@@ -79,6 +79,9 @@ _PATH_AGENT_SYSTEM_PROMPT = (
     'Skill 路径从 /skills 的目录列表或已提供的 Skill 元数据获取，不得猜测。'
     '工具返回错误后必须根据原因修改参数，禁止原样重复失败调用；'
     '若没有合法路径或证据，报告缺失，不要持续试探。'
+    "本次业务工具返回冻结数据，同一工具和参数只需查询一次；"
+    "候选查询后复用返回结果，对不同候选的独立查询可并行调用。"
+    "资料充分后立即调用 PathAgentResult；缺少必要事实时提交信息请求，不反复取证。"
     "Write the recommendation as exactly one concise Chinese plain-text sentence of at most "
     "100 characters. Do not use Markdown, headings, lists, tables, or line breaks. Do not make "
     "business commitments, claim "
@@ -136,7 +139,10 @@ _PATH_HARNESS_PROFILE = HarnessProfile(
 )
 register_harness_profile("agentic-cm", _PATH_HARNESS_PROFILE)
 
-_PATH_RECURSION_LIMIT = 20
+# Graph steps include middleware and tool nodes, not just model turns.
+_PATH_RECURSION_LIMIT = 100
+_PATH_EVIDENCE_TURNS = 12
+_PATH_FINALIZATION_TURNS = 2
 _FILESYSTEM_TOOLS = frozenset({"ls", "read_file", "glob", "grep"})
 _STRUCTURED_OUTPUT_TOOLS = frozenset({"PathAgentResult"})
 
@@ -176,21 +182,86 @@ class _PathRuntimeContext:
     trace: AgentTraceSink
     file_paths: tuple[str, ...] = ()
     tool_failures: dict[str, int] = field(default_factory=dict)
+    business_tools: frozenset[str] = frozenset()
+    tool_results: dict[str, ToolMessage] = field(default_factory=dict)
+    tool_locks: dict[str, asyncio.Lock] = field(default_factory=dict)
+    budget: dict[str, int] = field(default_factory=lambda: {
+        "turns": 0, "duplicates": 0, "finalization_turns": 0,
+    })
 
 
 class _PathToolFeedbackMiddleware(AgentMiddleware):
+    async def awrap_model_call(
+        self, request: ModelRequest,
+        handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
+    ) -> ModelResponse:
+        context = request.runtime.context
+        budget = context.budget
+        finalize = (
+            budget["turns"] >= _PATH_EVIDENCE_TURNS
+            or budget["duplicates"] >= 3
+            or budget["finalization_turns"] > 0
+        )
+        if finalize:
+            if budget["finalization_turns"] >= _PATH_FINALIZATION_TURNS:
+                raise AgentOutputError("Path Agent 在限定收尾轮次内未提交有效 PathAgentResult")
+            budget["finalization_turns"] += 1
+            context.trace(
+                "deepagent.finalization.started", "STARTED", "停止取证，提交结构化分析结果",
+                dict(budget),
+            )
+            instruction = (
+                "取证阶段已结束，禁止继续查询。现在必须调用 PathAgentResult 提交结果。"
+                "只使用已经读取的证据；必要事实不足时返回 information_requests，"
+                "recommendation 留空、role_reports 为空，不得编造或把待审批当作已确认。"
+            )
+            request = request.override(
+                tools=[],
+                tool_choice={"type": "function", "function": {"name": "PathAgentResult"}},
+                system_message=SystemMessage(content=[
+                    *request.system_message.content_blocks,
+                    {"type": "text", "text": instruction},
+                ]),
+            )
+        budget["turns"] += 1
+        return await handler(request)
+
     async def awrap_tool_call(
         self,
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
     ) -> ToolMessage | Command[Any]:
-        result = await handler(request)
-        if not isinstance(result, ToolMessage):
-            return result
         context = request.runtime.context
         name = request.tool_call["name"]
         arguments = request.tool_call["args"]
+        if context.budget["finalization_turns"] and name not in _STRUCTURED_OUTPUT_TOOLS:
+            return ToolMessage(
+                content="取证阶段已结束，此调用未执行。必须调用 PathAgentResult；缺少必要事实时返回信息请求。",
+                name=name, tool_call_id=request.tool_call["id"], status="error",
+            )
         key = json.dumps([name, arguments], sort_keys=True, ensure_ascii=False)
+        if name in context.business_tools:
+            # Frozen records cannot change during an invocation. Serialize identical
+            # parallel calls and replay their evidence under the current call ID.
+            lock = context.tool_locks.setdefault(key, asyncio.Lock())
+            async with lock:
+                cached = context.tool_results.get(key)
+                if cached is not None:
+                    context.budget["duplicates"] += 1
+                    context.trace(
+                        "deepagent.tool.reused", "COMPLETED", "复用已查询的冻结证据",
+                        {"tool": name, "input": arguments},
+                    )
+                    return cached.model_copy(update={
+                        "tool_call_id": request.tool_call["id"],
+                    })
+                result = await handler(request)
+                if isinstance(result, ToolMessage) and result.status != "error":
+                    context.tool_results[key] = result
+        else:
+            result = await handler(request)
+        if not isinstance(result, ToolMessage):
+            return result
         if result.status != "error":
             context.tool_failures.pop(key, None)
             return result
@@ -727,7 +798,10 @@ class DeepAgentPathAdapter:
                     "recursion_limit": _PATH_RECURSION_LIMIT,
                     "callbacks": [callback],
                 },
-                context=_PathRuntimeContext(trace=trace, file_paths=tuple(sorted(context_files))),
+                context=_PathRuntimeContext(
+                    trace=trace, file_paths=tuple(sorted(context_files)),
+                    business_tools=frozenset(str(tool["id"]) for tool in context.tool_contracts),
+                ),
             )
         except GraphRecursionError as exc:
             trace(
@@ -736,10 +810,12 @@ class DeepAgentPathAdapter:
                 "Deep Agents Path Runtime 未能收敛",
                 {**_exception_trace_details(exc), "turns": callback.turns},
             )
-            raise AgentOutputError("Path Agent did not produce structured output") from exc
+            raise AgentOutputError(
+                f"Path Agent 图执行超过 {_PATH_RECURSION_LIMIT} 步，未提交结构化输出"
+            ) from exc
         except AgentOutputError as exc:
             trace(
-                "deepagent.runtime.failed", "FAILED", "Path Agent 因重复工具错误停止",
+                "deepagent.runtime.failed", "FAILED", "Path Agent 触发运行保护停止",
                 {**_exception_trace_details(exc), "turns": callback.turns},
             )
             raise
@@ -855,9 +931,15 @@ class _DeterministicPathChatModel(BaseChatModel):
 
         def read_json(tool_call_id: str) -> Any:
             numbered_content = str(tool_messages[tool_call_id].content)
-            content = "\n".join(
-                re.sub(r"^\s*\d+\s{2}", "", line)
-                for line in numbered_content.splitlines()
+            lines = numbered_content.splitlines()
+            header = next((
+                index for index, line in enumerate(lines)
+                if line.startswith("@@ ") and line.endswith(" @@")
+            ), None)
+            # New read_file replies have a status header and verbatim body;
+            # older supported Deep Agents releases use numbered source lines.
+            content = "\n".join(lines[header + 1:]) if header is not None else "\n".join(
+                re.sub(r"^\s*\d+\s{2}", "", line) for line in lines
             )
             return json.loads(content)
 

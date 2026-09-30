@@ -1,6 +1,6 @@
 # Agent Adapter 契约
 
-三个 Agent 共用 `agent_runtime.request_structured_output`：一次网络重试、一次结构修复，然后 fail closed。错误类型只有：
+Orchestrator 与 Synthesis Agent 使用 `agent_runtime.request_structured_output`：一次网络重试、一次结构修复，然后 fail closed。Path Agent 使用 Deep Agents 图运行时，平台另提供一次语义输出修正。错误类型只有：
 
 - `AgentError` → HTTP 409
 - `AgentOutputError` → HTTP 409（可修复的非法输出）
@@ -21,6 +21,10 @@ Path 输出有两种互斥结果：完整方案包含 `recommendation` 和所有
 `/case/review-feedback.json` 提供当前方案版本收到的修改理由；`/case/human-information.json` 提供已回答的问题、资料和来源。它们是业务输入，不改变 Agent 的工具权限或强制审批义务。
 
 ## 运行时
+
+Path Agent 最多进行 12 轮取证；同一工具与参数的冻结业务查询在一次运行内复用结果（包括查无记录），并行重复调用只执行一次。缓存不跨运行共享。累计复用 3 次或取证预算用尽后，移除取证工具，仅保留 `PathAgentResult`，最多两轮提交有效结构化结果。证据不足仍须返回信息请求，不能为了收尾编造方案。
+
+图执行上限为 100 步，给工具与中间件节点留出空间，不作为模型轮次预算。取证复用、进入收尾及失败原因均记入 trace；超过预算或输出持续无效时 fail closed，不写入新方案。
 
 `AGENTIC_CM_ADAPTER=deterministic|openai-compatible`。模型、thinking、token 上限按 Agent 前缀覆盖，见 README。Key 只用于请求 Header，不进 Case、事件或 trace。
 

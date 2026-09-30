@@ -420,7 +420,7 @@ def test_deep_agent_trace_records_internal_turns_and_tools() -> None:
     started = traces[0][3]
     assert traces[0][0:2] == ("deepagent.runtime.started", "STARTED")
     assert started["skills"] == ["material-analysis"]
-    assert started["recursion_limit"] == 20
+    assert started["recursion_limit"] == 100
     assert "deepagent.turn.started" in steps
     assert "deepagent.tool.started" in steps
 
