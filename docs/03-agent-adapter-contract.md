@@ -1,6 +1,6 @@
 # Agent Adapter 契约
 
-Orchestrator 与 Synthesis Agent 使用 `agent_runtime.request_structured_output`：一次网络重试、一次结构修复，然后 fail closed。Path Agent 使用 Deep Agents 图运行时，平台另提供一次语义输出修正。错误类型只有：
+Orchestrator 与 Synthesis Agent 使用 `agent_runtime.request_structured_output`：一次网络重试、一次结构修复，然后 fail closed。Path Agent 使用 Deep Agents 图运行时，在原对话中完成一次输出修正，平台仍保留最终校验。错误类型只有：
 
 - `AgentError` → HTTP 409
 - `AgentOutputError` → HTTP 409（可修复的非法输出）
@@ -22,7 +22,9 @@ Path 输出有两种互斥结果：完整方案包含 `recommendation` 和所有
 
 ## 运行时
 
-Path Agent 最多进行 12 轮取证；同一工具与参数的冻结业务查询在一次运行内复用结果（包括查无记录），并行重复调用只执行一次。缓存不跨运行共享。累计复用 3 次或取证预算用尽后，移除取证工具，仅保留 `PathAgentResult`，最多两轮提交有效结构化结果。证据不足仍须返回信息请求，不能为了收尾编造方案。
+Path Agent 最多进行 12 轮取证；同一工具与参数的冻结业务查询及只读文件操作在一次运行内复用结果（包括查无记录），并行重复调用只执行一次。缓存不跨运行共享。每轮提示已完成的查询，独立文件读取及候选证据查询应并行。累计复用 3 次或取证预算用尽后，移除取证工具，仅保留 `PathAgentResult`，最多两轮提交有效结构化结果。证据不足仍须返回信息请求，不能为了收尾编造方案。
+
+信息请求与方案字段在 `PathAgentResult` 模型校验时互斥，冲突错误列出具体字段（包括 `change_summary`）。角色、中文和修订摘要要求在同一图调用内校验。首次输出错误回传为工具反馈，保留完整消息与证据，并提供旧方案和人工反馈；下一轮关闭全部取证工具，只修正并提交结果。再次输出错误立即失败，不重新运行取证流程。其他 Adapter 仍使用平台的单次修正兜底。
 
 图执行上限为 100 步，给工具与中间件节点留出空间，不作为模型轮次预算。取证复用、进入收尾及失败原因均记入 trace；超过预算或输出持续无效时 fail closed，不写入新方案。
 

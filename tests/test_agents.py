@@ -774,7 +774,7 @@ def test_deep_agent_rejects_missing_structured_response() -> None:
         )
 
 
-def test_deep_agent_leaves_semantic_output_validation_to_path_agent() -> None:
+def test_deep_agent_rejects_invalid_roles_after_one_in_context_repair() -> None:
     class ScriptedModel(FakeMessagesListChatModel):
         def bind_tools(self, tools, *, tool_choice=None, **kwargs):
             return self
@@ -810,14 +810,14 @@ def test_deep_agent_leaves_semantic_output_validation_to_path_agent() -> None:
     )])
     traces = []
 
-    result = asyncio.run(
-        DeepAgentPathAdapter(model, profile="test/invalid-report").generate(
-            context, lambda *args: traces.append(args)
+    with pytest.raises(AgentOutputError, match="Skill-required role report"):
+        asyncio.run(
+            DeepAgentPathAdapter(model, profile="test/invalid-report").generate(
+                context, lambda *args: traces.append(args)
+            )
         )
-    )
-
-    assert result == PathAgentResult.model_validate(payload)
-    assert traces[-1][0:2] == ("deepagent.model.completed", "COMPLETED")
+    assert sum(event[0] == "agent.repair_request" for event in traces) == 1
+    assert traces[-1][0:2] == ("deepagent.runtime.failed", "FAILED")
 
 
 def test_deterministic_mode_delays_every_agent_stage(
@@ -909,7 +909,7 @@ def test_information_requests_cannot_bypass_path_output_boundaries(tmp_path: Pat
                 question="请提供本批次的有效测试结果。",
                 reason="冻结资料缺少本批次验证，无法确认候选可行性。",
             )
-            return PathAgentResult(
+            return PathAgentResult.model_construct(
                 information_requests=[question, question] if invalid == "duplicate_question" else [question],
                 recommendation="缺少证据却提出方案。" if invalid == "mixed_solution" else "",
             )

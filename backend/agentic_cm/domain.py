@@ -212,11 +212,20 @@ class PathAgentResult(MutableModel):
 
     recommendation: str = ""
     role_reports: list[RoleReport] = Field(default_factory=list)
-    information_requests: list[InformationQuestion] = Field(default_factory=list)
-    change_summary: str = ""
+    information_requests: list[InformationQuestion] = Field(
+        default_factory=list,
+        description="缺少必要事实时填写；此时 recommendation、change_summary 必须为空，role_reports 必须为空数组。",
+    )
+    change_summary: str = Field(default="", description="修订完整方案时必须说明如何回应反馈；请求信息时必须为空。")
 
     @model_validator(mode="after")
     def validate_unique_keys(self) -> "PathAgentResult":
+        if self.information_requests:
+            conflicts = [name for name in ("recommendation", "role_reports", "change_summary")
+                         if (getattr(self, name).strip() if isinstance(getattr(self, name), str)
+                             else getattr(self, name))]
+            if conflicts:
+                raise ValueError("信息请求分支不允许包含：" + ", ".join(conflicts))
         role_keys = [(item.role, item.dimension) for item in self.role_reports]
         if len(set(role_keys)) != len(role_keys):
             raise ValueError("Path Agent role reports must be unique by role and dimension")
