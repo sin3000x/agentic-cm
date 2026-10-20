@@ -59,8 +59,17 @@ def test_http_golden_path_runs_from_orchestration_to_owner_decision(client) -> N
         json={"path_ids": ["PATH-01"], **owner},
     )
     assert path_result.status_code == 200
-    revision = path_result.json()["case"]["path_attempts"][0]["solution_revision"]
+    case = path_result.json()["case"]
+    assert case["phase"] == "PROFESSIONAL_COMMITMENT"
+    attempt = case["path_attempts"][0]
+    assert attempt["information_requests"] == []
+    revision = attempt["solution_revision"]
     assert revision["recommendation"]
+    assert "18,400" in revision["recommendation"]
+    supply_report = next(item["report"] for item in revision["role_reports"] if item["role"] == "主计划")
+    assert "剩余缺口 0 件" in supply_report
+    assert "2026-08-21" in supply_report
+    assert "2026-08-24" in supply_report
     assert {item["role"] for item in revision["role_reports"]} == {"主计划", "研发", "供应经理"}
 
     approval = client.post(

@@ -27,6 +27,20 @@ def demo_cases(dataset_id: str = DEMO_DATASET_ID) -> list[Case]:
                 "target_date": "2026-08-24",
                 "commitment_due_date": "2026-08-28",
                 "risk_level": "HIGH",
+                "substitute_supply": [
+                    {
+                        "material_id": "MCU-X7A",
+                        "required_by": "2026-08-24",
+                        "quantity": 18400,
+                        "source": "演示供应方书面供货记录：华东仓调拨 12,000 件于 2026-08-21 到货，供应商补货 6,400 件于 2026-08-24 到货；合计 18,400 件可在目标日期前供应。",
+                    },
+                    {
+                        "material_id": "MCU-X7B",
+                        "required_by": "2026-08-24",
+                        "quantity": 18400,
+                        "source": "演示供应方书面供货记录：华南仓调拨 18,400 件于 2026-08-22 到货，可在目标日期前供应。",
+                    },
+                ],
             },
             human_proposal={
                 "revision": 1,

@@ -12,7 +12,7 @@
 
 1. Owner 打开 `CM-2026-014`；Orchestrator 生成含提拉 / 替代 / 拆分的 Manifest。
 2. Demo UI 默认勾选物料替代；批准后只为所选 Path 建 PathAttempt 和 Commitment。
-3. Path Agent 依据冻结 Skill 的 `path-options` 写出中文推荐方案和角色报告。
+3. 默认 Case 已提供 MCU-X7A / MCU-X7B 在 2026-08-24 前可供 18,400 件的演示供货依据（含来源与到货日期）。Path Agent 依据 Case 和授权工具直接写出中文推荐方案和角色报告，不经过人工补充信息；技术验证、客户放行等条件保留在后续审批中。
 4. 主计划与研发并行审批，供应经理依赖二者。
 5. 全部 READY 后进入 FINAL_REVIEW；Synthesis 汇总；Owner CLOSE / KEEP_OPEN / MODIFY。
 
@@ -37,6 +37,8 @@ REVISE 必须填写理由并携带被审版本，回到 PATH_EXPLORATION；新�
 5. 方案仍进入专业审批；供货信息回答没有自动批准整个替代方案。
 
 点击「重置 Demo」可切回原黄金路径。供货确认始终绑定实际料号与截止日期，保留数量、依据、回答者和时间。
+
+修改默认演示数据后，已有数据库不会自动覆盖，点击「重置 Demo」后再开始演示即可使用完整供货记录。
 
 ## 必须保持的边界
 
