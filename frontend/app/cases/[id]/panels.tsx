@@ -244,22 +244,42 @@ export function ManifestYamlPanel({
   downloadHref: string;
   onCopy: () => void;
 }) {
+  const lines = yaml.split("\n");
+  if (lines.at(-1) === "") lines.pop();
+
   return (
     <section className="manifestYamlPanel" aria-label="完整 Manifest YAML">
       <header>
-        <span>
-          <strong>完整 Manifest YAML</strong>
-        </span>
-        <span>
-          <button className="linkButton" onClick={onCopy}>
-            复制 YAML
-          </button>
-          <a className="linkButton" href={downloadHref} download>
-            下载 YAML
-          </a>
-        </span>
+        <div className="manifestYamlFile">
+          <span className="manifestYamlFileIcon" aria-hidden="true">{"{ }"}</span>
+          <span>
+            <strong>manifest.yaml</strong>
+            <small>完整 Manifest · {lines.length} 行</small>
+          </span>
+        </div>
+        <div className="manifestYamlActions">
+          <span className="manifestYamlLanguage">YAML</span>
+          <button type="button" onClick={onCopy}>复制</button>
+          <a href={downloadHref} download>下载</a>
+        </div>
       </header>
-      <pre>{yaml}</pre>
+      <pre aria-label="Manifest YAML 源码"><code>
+        {lines.map((line, index) => {
+          const field = /^(\s*(?:- )?)([\w.-]+)(:)(?=\s|$)(.*)$/.exec(line);
+          const value = field ? field[4] : line;
+          const scalar = /^\s*(?:true|false|null|[-+]?\d+(?:\.\d+)?)\s*$/.test(value);
+          return (
+            <span className="manifestYamlLine" key={index}>
+              <span className="manifestYamlLineNumber" aria-hidden="true" />
+              <span className="manifestYamlLineContent">
+                {field && <>{field[1]}<span className="yamlKey">{field[2]}</span><span className="yamlPunctuation">{field[3]}</span></>}
+                <span className={scalar ? "yamlScalar" : "yamlValue"}>{value}</span>
+                {index < lines.length - 1 || yaml.endsWith("\n") ? "\n" : ""}
+              </span>
+            </span>
+          );
+        })}
+      </code></pre>
     </section>
   );
 }

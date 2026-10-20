@@ -1112,64 +1112,145 @@ button:disabled {
   color: #94611b;
 }
 .manifestYamlPanel {
-  margin-top: 14px;
+  margin-top: 16px;
+  min-width: 0;
   overflow: hidden;
-  border: 1px solid #b9d5cf;
-  border-radius: 9px;
-  background: #f7fbfa;
+  border: 1px solid #cbded9;
+  border-radius: 12px;
+  background: #fbfdfc;
+  box-shadow: 0 4px 16px #173d3610;
 }
 .manifestYamlPanel > header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
-  padding: 11px 12px;
-  border-bottom: 1px solid #d7e5e2;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid #dce8e4;
+  background: #f3f8f6;
 }
-.manifestYamlPanel > header > span:first-child {
+.manifestYamlFile {
   display: flex;
-  min-width: 0;
+  align-items: center;
+  gap: 11px;
+}
+.manifestYamlFileIcon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 38px;
+  border: 1px solid #cbded6;
+  border-radius: 7px;
+  background: #fff;
+  color: #397364;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 14px;
+  font-weight: 600;
+}
+.manifestYamlFile > span:last-child {
+  display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
 }
-.manifestYamlPanel > header strong {
+.manifestYamlFile strong {
+  color: #254d43;
+  font-family: var(--font-geist-mono), monospace;
   font-size: var(--text-sm);
+  font-weight: 600;
 }
-.manifestYamlPanel > header small {
-  color: #718481;
-  font-size: var(--text-xs);
+.manifestYamlFile small {
+  color: #6c8179;
+  font-size: var(--text-2xs);
 }
-.manifestYamlPanel > header > span:last-child {
+.manifestYamlActions {
   display: flex;
-  flex: 0 0 auto;
-  gap: 10px;
+  align-items: center;
+  gap: 8px;
 }
-.manifestYamlPanel a {
+.manifestYamlLanguage {
+  margin-right: 4px;
+  color: #73867f;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 10px;
+  letter-spacing: 1px;
+}
+.manifestYamlActions button,
+.manifestYamlActions a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 4px 11px;
+  border: 1px solid #ccdcd5;
+  border-radius: 6px;
+  background: #fff;
+  color: #365f51;
+  font: inherit;
+  font-size: var(--text-xs);
   text-decoration: none;
+  cursor: pointer;
+  transition: background 150ms, border-color 150ms;
+}
+.manifestYamlActions button:hover,
+.manifestYamlActions a:hover {
+  border-color: #90b5a5;
+  background: #eaf3ee;
+}
+.manifestYamlPanel :focus-visible {
+  outline: 2px solid #498570;
+  outline-offset: -2px;
 }
 .manifestYamlPanel pre {
-  max-height: 480px;
+  max-height: 560px;
   overflow: auto;
   margin: 0;
-  padding: 14px;
-  background: #142a2b;
-  color: #dceceb;
+  padding: 16px 0;
+  background: #fbfdfc;
+  color: #364a42;
   font-family: var(--font-geist-mono), monospace;
-  font-size: var(--text-xs);
-  line-height: 1.55;
-  white-space: pre;
+  font-size: 12px;
+  line-height: 1.85;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   tab-size: 2;
+  scrollbar-width: thin;
+  scrollbar-color: #c0d3c9 #f3f8f6;
 }
-@media (max-width: 640px) {
-  .manifestYamlPanel > header {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-  .manifestYamlPanel pre {
-    max-height: 380px;
-    font-size: var(--text-2xs);
-  }
+.manifestYamlPanel code {
+  display: block;
+  font: inherit;
+  counter-reset: yaml-line;
 }
+.manifestYamlLine {
+  display: flex;
+  min-height: 1.85em;
+}
+.manifestYamlLine:hover {
+  background: #eef5f1;
+}
+.manifestYamlLineNumber {
+  flex: 0 0 49px;
+  margin-right: 16px;
+  padding-right: 12px;
+  border-right: 1px solid #e3ece7;
+  color: #8a9c93;
+  text-align: right;
+  user-select: none;
+}
+.manifestYamlLineNumber::before {
+  counter-increment: yaml-line;
+  content: counter(yaml-line);
+}
+.manifestYamlLineContent {
+  min-width: 0;
+  padding-right: 20px;
+}
+.manifestYamlPanel .yamlKey { color: #266e62; font-weight: 600; }
+.manifestYamlPanel .yamlPunctuation { color: #8a9c93; }
+.manifestYamlPanel .yamlValue { color: #596649; }
+.manifestYamlPanel .yamlScalar { color: #92612d; }
+.manifestYamlPanel ::selection { background: #cfe7db; }
 .traceToggle {
   display: block;
   margin-top: 17px;
