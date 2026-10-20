@@ -78,3 +78,33 @@
   .aboutPlayback button { font: inherit; color: #fff; background: #29483e; border: 1px solid #638477; border-radius: 6px; padding: 9px 12px; cursor: pointer; }
   .aboutPlayback button:disabled { opacity: .4; cursor: default; }
 }
+
+.aboutCover { overflow: hidden; background: #f7f8f0; }
+.aboutCover .aboutSlideBody { position: static; padding: 5% 5.5% 0; }
+.aboutCoverEyebrow { display: flex; align-items: center; gap: .9cqw; color: #28594a; font-size: 1cqw; font-weight: 700; letter-spacing: .19em; margin-bottom: 5.2cqw; }
+.aboutCoverEyebrow > span:first-child { width: .7cqw; height: .7cqw; background: #b59a61; transform: rotate(45deg); }
+.aboutCoverEdition { margin-left: 1cqw; padding-left: 1.8cqw; border-left: 1px solid #c6d2c5; font-weight: 400; letter-spacing: .12em; }
+.aboutCover h1 { position: relative; z-index: 1; width: 60%; font-size: 4.5cqw; line-height: 1.3; letter-spacing: -.035em; margin: 0; }
+.aboutCover h1 span { display: block; }
+.aboutCover h1 span:first-child { font-size: 3.2cqw; font-weight: 400; margin-bottom: .8cqw; color: #526d5e; }
+.aboutCover h1 span:last-child { color: #356b54; }
+.aboutCoverArtwork { position: absolute; top: 0; right: 0; width: 37%; height: 100%; object-fit: cover; }
+.aboutCoverDetails { position: absolute; left: 5.5%; bottom: 9%; width: 51%; display: grid; grid-template-columns: 1fr 1fr 1.5fr; gap: 1.8cqw; margin: 0; padding-top: 1.7cqw; border-top: 1px solid #ccd6c7; font-size: 1.05cqw; line-height: 1.8; }
+.aboutCoverDetails div { display: grid; gap: .55cqw; }
+.aboutCoverDetails dt { color: #748575; font-size: .9cqw; letter-spacing: .12em; }
+.aboutCoverDetails dd { margin: 0; color: #28594a; white-space: nowrap; }
+.aboutCover .aboutSlideFooter { color: #b7d0c2; }
+@media screen and (max-width: 700px) {
+  .aboutPage:not(.aboutPresenting) .aboutCover .aboutSlideBody { padding: 28px 24px 0; }
+  .aboutPage:not(.aboutPresenting) .aboutCoverEyebrow { font-size: 10px; gap: 9px; margin-bottom: 36px; }
+  .aboutPage:not(.aboutPresenting) .aboutCoverEyebrow > span:first-child { width: 7px; height: 7px; }
+  .aboutPage:not(.aboutPresenting) .aboutCoverEdition { margin-left: 8px; padding-left: 14px; }
+  .aboutPage:not(.aboutPresenting) .aboutCover h1 { width: 100%; font-size: clamp(26px, 5.5vw, 36px); }
+  .aboutPage:not(.aboutPresenting) .aboutCover h1 span:first-child { font-size: .72em; margin-bottom: 8px; }
+  .aboutPage:not(.aboutPresenting) .aboutCoverArtwork { position: relative; display: block; width: calc(100% + 48px); height: 220px; margin: 28px -24px 0; object-fit: cover; }
+  .aboutPage:not(.aboutPresenting) .aboutCoverDetails { position: static; width: auto; margin-top: 24px; padding-top: 18px; gap: 16px; grid-template-columns: 1fr 1fr; font-size: 13px; }
+  .aboutPage:not(.aboutPresenting) .aboutCoverDetails div { gap: 5px; }
+  .aboutPage:not(.aboutPresenting) .aboutCoverDetails div:last-child { grid-column: 1 / -1; }
+  .aboutPage:not(.aboutPresenting) .aboutCoverDetails dt { font-size: 11px; }
+  .aboutPage:not(.aboutPresenting) .aboutCover .aboutSlideFooter { color: #61786e; padding-top: 24px; }
+}
