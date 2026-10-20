@@ -37,7 +37,7 @@ def build_openai_compatible_client(
     base_url: str,
     api_key_header: str = "Authorization",
     api_key_prefix: str = "Bearer",
-    timeout_seconds: float = 45.0,
+    timeout_seconds: float | None = 45.0,
     http_client: httpx.AsyncClient | None = None,
 ) -> OpenAICompatibleClient:
     parsed = urlsplit(base_url)

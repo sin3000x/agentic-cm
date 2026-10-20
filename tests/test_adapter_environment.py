@@ -132,7 +132,7 @@ def test_llm_timeout_defaults_to_45_seconds(monkeypatch) -> None:
         synthesis_agent_from_environment,
     ],
 )
-@pytest.mark.parametrize("value", ["0", "-1", "not-a-number", "nan", "inf"])
+@pytest.mark.parametrize("value", ["-1", "not-a-number", "nan", "inf"])
 def test_invalid_llm_timeout_fails_closed(monkeypatch, factory, value: str) -> None:
     monkeypatch.setenv("AGENTIC_CM_ADAPTER", "openai-compatible")
     monkeypatch.setenv("AGENTIC_CM_LLM_BASE_URL", "https://model.example/v1")
@@ -221,3 +221,71 @@ def test_invalid_deterministic_delay_fails_closed(
 
     with pytest.raises(ValueError):
         planner_from_environment()
+
+
+@pytest.mark.parametrize("budget", ["32768", "0"])
+def test_reasoning_budgets_and_agent_timeouts_reach_all_runtimes(monkeypatch, budget):
+    monkeypatch.setattr(config_module, "load_runtime_environment", lambda: None)
+    monkeypatch.setenv("AGENTIC_CM_ADAPTER", "openai-compatible")
+    monkeypatch.setenv("AGENTIC_CM_LLM_BASE_URL", "https://model.example/v1")
+    monkeypatch.setenv("AGENTIC_CM_LLM_MODEL", "test-model")
+    monkeypatch.setenv("AGENTIC_CM_LLM_MAX_OUTPUT_TOKENS", budget)
+    monkeypatch.setenv("AGENTIC_CM_LLM_TIMEOUT_SECONDS", "300")
+    monkeypatch.setenv("AGENTIC_CM_PATH_LLM_TIMEOUT_SECONDS", "900")
+    for agent in ("ORCHESTRATOR", "PATH", "SYNTHESIS"):
+        monkeypatch.delenv(f"AGENTIC_CM_{agent}_MAX_OUTPUT_TOKENS", raising=False)
+    planner, path, synthesis = (
+        planner_from_environment(), path_agent_from_environment(), synthesis_agent_from_environment()
+    )
+    expected = int(budget) or None
+    assert planner._max_output_tokens == path._model.max_tokens == synthesis._max_output_tokens == expected
+    assert planner._endpoint.client.sdk.timeout == synthesis._endpoint.client.sdk.timeout == 300
+    assert path._model.request_timeout == 900
+    payload = path._model._get_request_payload([("human", "test")])
+    assert payload.get("max_completion_tokens", payload.get("max_tokens")) == expected
+    if expected is None:
+        assert "max_completion_tokens" not in payload and "max_tokens" not in payload
+
+
+def test_zero_timeout_disables_sdk_timeout_for_all_agents(monkeypatch):
+    monkeypatch.setenv("AGENTIC_CM_LLM_BASE_URL", "https://model.example/v1")
+    monkeypatch.setenv("AGENTIC_CM_LLM_MODEL", "test-model")
+    monkeypatch.setenv("AGENTIC_CM_LLM_TIMEOUT_SECONDS", "0")
+    planner = planner_from_environment("openai-compatible")
+    path = path_agent_from_environment("openai-compatible")
+    synthesis = synthesis_agent_from_environment("openai-compatible")
+    assert planner._endpoint.client.sdk.timeout is None
+    assert path._model.request_timeout is None
+    assert synthesis._endpoint.client.sdk.timeout is None
+
+
+@pytest.mark.parametrize("value", ["-1", "1.5", "nan", "invalid"])
+def test_invalid_token_budget_fails_closed(monkeypatch, value):
+    monkeypatch.setenv("AGENTIC_CM_LLM_MAX_OUTPUT_TOKENS", value)
+    with pytest.raises(ValueError):
+        config_module.agent_max_output_tokens_from_environment("orchestrator")
+
+
+@pytest.mark.parametrize("model_id", ["glm53", "glm-5.3", "vendor/custom-model"])
+def test_explicit_reasoning_settings_work_with_any_model_id(monkeypatch, model_id):
+    monkeypatch.setattr(config_module, "load_runtime_environment", lambda: None)
+    monkeypatch.setenv("AGENTIC_CM_LLM_BASE_URL", "https://model.example/v1")
+    monkeypatch.setenv("AGENTIC_CM_LLM_MODEL", "other-model")
+    monkeypatch.setenv("AGENTIC_CM_LLM_THINKING_ENABLED", "true")
+    monkeypatch.setenv("AGENTIC_CM_LLM_REASONING_EFFORT", "low")
+    for agent in ("ORCHESTRATOR", "PATH", "SYNTHESIS"):
+        monkeypatch.delenv(f"AGENTIC_CM_{agent}_THINKING_ENABLED", raising=False)
+        monkeypatch.delenv(f"AGENTIC_CM_{agent}_REASONING_EFFORT", raising=False)
+    planner = planner_from_environment("openai-compatible", model_id=model_id)
+    path = path_agent_from_environment("openai-compatible", model_id=model_id)
+    synthesis = synthesis_agent_from_environment("openai-compatible", model_id=model_id)
+    assert planner._thinking_enabled and synthesis._thinking_enabled
+    assert planner._reasoning_effort == synthesis._reasoning_effort == "low"
+    assert path._model.extra_body == {"thinking": {"type": "enabled"}}
+    assert path._model.reasoning_effort == "low"
+    assert agent_llm_config_from_environment("path", model_id=model_id).model == model_id
+
+    # Names never silently override the user's explicit thinking preference.
+    monkeypatch.setenv("AGENTIC_CM_LLM_THINKING_ENABLED", "false")
+    for agent_type in ("orchestrator", "path", "synthesis"):
+        assert not agent_llm_config_from_environment(agent_type, model_id=model_id).thinking_enabled

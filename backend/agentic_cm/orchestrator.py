@@ -25,6 +25,7 @@ from .config import (
     ReasoningEffort,
     agent_adapter_from_environment,
     agent_llm_config_from_environment,
+    agent_max_output_tokens_from_environment,
     deterministic_delay_seconds_from_environment,
     llm_timeout_seconds_from_environment,
 )
@@ -171,12 +172,16 @@ class OpenAICompatiblePlannerAdapter:
         base_url: str,
         api_key_header: str = "Authorization",
         api_key_prefix: str = "Bearer",
-        timeout_seconds: float = 45.0,
+        timeout_seconds: float | None = 45.0,
+        max_output_tokens: int | None = 800,
         thinking_enabled: bool = False,
         reasoning_effort: ReasoningEffort = "high",
         client=None,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
+        if max_output_tokens is not None and max_output_tokens < 1:
+            raise AgentError("Orchestrator max output tokens must be positive or None")
+        self._max_output_tokens = max_output_tokens
         self._model = model
         self._thinking_enabled = thinking_enabled
         self._reasoning_effort = reasoning_effort
@@ -245,9 +250,10 @@ class OpenAICompatiblePlannerAdapter:
                 {"role": "user", "content": json.dumps(prompt_context, ensure_ascii=False)},
             ],
             "response_format": {"type": "json_object"},
-            "max_tokens": 800,
             "stream": False,
         }
+        if self._max_output_tokens is not None:
+            request["max_tokens"] = self._max_output_tokens
         configure_thinking(
             request, enabled=self._thinking_enabled, reasoning_effort=self._reasoning_effort
         )
@@ -515,14 +521,15 @@ def planner_from_environment(adapter: str | None = None, *, model_id: str | None
             delay_seconds=deterministic_delay_seconds_from_environment()
         )
     if adapter == "openai-compatible":
-        llm = agent_llm_config_from_environment("orchestrator")
+        llm = agent_llm_config_from_environment("orchestrator", model_id=model_id)
         return OpenAICompatiblePlannerAdapter(
             os.getenv("AGENTIC_CM_LLM_API_KEY"),
             model=model_id or llm.model,
             base_url=os.getenv("AGENTIC_CM_LLM_BASE_URL", ""),
             api_key_header=os.getenv("AGENTIC_CM_LLM_API_KEY_HEADER", "Authorization"),
             api_key_prefix=os.getenv("AGENTIC_CM_LLM_API_KEY_PREFIX", "Bearer"),
-            timeout_seconds=llm_timeout_seconds_from_environment(),
+            timeout_seconds=llm_timeout_seconds_from_environment("orchestrator"),
+            max_output_tokens=agent_max_output_tokens_from_environment("orchestrator"),
             thinking_enabled=llm.thinking_enabled,
             reasoning_effort=llm.reasoning_effort,
         )

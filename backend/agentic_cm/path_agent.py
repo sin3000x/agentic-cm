@@ -47,6 +47,7 @@ from .capabilities import CapabilityResolution
 from .config import (
     agent_adapter_from_environment,
     agent_llm_config_from_environment,
+    agent_max_output_tokens_from_environment,
     deterministic_delay_seconds_from_environment,
     llm_timeout_seconds_from_environment,
 )
@@ -1471,7 +1472,7 @@ def path_agent_from_environment(adapter: str | None = None, *, model_id: str | N
             profile="deterministic-path/v1",
         )
     if adapter == "openai-compatible":
-        llm = agent_llm_config_from_environment("path")
+        llm = agent_llm_config_from_environment("path", model_id=model_id)
         api_key = os.getenv("AGENTIC_CM_LLM_API_KEY")
         api_key_header = os.getenv("AGENTIC_CM_LLM_API_KEY_HEADER", "Authorization")
         api_key_prefix = os.getenv("AGENTIC_CM_LLM_API_KEY_PREFIX", "Bearer")
@@ -1480,14 +1481,12 @@ def path_agent_from_environment(adapter: str | None = None, *, model_id: str | N
             default_headers = {
                 api_key_header: f"{api_key_prefix} {api_key}".strip()
             }
-        max_output_tokens = int(os.getenv("AGENTIC_CM_PATH_MAX_OUTPUT_TOKENS", "6000"))
-        if max_output_tokens < 1000:
-            raise AgentError("Path Agent max output tokens must be at least 1000")
+        max_output_tokens = agent_max_output_tokens_from_environment("path")
         model = _PathChatOpenAI(
             model=model_id or llm.model,
             base_url=os.getenv("AGENTIC_CM_LLM_BASE_URL", ""),
             api_key=api_key or "not-configured",
-            timeout=llm_timeout_seconds_from_environment(),
+            timeout=llm_timeout_seconds_from_environment("path"),
             max_tokens=max_output_tokens,
             default_headers=default_headers,
             extra_body={

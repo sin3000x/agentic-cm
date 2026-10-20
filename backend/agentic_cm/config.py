@@ -52,28 +52,51 @@ def deterministic_delay_seconds_from_environment() -> float:
     return value
 
 
-def llm_timeout_seconds_from_environment() -> float:
-    """Return the request timeout shared by OpenAI-compatible Agent runtimes."""
+def llm_timeout_seconds_from_environment(agent_type: AgentType | None = None) -> float | None:
+    """Resolve a request timeout; zero disables the local SDK timeout."""
     load_runtime_environment()
-    raw_value = os.getenv("AGENTIC_CM_LLM_TIMEOUT_SECONDS", "45").strip()
+    name = (
+        f"AGENTIC_CM_{agent_type.upper()}_LLM_TIMEOUT_SECONDS"
+        if agent_type else "AGENTIC_CM_LLM_TIMEOUT_SECONDS"
+    )
+    raw_value = os.getenv(name, os.getenv("AGENTIC_CM_LLM_TIMEOUT_SECONDS", "45")).strip()
     try:
         value = float(raw_value)
     except ValueError as exc:
         raise ValueError(
-            "AGENTIC_CM_LLM_TIMEOUT_SECONDS must be a positive finite number"
+            f"{name} must be a non-negative finite number"
         ) from exc
-    if value <= 0 or not isfinite(value):
+    if value < 0 or not isfinite(value):
         raise ValueError(
-            "AGENTIC_CM_LLM_TIMEOUT_SECONDS must be a positive finite number"
+            f"{name} must be a non-negative finite number"
         )
-    return value
+    return value or None
 
 
-def agent_llm_config_from_environment(agent_type: AgentType) -> AgentLLMConfig:
+def agent_max_output_tokens_from_environment(agent_type: AgentType) -> int | None:
+    """Resolve the per-request budget; zero omits the provider token limit."""
+    load_runtime_environment()
+    defaults = {"orchestrator": "800", "path": "6000", "synthesis": "4000"}
+    name = f"AGENTIC_CM_{agent_type.upper()}_MAX_OUTPUT_TOKENS"
+    raw_value = os.getenv(
+        name, os.getenv("AGENTIC_CM_LLM_MAX_OUTPUT_TOKENS", defaults[agent_type])
+    )
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a non-negative integer") from exc
+    if value < 0:
+        raise ValueError(f"{name} must be a non-negative integer")
+    return value or None
+
+
+def agent_llm_config_from_environment(
+    agent_type: AgentType, *, model_id: str | None = None
+) -> AgentLLMConfig:
     """Resolve one Agent's model and thinking settings."""
     load_runtime_environment()
     prefix = f"AGENTIC_CM_{agent_type.upper()}"
-    model = os.getenv(f"{prefix}_LLM_MODEL", os.getenv("AGENTIC_CM_LLM_MODEL", ""))
+    model = model_id or os.getenv(f"{prefix}_LLM_MODEL", os.getenv("AGENTIC_CM_LLM_MODEL", ""))
     thinking_enabled = _environment_bool(
         f"{prefix}_THINKING_ENABLED",
         fallback_name="AGENTIC_CM_LLM_THINKING_ENABLED",

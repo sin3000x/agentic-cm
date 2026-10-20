@@ -1121,11 +1121,17 @@ def test_path_agent_context_files_project_only_generation_inputs() -> None:
         context.path = {}
 
 
-def test_openai_adapter_repairs_invalid_output_once() -> None:
+@pytest.mark.parametrize("budget", [None, 32768])
+def test_openai_adapter_repairs_invalid_output_once(budget) -> None:
     attempts = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal attempts
+        payload = json.loads(request.content)
+        if budget is None:
+            assert "max_tokens" not in payload
+        else:
+            assert payload["max_tokens"] == budget
         attempts += 1
         if attempts == 1:
             return chat_completion_response({"paths": "not-a-list"})
@@ -1149,6 +1155,7 @@ def test_openai_adapter_repairs_invalid_output_once() -> None:
             adapter = OpenAICompatiblePlannerAdapter(
                 "secret-key",
                 model="vendor-model-42",
+                max_output_tokens=budget,
                 base_url="https://gateway.example/v1",
                 http_client=client,
             )

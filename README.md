@@ -99,6 +99,21 @@ AGENTIC_CM_PATH_MAX_OUTPUT_TOKENS=6000
 AGENTIC_CM_SYNTHESIS_MAX_OUTPUT_TOKENS=4000
 ```
 
+推理模型需要把思考时间和思考 token 纳入预算。三个 Agent 的单次请求默认超时为 45 秒，token 默认值分别是 Orchestrator 800、Path 6000、Synthesis 4000；现在均可配置。对于 GLM-5.3，可先使用以下配置，再根据实际耗时调整：
+
+```dotenv
+AGENTIC_CM_LLM_TIMEOUT_SECONDS=300
+AGENTIC_CM_ORCHESTRATOR_MAX_OUTPUT_TOKENS=32768
+AGENTIC_CM_PATH_MAX_OUTPUT_TOKENS=32768
+AGENTIC_CM_SYNTHESIS_MAX_OUTPUT_TOKENS=32768
+AGENTIC_CM_LLM_THINKING_ENABLED=true
+AGENTIC_CM_LLM_REASONING_EFFORT=low
+```
+
+也可使用 `AGENTIC_CM_LLM_MAX_OUTPUT_TOKENS` 作为公共预算；各 Agent 的 `*_MAX_OUTPUT_TOKENS` 优先，因此使用公共值时需删除已有的单独预算。超时可分别通过 `AGENTIC_CM_ORCHESTRATOR_LLM_TIMEOUT_SECONDS`、`AGENTIC_CM_PATH_LLM_TIMEOUT_SECONDS` 和 `AGENTIC_CM_SYNTHESIS_LLM_TIMEOUT_SECONDS` 覆盖。token 预算设为 `0` 时不发送上限参数，超时设为 `0` 时关闭本地 SDK 超时；模型服务与代理仍可限制输出和等待时间。不发送 token 上限时，服务默认值可能仍较小。以上均为单次请求设置，Path 的多轮工具调用和重试可能增加总耗时。修改 `.env` 后重启后端。
+
+[GLM-5.3 官方说明](https://docs.z.ai/guides/llm/glm-5.3)明确该模型始终推理，只接受 `low / high / max`。本项目不根据模型 ID 猜测能力，也不会自动改写思考开关；即使服务商将模型命名为 `glm53` 或其他别名，也统一使用上述显式配置。各 Agent 的 `*_THINKING_ENABLED` 和 `*_REASONING_EFFORT` 优先于全局值，已有单独配置时需同步调整或删除。前台选择模型只改变模型 ID，仍沿用后端的思考配置。其他模型能否关闭思考由服务商决定，`thinking.type=disabled` 不能保证所有兼容接口都执行。较大的预算允许模型完成思考，但不保证一定产出有效结果。
+
 左侧栏的「Agent 运行模式」可统一切换三个 Agent 的 `deterministic` / `openai-compatible` 模式。首次启动的默认值来自 `AGENTIC_CM_ADAPTER`，前端选择保存到 SQLite 并全局生效；页面刷新及后端重启后保留已选模式。OpenAI-compatible 模式使用后端的 `AGENTIC_CM_LLM_BASE_URL`、`AGENTIC_CM_LLM_MODEL` 和 `AGENTIC_CM_LLM_API_KEY`（未在前台选择模型时保留各 Agent 的 model 覆盖配置）；密钥不会返回前端。OpenAI-compatible 模式下可通过「Agent 模型」选择模型，列表由后端 `/api/models` 请求模型服务的 `/models` 获取，支持刷新。前台选中的模型统一覆盖三类 Agent 的模型并保存到 SQLite，后端重启后仍生效；连接、密钥和思考配置仍使用后端配置。Agent 运行期间不能切换模式或模型。
 
 
