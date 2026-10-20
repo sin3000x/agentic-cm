@@ -99,7 +99,7 @@ AGENTIC_CM_PATH_MAX_OUTPUT_TOKENS=6000
 AGENTIC_CM_SYNTHESIS_MAX_OUTPUT_TOKENS=4000
 ```
 
-左侧栏的「Agent 运行模式」可统一切换三个 Agent 的 `deterministic` / `openai-compatible` 模式。首次启动的默认值来自 `AGENTIC_CM_ADAPTER`，前端选择保存到 SQLite 并全局生效；页面刷新及后端重启后保留已选模式。OpenAI-compatible 模式使用后端的 `AGENTIC_CM_LLM_BASE_URL`、`AGENTIC_CM_LLM_MODEL` 和 `AGENTIC_CM_LLM_API_KEY`（保留各 Agent 的 model 覆盖配置）；密钥不会返回前端。Agent 运行期间不能切换。
+左侧栏的「Agent 运行模式」可统一切换三个 Agent 的 `deterministic` / `openai-compatible` 模式。首次启动的默认值来自 `AGENTIC_CM_ADAPTER`，前端选择保存到 SQLite 并全局生效；页面刷新及后端重启后保留已选模式。OpenAI-compatible 模式使用后端的 `AGENTIC_CM_LLM_BASE_URL`、`AGENTIC_CM_LLM_MODEL` 和 `AGENTIC_CM_LLM_API_KEY`（未在前台选择模型时保留各 Agent 的 model 覆盖配置）；密钥不会返回前端。OpenAI-compatible 模式下可通过「Agent 模型」选择模型，列表由后端 `/api/models` 请求模型服务的 `/models` 获取，支持刷新。前台选中的模型统一覆盖三类 Agent 的模型并保存到 SQLite，后端重启后仍生效；连接、密钥和思考配置仍使用后端配置。Agent 运行期间不能切换模式或模型。
 
 
 多条已选 Path 默认并行推演。若模型服务需要限流或本地调试需要确定顺序，可在同一个 `.env` 中切换为串行：

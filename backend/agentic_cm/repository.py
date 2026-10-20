@@ -77,12 +77,19 @@ class CaseRepository:
             ).fetchone()
         return row["value"] if row else None
 
-    def save_adapter_selection(self, adapter: str) -> None:
+    def get_model_selection(self) -> str | None:
         with self._connect() as connection:
-            connection.execute(
-                "INSERT INTO runtime_settings (name, value) VALUES ('adapter', ?) "
+            row = connection.execute(
+                "SELECT value FROM runtime_settings WHERE name = 'model'"
+            ).fetchone()
+        return row["value"] if row else None
+
+    def save_runtime_selection(self, adapter: str, model: str | None) -> None:
+        with self._connect() as connection:
+            connection.executemany(
+                "INSERT INTO runtime_settings (name, value) VALUES (?, ?) "
                 "ON CONFLICT(name) DO UPDATE SET value = excluded.value",
-                (adapter,),
+                [("adapter", adapter), *([("model", model)] if model is not None else [])],
             )
 
     def create_agent_run(

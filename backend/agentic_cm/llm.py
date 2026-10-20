@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
@@ -105,3 +106,27 @@ async def create_chat_completion(
         usage=completion.usage.model_dump(mode="json") if completion.usage else None,
         content=choice.message.content,
     )
+
+
+async def available_model_ids() -> list[str]:
+    """Fetch the configured provider's /models using the runtime credentials."""
+    from .config import load_runtime_environment, llm_timeout_seconds_from_environment
+
+    load_runtime_environment()
+    client = build_openai_compatible_client(
+        os.getenv("AGENTIC_CM_LLM_API_KEY"),
+        base_url=os.getenv("AGENTIC_CM_LLM_BASE_URL", ""),
+        api_key_header=os.getenv("AGENTIC_CM_LLM_API_KEY_HEADER", "Authorization"),
+        api_key_prefix=os.getenv("AGENTIC_CM_LLM_API_KEY_PREFIX", "Bearer"),
+        timeout_seconds=llm_timeout_seconds_from_environment(),
+    )
+    try:
+        extra_headers = {"Authorization": Omit()} if client.omit_authorization else None
+        page = await client.sdk.models.list(extra_headers=extra_headers)
+        if not isinstance(page.data, list) or any(
+            not isinstance(item.id, str) or not item.id.strip() for item in page.data
+        ):
+            raise ValueError("Invalid model list")
+        return sorted({item.id for item in page.data})
+    finally:
+        await client.sdk.close()

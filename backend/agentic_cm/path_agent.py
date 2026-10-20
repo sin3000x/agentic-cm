@@ -1461,7 +1461,7 @@ def _validate_result_against_context(result: PathAgentResult, context: PathAgent
         )
 
 
-def path_agent_from_environment(adapter: str | None = None) -> PathAgentAdapter:
+def path_agent_from_environment(adapter: str | None = None, *, model_id: str | None = None) -> PathAgentAdapter:
     adapter = adapter or agent_adapter_from_environment()
     if adapter == "deterministic":
         return DeepAgentPathAdapter(
@@ -1484,7 +1484,7 @@ def path_agent_from_environment(adapter: str | None = None) -> PathAgentAdapter:
         if max_output_tokens < 1000:
             raise AgentError("Path Agent max output tokens must be at least 1000")
         model = _PathChatOpenAI(
-            model=llm.model,
+            model=model_id or llm.model,
             base_url=os.getenv("AGENTIC_CM_LLM_BASE_URL", ""),
             api_key=api_key or "not-configured",
             timeout=llm_timeout_seconds_from_environment(),
@@ -1499,6 +1499,6 @@ def path_agent_from_environment(adapter: str | None = None) -> PathAgentAdapter:
         )
         return DeepAgentPathAdapter(
             model,
-            profile=f"openai-compatible-path/{llm.model}",
+            profile=f"openai-compatible-path/{model_id or llm.model}",
         )
     raise AgentError(f"Unknown Path Agent adapter: {adapter}")

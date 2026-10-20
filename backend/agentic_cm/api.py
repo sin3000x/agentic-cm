@@ -8,9 +8,11 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from openai import OpenAIError
 
 from .agent_runtime import AgentError, AgentExecutionError
-from .config import load_runtime_environment
+from .config import agent_llm_config_from_environment, load_runtime_environment
+from .llm import available_model_ids
 from .domain import CommitmentDecision, Manifest, OwnerDecisionAction
 from .repository import CaseRepository
 from .service import AuthorizationError, CaseNotFoundError, CaseService, InvalidTransitionError
@@ -34,6 +36,7 @@ app.add_middleware(
 
 class AdapterSelectionRequest(BaseModel):
     adapter: Literal["deterministic", "openai-compatible"]
+    model: str | None = Field(default=None, min_length=1, pattern=r".*\S.*")
 
 
 class ResetRequest(BaseModel):
@@ -109,19 +112,36 @@ def health() -> dict[str, str]:
 
 
 @app.get("/api/runtime-config")
-def runtime_config(response: Response) -> dict[str, str | int]:
+def runtime_config(response: Response) -> dict[str, str | int | None]:
     response.headers["Cache-Control"] = "no-store"
     return {
         "adapter": service.adapter,
+        "model": service.model,
+        "model_default": agent_llm_config_from_environment("orchestrator").model,
         "path_execution_mode": service.path_execution_mode,
         "path_max_concurrency": service.path_max_concurrency,
     }
 
 
+@app.get("/api/models")
+async def list_models(response: Response):
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return {"data": [{"id": model} for model in await available_model_ids()]}
+    except (OpenAIError, ValueError, TypeError, AttributeError) as exc:
+        raise HTTPException(
+            status_code=502, detail="无法获取模型列表，请检查模型服务连接和后端配置后重试"
+        ) from exc
+
+
 @app.post("/api/runtime-config")
 async def select_runtime_adapter(request: AdapterSelectionRequest, response: Response):
     try:
-        service.select_adapter(request.adapter)
+        if request.model is not None:
+            catalog = await list_models(response)
+            if request.model not in {item["id"] for item in catalog["data"]}:
+                raise HTTPException(status_code=400, detail="所选模型不在当前可用列表中，请刷新列表")
+        service.select_adapter(request.adapter, model=request.model)
     except (AgentError, InvalidTransitionError):
         raise
     except ValueError as exc:

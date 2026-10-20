@@ -54,11 +54,12 @@ class CaseService:
         path_max_concurrency: int | None = None,
     ) -> None:
         self.adapter = repository.get_adapter_selection() or agent_adapter_from_environment()
+        self.model = repository.get_model_selection()
         self.repository = repository
         self.capabilities = capabilities or default_registry()
-        self.orchestrator = Orchestrator(self.capabilities, planner or planner_from_environment(self.adapter))
-        self.path_agent = PathAgent(path_agent or path_agent_from_environment(self.adapter))
-        self.synthesis_agent = SynthesisAgent(synthesis_agent or synthesis_agent_from_environment(self.adapter))
+        self.orchestrator = Orchestrator(self.capabilities, planner or planner_from_environment(self.adapter, model_id=self.model))
+        self.path_agent = PathAgent(path_agent or path_agent_from_environment(self.adapter, model_id=self.model))
+        self.synthesis_agent = SynthesisAgent(synthesis_agent or synthesis_agent_from_environment(self.adapter, model_id=self.model))
         self.path_execution_mode = path_execution_mode or path_execution_mode_from_environment()
         if self.path_execution_mode not in {"parallel", "serial"}:
             raise ValueError("path_execution_mode must be 'parallel' or 'serial'")
@@ -71,7 +72,7 @@ class CaseService:
             raise ValueError("path_max_concurrency must be a positive integer")
         self._path_commit_locks: dict[str, asyncio.Lock] = {}
 
-    def select_adapter(self, adapter: str) -> None:
+    def select_adapter(self, adapter: str, *, model: str | None = None) -> None:
         if adapter not in {"deterministic", "openai-compatible"}:
             raise ValueError("不支持的 Agent 适配器")
         if any(
@@ -80,15 +81,17 @@ class CaseService:
             for run in self.repository.list_agent_runs(case.id)
         ):
             raise InvalidTransitionError("Agent 正在运行，请完成后再切换")
+        selected_model = model if model is not None else self.model
         # Build all three before publishing the selection: failure keeps the old runtime.
-        orchestrator = Orchestrator(self.capabilities, planner_from_environment(adapter))
-        path_agent = PathAgent(path_agent_from_environment(adapter))
-        synthesis_agent = SynthesisAgent(synthesis_agent_from_environment(adapter))
-        self.repository.save_adapter_selection(adapter)
+        orchestrator = Orchestrator(self.capabilities, planner_from_environment(adapter, model_id=selected_model))
+        path_agent = PathAgent(path_agent_from_environment(adapter, model_id=selected_model))
+        synthesis_agent = SynthesisAgent(synthesis_agent_from_environment(adapter, model_id=selected_model))
+        self.repository.save_runtime_selection(adapter, selected_model)
         self.orchestrator = orchestrator
         self.path_agent = path_agent
         self.synthesis_agent = synthesis_agent
         self.adapter = adapter
+        self.model = selected_model
 
     def ensure_demo_data(self) -> None:
         if not self.repository.list_cases():

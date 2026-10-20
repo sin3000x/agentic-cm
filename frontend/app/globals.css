@@ -1863,3 +1863,6 @@ button {
 .attentionRisk.risk-中 { color: #8c661e; }
 .activityCard .railHeader > span { color: var(--muted); font-size: var(--text-xs); }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+.adapterSelector .modelRefresh { justify-self: start; border: 0; padding: 0; background: transparent; color: inherit; font-size: 11px; cursor: pointer; }
+.adapterSelector .modelRefresh:disabled { opacity: 0.5; cursor: default; }

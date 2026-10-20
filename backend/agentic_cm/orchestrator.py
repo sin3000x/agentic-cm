@@ -508,7 +508,7 @@ class Orchestrator:
         return manifest, result.planner_profile
 
 
-def planner_from_environment(adapter: str | None = None) -> PlannerAdapter:
+def planner_from_environment(adapter: str | None = None, *, model_id: str | None = None) -> PlannerAdapter:
     adapter = adapter or agent_adapter_from_environment()
     if adapter == "deterministic":
         return DeterministicPlannerAdapter(
@@ -518,7 +518,7 @@ def planner_from_environment(adapter: str | None = None) -> PlannerAdapter:
         llm = agent_llm_config_from_environment("orchestrator")
         return OpenAICompatiblePlannerAdapter(
             os.getenv("AGENTIC_CM_LLM_API_KEY"),
-            model=llm.model,
+            model=model_id or llm.model,
             base_url=os.getenv("AGENTIC_CM_LLM_BASE_URL", ""),
             api_key_header=os.getenv("AGENTIC_CM_LLM_API_KEY_HEADER", "Authorization"),
             api_key_prefix=os.getenv("AGENTIC_CM_LLM_API_KEY_PREFIX", "Bearer"),

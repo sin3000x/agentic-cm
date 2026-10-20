@@ -333,7 +333,7 @@ def _validate_result(result: SynthesisResult, context: SynthesisContext) -> None
         raise AgentOutputError(f"Synthesis references unknown artifacts: {sorted(unknown)}")
 
 
-def synthesis_agent_from_environment(adapter: str | None = None) -> SynthesisAgentAdapter:
+def synthesis_agent_from_environment(adapter: str | None = None, *, model_id: str | None = None) -> SynthesisAgentAdapter:
     adapter = adapter or agent_adapter_from_environment()
     if adapter == "deterministic":
         return DeterministicSynthesisAgentAdapter(
@@ -343,7 +343,7 @@ def synthesis_agent_from_environment(adapter: str | None = None) -> SynthesisAge
         llm = agent_llm_config_from_environment("synthesis")
         return OpenAICompatibleSynthesisAgentAdapter(
             os.getenv("AGENTIC_CM_LLM_API_KEY"),
-            model=llm.model,
+            model=model_id or llm.model,
             base_url=os.getenv("AGENTIC_CM_LLM_BASE_URL", ""),
             api_key_header=os.getenv("AGENTIC_CM_LLM_API_KEY_HEADER", "Authorization"),
             api_key_prefix=os.getenv("AGENTIC_CM_LLM_API_KEY_PREFIX", "Bearer"),
