@@ -116,3 +116,6 @@
 .casePathTitle { fill: #24533f; font-size: 13px; font-weight: 600; }
 .processComparison .casePath .boxTitle { font-size: 13px; }
 .casePathRevision { fill: #8b642a; font-size: 10px; }
+
+.personBox .boxTitle { font-size: 14px; }
+#slide-3 .agentBox .boxTitle { font-size: 15px; }

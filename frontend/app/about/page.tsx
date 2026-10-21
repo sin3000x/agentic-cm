@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { botAvatars } from "../lib/identities";
+import { botAvatars, personAvatars } from "../lib/identities";
 import "./about.css";
 
 const chapters = ["封面", "流程与 Case", "角色与求解", "能力与责任", "Case 工作流", "平台资产", "技术架构"];
@@ -34,8 +34,8 @@ function NodeIcon({ name, x, y }: { name: "event" | "people" | "owner"; x: numbe
   return <svg x={x} y={y} width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name]}/></svg>;
 }
 
-function Box({ x, y, w = 160, h = 62, title, sub, tone = "plain", icon }: { x: number; y: number; w?: number; h?: number; title: string; sub?: string; tone?: "plain" | "green" | "gold"; icon?: "event" | "people" | "owner" }) {
-  return <g className={`diagramBox ${tone}`}><rect x={x} y={y} width={w} height={h} rx="9"/>{icon && <NodeIcon name={icon} x={x + 15} y={y + h / 2 - 18}/>}<text x={x + w / 2 + (icon ? 23 : 0)} y={y + h / 2 + (sub ? -8 : 1)} dominantBaseline="middle" textAnchor="middle" className="boxTitle">{title}</text>{sub && <text x={x + w / 2 + (icon ? 23 : 0)} y={y + h / 2 + 19} textAnchor="middle" className="boxSub">{sub}</text>}</g>;
+function Box({ x, y, w = 160, h = 62, title, sub, tone = "plain", icon, avatar }: { x: number; y: number; w?: number; h?: number; title: string; sub?: string; tone?: "plain" | "green" | "gold"; icon?: "event" | "people" | "owner"; avatar?: string }) {
+  return <g className={`diagramBox ${tone}${avatar ? " personBox" : ""}`}><rect x={x} y={y} width={w} height={h} rx="9"/>{avatar && <image href={avatar} x={x + 9} y={y + h / 2 - 22} width="44" height="44" preserveAspectRatio="xMidYMid slice" style={{ clipPath: "circle(50%)" }}/>}{icon && <NodeIcon name={icon} x={x + 15} y={y + h / 2 - 18}/>}<text x={x + w / 2 + (icon || avatar ? 23 : 0)} y={y + h / 2 + (sub ? -8 : 1)} dominantBaseline="middle" textAnchor="middle" className="boxTitle">{title}</text>{sub && <text x={x + w / 2 + (icon || avatar ? 23 : 0)} y={y + h / 2 + 19} textAnchor="middle" className="boxSub">{sub}</text>}</g>;
 }
 function AgentBox({ x, y, w, h = 82, title, sub, agent }: { x: number; y: number; w: number; h?: number; title: string; sub?: string; agent: keyof typeof botAvatars }) {
   return <g className={`diagramBox agentBox agent-${agent}`}>
@@ -199,14 +199,14 @@ export default function AboutPage() {
           <Line d="M107 148V266" arrow="both" dashed/><Line d="M413 148V266" arrow="both" dashed/>
           <Line d="M150 148L207 168" arrow="both"/><Line d="M370 148L313 168" arrow="both"/>
           <Line d="M150 266L207 246" arrow="both"/><Line d="M370 266L313 246" arrow="both"/>
-          <Box x={24} y={80} w={166} h={62} title="主计划 Agent"/><Box x={330} y={80} w={166} h={62} title="供应经理 Agent"/>
-          <Box x={165} y={176} w={190} h={62} title="订单经理 Agent" tone="green"/>
-          <Box x={24} y={272} w={166} h={62} title="研发 Agent"/><Box x={330} y={272} w={166} h={62} title="物流 Agent"/>
+          <Box x={24} y={80} w={166} h={62} title="主计划 Agent" avatar={personAvatars["王淼"]}/><Box x={330} y={80} w={166} h={62} title="供应经理 Agent" avatar={personAvatars["赵宁"]}/>
+          <Box x={165} y={176} w={190} h={62} title="订单经理 Agent" avatar={personAvatars["陈澄"]} tone="green"/>
+          <Box x={24} y={272} w={166} h={62} title="研发 Agent" avatar={personAvatars["林乔"]}/><Box x={330} y={272} w={166} h={62} title="物流 Agent" avatar={personAvatars["吴桐"]}/>
           <Text x={260} y={358} small>沟通 · 交接 · 确认</Text><Text x={260} y={382} small>角色边界保留，信息交接次数没有减少</Text>
           <Box x={704} y={90} w={232} h={78} title="订单缺料 Case" tone="green"/>
           <Line d="M820 176V215M650 241V225Q650 215 660 215H980Q990 215 990 225V241" arrow="none"/>
           <Line d="M650 231V253"/><Line d="M820 215V253"/><Line d="M990 231V253"/>
-          <Box x={576} y={263} w={148} h={78} title="提拉 Agent"/><Box x={746} y={263} w={148} h={78} title="替代 Agent"/><Box x={916} y={263} w={148} h={78} title="拆分 Agent"/>
+          <AgentBox x={576} y={263} w={148} h={78} title="提拉 Agent" agent="path"/><AgentBox x={746} y={263} w={148} h={78} title="替代 Agent" agent="path"/><AgentBox x={916} y={263} w={148} h={78} title="拆分 Agent" agent="path"/>
           <Text x={820} y={376} small>整合计划、研发、订单、供应、物流能力</Text>
           <Text x={540} y={451}>协作的基本单元，从角色交接 → 路径求解</Text>
         </Diagram>
