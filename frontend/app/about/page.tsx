@@ -20,10 +20,9 @@ function Slide({ number, title, children, note, presentingSlide }: { presentingS
 }
 
 function Diagram({ label, children, height = 360, inset = 0 }: { label: string; children: ReactNode; height?: number; inset?: number }) {
-  const id = useId().replace(/:/g, "");
   // A scrollable diagram needs keyboard focus so arrow keys can pan it on narrow screens.
   // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
-  return <div className="aboutDiagramScroll" tabIndex={0} role="region" aria-label={label}><svg className="aboutDiagram" viewBox={`${-inset} 0 ${1080 + inset * 2} ${height}`} role="img" aria-labelledby={id}><title id={id}>{label}</title>{children}</svg></div>;
+  return <div className="aboutDiagramScroll" tabIndex={0} role="region" aria-label={label}><svg className="aboutDiagram" viewBox={`${-inset} 0 ${1080 + inset * 2} ${height}`} role="img" aria-label={label}>{children}</svg></div>;
 }
 function NodeIcon({ name, x, y }: { name: "event" | "people" | "owner"; x: number; y: number }) {
   const paths = {
