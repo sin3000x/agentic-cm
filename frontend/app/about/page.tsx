@@ -34,6 +34,22 @@ function NodeIcon({ name, x, y }: { name: "event" | "people" | "owner"; x: numbe
   return <svg x={x} y={y} width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name]}/></svg>;
 }
 
+function ArchitectureIcon({ name, x, y, size = 26 }: { name: string; x: number; y: number; size?: number }) {
+  const paths: Record<string, string> = {
+    monitor: "M3 4h18v13H3zM8 21h8M12 17v4M6 8h5M6 11h9",
+    api: "m8 6-6 6 6 6m8-12 6 6-6 6m-3-15-2 18",
+    workflow: "M9 3h6v6H9zM2 15h6v6H2zM16 15h6v6h-6zM12 9v3M5 15v-3h14v3",
+    people: "M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM2 21v-2a7 7 0 0 1 14 0v2M17 4a4 4 0 0 1 0 8M19 15a6 6 0 0 1 3 5",
+    shield: "m12 2 9 4v6c0 5-9 10-9 10S3 17 3 12V6l9-4Zm-4 10 3 3 5-6",
+    layers: "m12 2-10 5 10 5 10-5-10-5ZM2 12l10 5 10-5M2 17l10 5 10-5",
+    archive: "M3 3h18v5H3zM5 8v13h14V8M9 12h6M9 16h6",
+    database: "M21 5c0 2-4 3-9 3S3 7 3 5s4-3 9-3 9 1 9 3ZM3 5v14c0 2 4 3 9 3s9-1 9-3V5M3 12c0 2 4 3 9 3s9-1 9-3",
+    folder: "M3 5h7l2 3h9v13H3V5ZM7 12h10M7 16h6",
+    cpu: "M6 6h12v12H6zM9 9h6v6H9zM9 2v4m6-4v4M9 18v4m6-4v4M2 9h4m-4 6h4M18 9h4m-4 6h4",
+  };
+  return <svg x={x} y={y} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name]}/></svg>;
+}
+
 function Box({ x, y, w = 160, h = 62, title, sub, tone = "plain", icon, avatar }: { x: number; y: number; w?: number; h?: number; title: string; sub?: string; tone?: "plain" | "green" | "gold"; icon?: "event" | "people" | "owner"; avatar?: string }) {
   return <g className={`diagramBox ${tone}${avatar ? " personBox" : ""}`}><rect x={x} y={y} width={w} height={h} rx="9"/>{avatar && <image href={avatar} x={x + 9} y={y + h / 2 - 22} width="44" height="44" preserveAspectRatio="xMidYMid slice" style={{ clipPath: "circle(50%)" }}/>}{icon && <NodeIcon name={icon} x={x + 15} y={y + h / 2 - 18}/>}<text x={x + w / 2 + (icon || avatar ? 23 : 0)} y={y + h / 2 + (sub ? -8 : 1)} dominantBaseline="middle" textAnchor="middle" className="boxTitle">{title}</text>{sub && <text x={x + w / 2 + (icon || avatar ? 23 : 0)} y={y + h / 2 + 19} textAnchor="middle" className="boxSub">{sub}</text>}</g>;
 }
@@ -306,13 +322,37 @@ export default function AboutPage() {
         </Diagram>
       </Slide>
       <Slide presentingSlide={presenting ? currentSlide : null} number={7} title="四层架构">
-        <Diagram label="四层技术架构：交互与接入层，组织求解审批层，能力治理记录底座，数据与基础设施层" height={456}>
-          {[
-            { y: 0, label: "交互与接入", sub: "呈现与入口", tone: "plain" as const, items: [["React 工作台", "Case · 待办 · 资产 · Trace"], ["FastAPI", "HTTP API · 请求与响应"]] },
-            { y: 119, label: "组织 · 求解 · 审批", sub: "协作与决策", tone: "green" as const, items: [["Orchestrator", "规划探索清单"], ["Path / Synthesis Agent", "并行推演 · 总结建议"], ["人员审批与决策", "专业角色 · Case Owner"]] },
-            { y: 238, label: "能力 · 治理 · 记录", sub: "平台底座", tone: "plain" as const, items: [["CapabilityRegistry", "Skills · Policies · Knowledge"], ["CaseService", "状态机 · 权限 · 承诺依赖"], ["CaseRepository", "业务事件 · 版本 · 运行轨迹"]] },
-            { y: 357, label: "数据与基础设施", sub: "存储与运行", tone: "plain" as const, items: [["SQLite", "Case JSON · Events · Traces"], ["版本化目录文件", "能力资产 · Path 目录"], ["Agent Runtime / Adapter", "模型调用 · 重试 · 只读工具"]] },
-          ].map(({y,label,sub,tone,items}) => <g key={label}><rect className="diagramPanel" x="0" y={y} width="1080" height="96" rx="12"/><Text x={122} y={y+40}>{label}</Text><Text x={122} y={y+68} small>{sub}</Text>{items.map(([title,desc],i) => <Box key={title} x={260+i*(800/items.length)} y={y+11} w={800/items.length-12} h={74} title={title} sub={desc} tone={tone}/>)}{y<357 && <Line d={`M661 ${y+101}V${y+113}`}/>}</g>)}
+        <Diagram label="以 Case 为中心的四层技术架构：交互与接入、组织求解与审批、能力治理与记录、数据与运行底座。按职责分层展示平台模块。" height={444}>
+          <g className="architectureDiagram">
+            <text className="governanceLead" x="0" y="22">以 Case 为中心，连接交互、协作、治理与运行底座</text>
+            <text className="architectureLegend" x="1080" y="22" textAnchor="end">按职责分层</text>
+            {[
+              { y: 52, number: "01", label: "交互与接入", sub: "呈现信息 · 接收操作", items: [["React 工作台", "Case · 待办 · 资产 · Trace", "monitor"], ["FastAPI", "HTTP API · 请求与响应", "api"]] },
+              { y: 152, number: "02", label: "组织求解与审批", sub: "Agent 提议 · 人员决策", items: [["Orchestrator", "规划探索清单", "orchestrator"], ["Path / Synthesis Agent", "并行推演 · 汇总建议", "path"], ["人员审批与决策", "专业角色 · Case Owner", "people"]] },
+              { y: 252, number: "03", label: "能力治理与记录", sub: "约束行为 · 留存证据", items: [["CapabilityRegistry", "Skills · Policies · Knowledge", "layers"], ["CaseService", "状态机 · 权限 · 承诺依赖", "shield"], ["CaseRepository", "业务事件 · 版本 · 运行轨迹", "archive"]] },
+              { y: 352, number: "04", label: "数据与运行底座", sub: "持久存储 · 模型执行", items: [["SQLite", "Case JSON · Events · Traces", "database"], ["版本化目录文件", "能力资产 · Path 目录", "folder"], ["Agent Runtime / Adapter", "模型调用 · 重试 · 只读工具", "cpu"]] },
+            ].map(({ y, number, label, sub, items }) => <g key={number} className={`architectureLayer${number === "02" ? " architectureLayerCore" : ""}`}>
+              <rect className="architectureLayerSurface" x="0" y={y} width="1080" height="86" rx="13"/>
+              <rect className="architectureLayerLabel" x="0" y={y} width="224" height="86" rx="13"/>
+              <rect className="architectureLayerIconBadge" x="16" y={y + 21} width="42" height="42" rx="11"/>
+              <g className="architectureLayerIcon"><ArchitectureIcon name={["monitor", "workflow", "shield", "database"][Number(number) - 1]} x={24} y={y + 29}/></g>
+              <text className="architectureLayerNumber" x="209" y={y + 17} textAnchor="end">{number}</text>
+              <text className="architectureLayerTitle" x="70" y={y + 35}>{label}</text>
+              <text className="architectureLayerSub" x="70" y={y + 60}>{sub}</text>
+              {items.map(([title, desc, icon], i) => {
+                const width = items.length === 2 ? 400 : 262;
+                const x = 244 + i * (width + 16);
+                return <g key={title}>
+                  <rect className="architectureModule" x={x} y={y + 10} width={width} height="66" rx="9"/>
+                  <rect className={`architectureModuleIconBadge architectureIcon-${icon}`} x={x + 12} y={y + 25} width="36" height="36" rx="9"/>
+                  {icon === "orchestrator" || icon === "path" ? <image href={botAvatars[icon]} x={x + 12} y={y + 22} width="36" height="42" preserveAspectRatio="xMidYMid meet"/> : <g className="architectureModuleIcon"><ArchitectureIcon name={icon} x={x + 18} y={y + 31} size={24}/></g>}
+                  <text className="architectureModuleTitle" x={x + 60} y={y + 36}>{title}</text>
+                  <text className="architectureModuleSub" x={x + 60} y={y + 58}>{desc}</text>
+                </g>;
+              })}
+              {number !== "04" && <path className="architectureLayerConnector" d={`M111 ${y + 89}v8m-4-4 4 4 4-4`}/>}
+            </g>)}
+          </g>
         </Diagram>
       </Slide>
     </main>

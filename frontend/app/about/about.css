@@ -147,3 +147,28 @@
 .asset-policies .assetOutcome { fill: #ecdfbf; }
 .asset-knowledge .governancePanel { fill: #edf2ef; }
 .asset-knowledge .assetOutcome { fill: #dce6df; }
+
+.architectureLegend { fill: #718678; font-size: 13px; }
+.architectureLayerSurface { fill: #edf2ec; stroke: #d8e2d6; }
+.architectureLayerLabel { fill: #dce8dc; }
+.architectureLayerNumber { fill: #74907b; font-size: 13px; font-weight: 600; }
+.architectureLayerTitle { fill: #214d3d; font-size: 17px; font-weight: 700; }
+.architectureLayerSub { fill: #617968; font-size: 12px; }
+.architectureModule { fill: #fcfcf8; stroke: #d5dfd2; }
+.architectureModuleTitle { fill: #214d3d; font-size: 15px; font-weight: 600; }
+.architectureModuleSub { fill: #657c6b; font-size: 12px; }
+.architectureLayerConnector { fill: none; stroke: #9bb29f; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.architectureLayerCore .architectureLayerSurface { fill: #e2ebe1; stroke: #a8c0ac; }
+.architectureLayerCore .architectureLayerLabel { fill: #1d5948; }
+.architectureLayerCore .architectureLayerTitle { fill: #fff; }
+.architectureLayerCore .architectureLayerNumber, .architectureLayerCore .architectureLayerSub { fill: #c6dcd0; }
+
+.architectureLayerIconBadge { fill: #f8fbf4; fill-opacity: .8; }
+.architectureLayerIcon { color: #356b54; }
+.architectureLayerCore .architectureLayerIconBadge { fill: #fff; fill-opacity: .15; }
+.architectureLayerCore .architectureLayerIcon { color: #ecf4e9; }
+.architectureModuleIconBadge { fill: #e7eee2; }
+.architectureModuleIcon { color: #537b5d; }
+.architectureIcon-api, .architectureIcon-cpu { fill: #e5ecef; }
+.architectureIcon-people, .architectureIcon-shield { fill: #f3ead5; }
+.architectureIcon-orchestrator, .architectureIcon-path { fill: #eef2fa; }
