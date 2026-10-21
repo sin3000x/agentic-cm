@@ -147,21 +147,48 @@ export default function AboutPage() {
         </dl>
       </Slide>
       <Slide presentingSlide={presenting ? currentSlide : null} number={2} title="业务流程 vs 事件驱动">
-        <Diagram label="业务流程按确定节点流转，Case 管理围绕目标探索未知路径；关闭 Case 需要主计划、研发、订单经理等多角色沟通、确认方案与承诺，再由 Case Owner 决策闭环" height={465}>
-          <rect className="diagramPanel" x="0" y="0" width="510" height="310" rx="14"/><rect className="diagramPanel" x="540" y="0" width="540" height="310" rx="14"/>
-          <Text x={255} y={45}>Business Process · 确定性流转</Text>
-          <Box x={24} y={128} w={126} h={80} title="节点 A" sub="接收订单"/><Box x={192} y={128} w={126} h={80} title="节点 B" sub="核验条件"/><Box x={360} y={128} w={126} h={80} title="节点 C" sub="批准执行"/>
-          <Line d="M156 168H184"/><Line d="M324 168H352"/>
-          <Text x={255} y={273} small>规则已知，按预定义节点推进</Text>
-          <Text x={810} y={45}>Case Management · 目标驱动</Text>
-          <Box x={562} y={128} w={110} h={80} title="事件"/><Box x={941} y={128} w={105} h={80} title="目标" tone="green"/>
-          <Line d="M678 151C710 151 706 94 740 94" dashed/><Line d="M678 168H740" dashed/><Line d="M678 185C710 185 706 242 740 242" dashed/>
-          <Box x={748} y={69} w={118} h={50} title="路径 A ?"/><Box x={748} y={143} w={118} h={50} title="路径 B ?"/><Box x={748} y={217} w={118} h={50} title="新路径 ?"/>
-          <Line d="M872 94C898 94 889 151 933 151" dashed/><Line d="M872 168H933" dashed/><Line d="M872 242C898 242 889 185 933 185" dashed/>
-          <Text x={810} y={289} small>目标明确，路径需多角色沟通与共同判断</Text>
-          <Line d="M255 316V329Q255 339 265 339H800Q810 339 810 329V316" arrow="none"/>
-          <Line d="M540 339V361"/>
-          <Box x={0} y={371} w={1080} h={90} title="关闭 Case：多角色沟通 → 方案与承诺确认 → Case Owner 决策闭环" tone="green"/>
+        <Diagram label="复杂 SOP 按预定义的条件分支、核验与返工规则推进；事件驱动的 Case 围绕目标探索提拉、替代等路径，每条路径内部也包含多步分析、并行核验与方案修订，最终由人确认承诺并决策闭环" height={465}>
+          <g className="processComparison">
+            <rect className="diagramPanel" x="0" y="0" width="510" height="350" rx="14"/><rect className="diagramPanel" x="540" y="0" width="540" height="350" rx="14"/>
+            <Text x={255} y={36}>Business Process · 预定义 SOP</Text>
+            <Line d="M120 94H154"/><Line d="M252 94H292"/><Line d="M368 94H406"/>
+            <Line d="M330 119V151"/><Line d="M282 170H204V113" dashed/>
+            <Line d="M448 111V211"/><Line d="M410 236H368"/><Line d="M292 236H254"/>
+            <Line d="M330 261V304H406"/><Line d="M204 253V287"/><Line d="M254 304H406"/>
+            <Line d="M156 304H136V236H154" dashed/>
+            <Box x={24} y={77} w={96} h={34} title="接收订单"/><Box x={156} y={77} w={96} h={34} title="核验条件"/>
+            <path className="sopDecision" d="M330 69 368 94 330 119 292 94Z"/><text className="boxTitle" x="330" y="95" textAnchor="middle" dominantBaseline="middle">齐备？</text>
+            <Box x={408} y={77} w={80} h={34} title="订单确认"/><Box x={282} y={153} w={96} h={34} title="补充资料"/>
+            <Box x={410} y={219} w={78} h={34} title="供需核验"/>
+            <path className="sopDecision" d="M330 211 368 236 330 261 292 236Z"/><text className="boxTitle" x="330" y="237" textAnchor="middle" dominantBaseline="middle">满足？</text>
+            <Box x={156} y={219} w={98} h={34} title="采购 / 替代"/><Box x={156} y={287} w={98} h={34} title="变更审批"/><Box x={408} y={287} w={80} h={34} title="执行交付" tone="green"/>
+            <Text x={388} y={83} small>是</Text><Text x={345} y={140} small>否</Text><Text x={246} y={158} small>补齐重验</Text>
+            <Text x={274} y={225} small>否</Text><Text x={345} y={280} small>是</Text><Text x={111} y={277} small>退回</Text>
+            <Text x={255} y={338} small>分支、审批、返工规则事先定义</Text>
+
+            <Text x={810} y={36}>Case Management · 目标驱动</Text>
+            <Box x={552} y={175} w={66} h={52} title="事件"/><Box x={998} y={175} w={70} h={52} title="目标" tone="green"/>
+            <Line d="M618 185H630V105H648" dashed/><Line d="M618 201H648" dashed/><Line d="M618 217H630V297H648" dashed/>
+            <Line d="M958 105H980V185H996" dashed/><Line d="M958 201H996" dashed/><Line d="M958 297H980V217H996" dashed/>
+            {[
+              { y: 62, title: "提拉路径 ?", steps: ["缺口分析", "产能核验", "交期协商", "提拉方案"] },
+              { y: 158, title: "替代路径 ?", steps: ["候选筛选", "技术验证", "客户确认", "替代方案"] },
+              { y: 254, title: "新路径 ?", steps: ["补充事实", "约束分析", "资源核验", "方案推演"] },
+            ].map(({ y, title, steps }) => <g key={title} className="casePath">
+              <rect className="casePathPanel" x="650" y={y} width="308" height="90" rx="8"/>
+              <text className="casePathTitle" x="662" y={y + 17}>{title}</text>
+              <Line d={`M726 ${y + 43}H738V${y + 35}H750M738 ${y + 43}V${y + 65}H750`}/>
+              <Line d={`M822 ${y + 35}H838V${y + 43}H852M822 ${y + 65}H838V${y + 43}`} />
+              <Line d={`M896 ${y + 59}V${y + 84}H696V${y + 60}`} dashed gold/>
+              <Box x={662} y={y + 28} w={64} h={32} title={steps[0]}/>
+              <Box x={752} y={y + 23} w={70} h={24} title={steps[1]}/><Box x={752} y={y + 53} w={70} h={24} title={steps[2]}/>
+              <Box x={854} y={y + 27} w={92} h={32} title={steps[3]}/>
+              <text className="casePathRevision" x="923" y={y + 76} textAnchor="middle">修订</text>
+            </g>)}
+          </g>
+          <Line d="M255 356V365Q255 375 265 375H800Q810 375 810 365V356" arrow="none"/>
+          <Line d="M540 375V391"/>
+          <Box x={0} y={399} w={1080} h={62} title="关闭 Case：多角色沟通 → 方案与承诺确认 → Case Owner 决策闭环" tone="green"/>
         </Diagram>
       </Slide>
       <Slide presentingSlide={presenting ? currentSlide : null} number={3} title="按人拆 vs 按路径拆">

@@ -108,3 +108,11 @@
   .aboutPage:not(.aboutPresenting) .aboutCoverDetails dt { font-size: 11px; }
   .aboutPage:not(.aboutPresenting) .aboutCover .aboutSlideFooter { color: #61786e; padding-top: 24px; }
 }
+
+.processComparison .boxTitle { font-size: 14px; }
+.processComparison .diagramSmall { font-size: 12px; }
+.sopDecision { fill: #f4ecd9; stroke: #c5ac79; stroke-width: 1.4; }
+.casePathPanel { fill: #e8efe5; stroke: #cbdacb; }
+.casePathTitle { fill: #24533f; font-size: 13px; font-weight: 600; }
+.processComparison .casePath .boxTitle { font-size: 13px; }
+.casePathRevision { fill: #8b642a; font-size: 10px; }
