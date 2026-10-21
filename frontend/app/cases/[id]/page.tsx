@@ -14,7 +14,6 @@ import {
 } from "../../lib/identities";
 import { formatQuantity, formatThreadTime } from "../../lib/format";
 import {
-  aiRunCopy,
   approvalContextFor,
   type ApprovalContext,
   commitmentCopy,
@@ -65,7 +64,6 @@ export default function Home() {
   const [approved, setApproved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [aiRunKind, setAiRunKind] = useState<AiRunKind | null>(null);
-  const [aiRunStep, setAiRunStep] = useState(0);
   const [aiRunStartedAt, setAiRunStartedAt] = useState<string | null>(null);
   const [aiPathIds, setAiPathIds] = useState<string[]>([]);
   const [pathExecutionMode, setPathExecutionMode] = useState<PathExecutionMode>("parallel");
@@ -132,14 +130,6 @@ export default function Home() {
         // The backend default is parallel; Case loading reports connection failures separately.
       });
   }, []);
-
-  useEffect(() => {
-    if (!aiRunKind) return;
-    const timer = window.setInterval(() => {
-      setAiRunStep((current) => Math.min(aiRunCopy[aiRunKind].steps.length - 1, current + 1));
-    }, 1250);
-    return () => window.clearInterval(timer);
-  }, [aiRunKind]);
 
   useEffect(() => {
     if (!aiRunKind || !canViewManifest) return;
@@ -358,7 +348,6 @@ export default function Home() {
     agentRequestRef.current = true;
     automaticPausedRef.current = false;
     setAiRunKind("manifest");
-    setAiRunStep(0);
     setFailedAiRun(null);
     setMessage("");
     try {
@@ -434,7 +423,6 @@ export default function Home() {
     agentRequestRef.current = true;
     automaticPausedRef.current = false;
     setAiRunKind("alternatives");
-    setAiRunStep(0);
     setAiPathIds(requestedPathIds);
     setFailedAiRun(null);
     setMessage("");
@@ -497,7 +485,6 @@ export default function Home() {
     agentRequestRef.current = true;
     automaticPausedRef.current = false;
     setAiRunKind("synthesis");
-    setAiRunStep(0);
     setFailedAiRun(null);
     setMessage("");
     try {
@@ -891,7 +878,6 @@ export default function Home() {
   const orchestrationCard = aiRunKind ? (
     <AiWorkingCard
       kind={aiRunKind}
-      step={aiRunStep}
       runs={liveAgentRuns}
       paths={
         aiRunKind === "alternatives"

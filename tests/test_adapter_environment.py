@@ -162,6 +162,8 @@ def test_thinking_defaults_to_disabled_and_model_uses_global_fallback(monkeypatc
         agent_llm_config_from_environment(agent_type).thinking_enabled is False
         for agent_type in ("orchestrator", "path", "synthesis")
     )
+    assert adapters[1]._model.streaming is True
+    assert adapters[1]._model.extra_body == {"thinking": {"type": "disabled"}}
     assert [adapter.profile for adapter in adapters] == [
         "openai-compatible/fallback-model",
         "openai-compatible-path/fallback-model",

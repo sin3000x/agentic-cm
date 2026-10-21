@@ -6,7 +6,7 @@ import os
 import re
 from dataclasses import dataclass, field, replace
 from threading import Lock
-from typing import Any, Awaitable, Callable, Protocol
+from typing import Any, AsyncIterator, Awaitable, Callable, Protocol
 from uuid import UUID
 
 from deepagents import FilesystemPermission, create_deep_agent
@@ -26,10 +26,10 @@ from langchain_core.callbacks import (
     CallbackManagerForLLMRun,
 )
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import ModelRequest, ModelResponse, ToolCallRequest
-from langchain_core.outputs import ChatGeneration, ChatResult, LLMResult
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult, LLMResult
 from langchain_core.tools import BaseTool, StructuredTool
 from langchain_openai import ChatOpenAI
 from langgraph.errors import GraphRecursionError
@@ -41,6 +41,7 @@ from .agent_runtime import (
     AgentExecutionError,
     AgentOutputError,
     AgentTraceSink,
+    ReasoningTrace,
     contains_chinese,
 )
 from .capabilities import CapabilityResolution
@@ -51,6 +52,7 @@ from .config import (
     deterministic_delay_seconds_from_environment,
     llm_timeout_seconds_from_environment,
 )
+from .llm import ProviderTextStream, provider_reasoning
 from .domain import (
     Case,
     InformationQuestion,
@@ -164,6 +166,38 @@ class _PathChatOpenAI(ChatOpenAI):
         params = super()._get_ls_params(**kwargs)
         params["ls_provider"] = "agentic-cm"
         return params
+
+    def _convert_chunk_to_generation_chunk(
+        self, chunk: dict[str, Any], default_chunk_class: type,
+        base_generation_info: dict[str, Any] | None,
+    ) -> ChatGenerationChunk | None:
+        generation = super()._convert_chunk_to_generation_chunk(chunk, default_chunk_class, base_generation_info)
+        choices = chunk.get("choices") or chunk.get("chunk", {}).get("choices") or []
+        if generation is not None and choices:
+            text = provider_reasoning(choices[0].get("delta") or {})
+            if text:
+                generation.message.additional_kwargs["provider_reasoning"] = text
+        return generation
+
+    async def _astream(self, *args: Any, **kwargs: Any) -> AsyncIterator[ChatGenerationChunk]:
+        # Parser state belongs to one invocation; the model is shared by parallel Paths.
+        parser = ProviderTextStream()
+        finished = False
+        async for chunk in super()._astream(*args, **kwargs):
+            finished = finished or bool((chunk.generation_info or {}).get("finish_reason"))
+            if isinstance(chunk.message.content, str):
+                text, thought = parser.feed(chunk.message.content)
+                chunk.message.content = text
+                if thought and not chunk.message.additional_kwargs.get("provider_reasoning"):
+                    chunk.message.additional_kwargs["provider_reasoning"] = thought
+            yield chunk
+        if not finished:
+            raise AgentExecutionError("Path Agent 模型流在完成标记前结束")
+        text, thought = parser.finish()
+        if text or thought:
+            yield ChatGenerationChunk(message=AIMessageChunk(
+                content=text, additional_kwargs={"provider_reasoning": thought} if thought else {},
+            ))
 
 
 @dataclass(frozen=True, slots=True)
@@ -647,8 +681,8 @@ class _DeepAgentTraceCallback(BaseCallbackHandler):
     """Bridge LangGraph/Deep Agents callbacks into the product AgentRun trace.
 
     Official Deep Agents tracing ships to LangSmith. This handler keeps the same
-    internal events in `agent_trace_events` without that dependency, and never
-    records hidden reasoning or full virtual-file bodies.
+    internal events and provider-returned reasoning in `agent_trace_events`
+    without that dependency. Full virtual-file bodies are not copied into Trace.
     """
 
     raise_error = True
@@ -658,6 +692,7 @@ class _DeepAgentTraceCallback(BaseCallbackHandler):
         self._trace = trace
         self._lock = Lock()
         self._pending_tools: dict[str, dict[str, Any]] = {}
+        self._reasoning: dict[UUID, ReasoningTrace] = {}
         self.turns = 0
         self.prompt_tokens = 0
         self.completion_tokens = 0
@@ -677,12 +712,30 @@ class _DeepAgentTraceCallback(BaseCallbackHandler):
         with self._lock:
             self.turns += 1
             turn = self.turns
+            self._reasoning[run_id] = ReasoningTrace(self._trace, str(run_id))
         self._trace(
             "deepagent.turn.started",
             "STARTED",
             "Deep Agents 模型轮次开始",
             {"turn": turn},
         )
+
+    def on_llm_new_token(
+        self, token: str, *, run_id: UUID, chunk: ChatGenerationChunk | None = None, **kwargs: Any,
+    ) -> None:
+        if chunk is None:
+            return
+        text = chunk.message.additional_kwargs.get("provider_reasoning")
+        if isinstance(text, str) and text:
+            with self._lock:
+                emitter = self._reasoning.setdefault(run_id, ReasoningTrace(self._trace, str(run_id)))
+                emitter.append(text)
+
+    def flush_reasoning(self) -> None:
+        with self._lock:
+            for emitter in self._reasoning.values():
+                emitter.flush()
+            self._reasoning.clear()
 
     def on_llm_end(
         self,
@@ -692,6 +745,10 @@ class _DeepAgentTraceCallback(BaseCallbackHandler):
         parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> None:
+        with self._lock:
+            emitter = self._reasoning.pop(run_id, None)
+            if emitter:
+                emitter.flush()
         usage = _usage_from_llm_result(response)
         generations = response.generations[0] if response.generations else []
         message = generations[0].message if generations else None
@@ -719,6 +776,10 @@ class _DeepAgentTraceCallback(BaseCallbackHandler):
         parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> None:
+        with self._lock:
+            emitter = self._reasoning.pop(run_id, None)
+            if emitter:
+                emitter.flush()
         with self._lock:
             turn = self.turns
         self._trace(
@@ -906,6 +967,9 @@ class DeepAgentPathAdapter:
                     business_tools=frozenset(str(tool["id"]) for tool in context.tool_contracts),
                 ),
             )
+        except asyncio.CancelledError:
+            callback.flush_reasoning()
+            raise
         except GraphRecursionError as exc:
             trace(
                 "deepagent.runtime.failed",
@@ -1491,6 +1555,8 @@ def path_agent_from_environment(adapter: str | None = None, *, model_id: str | N
             base_url=os.getenv("AGENTIC_CM_LLM_BASE_URL", ""),
             api_key=api_key or "not-configured",
             timeout=llm_timeout_seconds_from_environment("path"),
+            streaming=True,
+            stream_usage=True,
             max_tokens=max_output_tokens,
             default_headers=default_headers,
             extra_body={

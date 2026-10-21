@@ -250,7 +250,8 @@ class OpenAICompatiblePlannerAdapter:
                 {"role": "user", "content": json.dumps(prompt_context, ensure_ascii=False)},
             ],
             "response_format": {"type": "json_object"},
-            "stream": False,
+            "stream": True,
+            "stream_options": {"include_usage": True},
         }
         if self._max_output_tokens is not None:
             request["max_tokens"] = self._max_output_tokens

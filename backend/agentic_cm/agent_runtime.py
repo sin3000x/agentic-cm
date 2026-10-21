@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from time import monotonic
 from typing import Any, Callable, Protocol, TypeVar
+from uuid import uuid4
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -57,6 +59,32 @@ class AgentTraceSink(Protocol):
         summary: str,
         details: dict[str, Any] | None = None,
     ) -> None: ...
+
+
+class ReasoningTrace:
+    """Batch provider deltas to keep trace persistence off the per-token hot path."""
+
+    def __init__(self, trace: AgentTraceSink, call_id: str | None = None) -> None:
+        self._trace = trace
+        self.call_id = call_id or str(uuid4())
+        self._parts: list[str] = []
+        self._last_flush = 0.0
+
+    def append(self, text: str) -> None:
+        if not text:
+            return
+        self._parts.append(text)
+        if monotonic() - self._last_flush >= 0.15:
+            self.flush()
+
+    def flush(self) -> None:
+        if self._parts:
+            text = "".join(self._parts)
+            self._parts.clear()
+            self._trace("model.reasoning.delta", "COMPLETED", "收到接口返回的思考文本", {
+                "call_id": self.call_id, "text": text,
+            })
+            self._last_flush = monotonic()
 
 
 @dataclass(frozen=True)
@@ -189,8 +217,9 @@ async def request_structured_output(
                     "authentication": endpoint.authentication_details(),
                 },
             )
+            reasoning = ReasoningTrace(trace)
             try:
-                response = await create_chat_completion(endpoint.client, request)
+                response = await create_chat_completion(endpoint.client, request, reasoning.append)
                 break
             except CompatibleModelClientError as exc:
                 will_retry = exc.status == "unavailable" and network_attempt == 0
@@ -210,6 +239,8 @@ async def request_structured_output(
                 raise execution_error(
                     f"{agent_label} model request failed (status={exc.status})"
                 ) from exc
+            finally:
+                reasoning.flush()
 
         if response is None:
             raise execution_error(f"{agent_label} model request failed without a response")

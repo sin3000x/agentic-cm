@@ -33,3 +33,12 @@ Path Agent 最多进行 12 轮取证；同一工具与参数的冻结业务查�
 `AGENTIC_CM_ADAPTER=deterministic|openai-compatible`。模型、thinking、token 上限按 Agent 前缀覆盖，见 README。Key 只用于请求 Header，不进 Case、事件或 trace。
 
 Deterministic Adapter 用于测试和无 Key 本地开发；它不判断业务优先级。
+
+
+## 接口思考文本的实时展示
+
+Orchestrator、Path、Synthesis 的模型调用均使用流式响应。thinking 默认仍为关闭；展示思考文本不会修改 `thinking` 或 `reasoning_effort` 配置。只有服务商实际返回的 reasoning 文本会进入 `model.reasoning.delta` Trace，并由现有的实时 Trace 刷新在界面中合并显示。没有 reasoning 的响应不生成替代文案，也不显示思考面板。
+
+接收独立的 `reasoning_content`、`reasoning`、`thinking`、`reasoning_details` 文本，以及正文开头的 `<think>...</think>` 块。跨分片标签会合并解析；思考文本不参与业务结果的 JSON / Tool 输出校验。Path 的工具调用参数及结果仍按原来的 Deep Agents 流程执行。思考事件按模型调用分组、短时批量持久化；取消或失败时保留已经收到的内容。Trace 沿用 Case Owner 的查看权限。
+
+Orchestrator 和 Synthesis 对忽略流式参数并返回普通 JSON 的兼容服务仍可处理，但这类响应只能在完整返回后展示思考文本。模型传输中断或缺少终止标记不会发布部分业务结果。页面的阶段提示来自真实 Trace，不再按计时器模拟步骤进度。

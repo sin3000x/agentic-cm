@@ -1,4 +1,5 @@
 import Image from "next/image";
+import { useEffect, useRef } from "react";
 import { botAvatars, personAvatars } from "../../lib/identities";
 import { formatThreadTime } from "../../lib/format";
 import {
@@ -40,14 +41,12 @@ export function BotIcon({ kind, className }: { kind: keyof typeof botAvatars; cl
 
 export function AiWorkingCard({
   kind,
-  step,
   runs,
   paths = [],
   executionMode = "parallel",
   maxConcurrency = 4,
 }: {
   kind: AiRunKind;
-  step: number;
   runs: AgentRun[];
   paths?: ManifestPath[];
   executionMode?: PathExecutionMode;
@@ -153,17 +152,10 @@ export function AiWorkingCard({
           </>
         ) : (
           <>
-            <div className="aiStepTrack">
-              {copy.steps.map((item, index) => (
-                <span className={index < step ? "done" : index === step ? "active" : ""} key={item}>
-                  <i>{index < step ? "✓" : index + 1}</i>
-                  {item}
-                </span>
-              ))}
-            </div>
-            <div className="aiProgress">
-              <i style={{ width: `${Math.min(92, 18 + step * 24)}%` }} />
-            </div>
+            <p className="aiLiveStatus">
+              {runs[0]?.events.filter((event) => event.step !== "model.reasoning.delta").at(-1)?.summary
+                ?? "正在建立 Agent 运行记录…"}
+            </p>
           </>
         )}
         <section className="embeddedLiveTrace" aria-label="实时审计轨迹">
@@ -296,6 +288,7 @@ function traceDuration(start: string, end: string | null) {
 function traceActivities(events: AgentTraceEvent[]) {
   const activities: { start: AgentTraceEvent; end?: AgentTraceEvent }[] = [];
   for (const event of events) {
+    if (event.step === "model.reasoning.delta") continue;
     if (/^deepagent\.tool\.(completed|failed)$/.test(event.step)) {
       const candidates = activities.filter(({ start, end }) =>
         !end && start.step === "deepagent.tool.started" &&
@@ -351,6 +344,37 @@ function TraceActivity({ start, end, running }: {
         </div>
       </details>
     </li>
+  );
+}
+
+function ProviderReasoning({ run }: { run: AgentRun }) {
+  const viewport = useRef<HTMLPreElement>(null);
+  const following = useRef(true);
+  const text = run.events
+    .filter((event) => event.step === "model.reasoning.delta" && typeof event.details.text === "string")
+    .map((event, index, events) => {
+      const separator = index > 0 && events[index - 1].details.call_id !== event.details.call_id ? "\n\n" : "";
+      return separator + event.details.text;
+    }).join("");
+
+  useEffect(() => {
+    if (following.current && viewport.current) {
+      viewport.current.scrollTop = viewport.current.scrollHeight;
+    }
+  }, [text]);
+
+  if (!text) return null;
+  return (
+    <section className="providerReasoning" aria-label="接口返回的思考过程">
+      <header>
+        <strong>接口返回的思考过程</strong>
+        <span>{run.status === "RUNNING" ? "实时更新" : "已记录"}</span>
+      </header>
+      <pre ref={viewport} onScroll={() => {
+        const element = viewport.current;
+        if (element) following.current = element.scrollHeight - element.scrollTop - element.clientHeight < 32;
+      }}>{text}</pre>
+    </section>
   );
 }
 
@@ -420,6 +444,7 @@ export function AgentTracePanel({
                   </span>
                 </summary>
                 <div className="traceRunBody">
+                  <ProviderReasoning run={run} />
                   <div className="traceRunOverview"><span>执行活动</span><span>{traceDuration(run.started_at, run.completed_at) ?? (run.status === "RUNNING" ? "实时更新" : "耗时未知")}</span></div>
                   {run.error_message && (
                     <p className="traceError">

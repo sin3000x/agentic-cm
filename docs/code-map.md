@@ -38,9 +38,10 @@ Registry identity (`capabilities.AssetRef`) also has `kind` and `source`. Conver
 | `service.py` | Lifecycle, views, inbox |
 | `capabilities.py` | Load, validate, resolve by digest |
 | `orchestrator.py` | Planner draft → frozen Manifest |
-| `path_agent.py` | Frozen Manifest → `SolutionRevision` |
+| `path_agent.py` | Frozen Manifest → `SolutionRevision`; Deep Agents model/tool streaming callbacks |
 | `synthesis_agent.py` | Terminal PathAttempts → `SynthesisReport` |
-| `agent_runtime.py` | Shared LLM call, retry, `AgentError` |
+| `llm.py` | Compatible transport; stream assembly and provider reasoning separation |
+| `agent_runtime.py` | Shared LLM call, retry, batched provider reasoning Trace, `AgentError` |
 | `api.py` | HTTP; single-process Agent request tracking and Owner cancellation; exception handlers map domain errors |
 
 Invalid persisted Case JSON is treated as empty and `ensure_demo_data()` reseeds the demo. There is no legacy decoder.

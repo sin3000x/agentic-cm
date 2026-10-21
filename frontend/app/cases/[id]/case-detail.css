@@ -3549,3 +3549,32 @@ button:disabled {
   line-height: 1.7;
 }
 .solutionChangeSummary p { margin: 5px 0 0; white-space: pre-wrap; }
+
+
+.providerReasoning {
+  margin-bottom: 18px;
+  padding: 14px 16px;
+  border: 1px solid rgba(67, 128, 115, .22);
+  border-radius: 10px;
+  background: rgba(67, 128, 115, .06);
+}
+.providerReasoning > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.providerReasoning > header strong { font-size: 13px; }
+.providerReasoning > header span { font-size: 11px; opacity: .7; }
+.providerReasoning > pre {
+  max-height: 260px;
+  overflow: auto;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.aiLiveStatus { font-size: 13px; opacity: .85; }
