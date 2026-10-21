@@ -147,7 +147,7 @@ export default function AboutPage() {
         </dl>
       </Slide>
       <Slide presentingSlide={presenting ? currentSlide : null} number={2} title="业务流程 vs 事件驱动">
-        <Diagram label="复杂 SOP 按预定义的条件分支、核验与返工规则推进；事件驱动的 Case 围绕目标探索提拉、替代等路径，每条路径内部也包含多步分析、并行核验与方案修订，最终由人确认承诺并决策闭环" height={465}>
+        <Diagram label="复杂 SOP 按预定义的条件分支、核验与返工规则推进；事件驱动的 Case 围绕目标探索提拉、替代等路径，每条路径围绕假设连接事实、约束、角色反馈与待补信息，随新信息调整探索方向，最终由人确认承诺并决策闭环" height={465}>
           <g className="processComparison">
             <rect className="diagramPanel" x="0" y="0" width="510" height="350" rx="14"/><rect className="diagramPanel" x="540" y="0" width="540" height="350" rx="14"/>
             <Text x={255} y={36}>Business Process · 预定义 SOP</Text>
@@ -168,23 +168,24 @@ export default function AboutPage() {
 
             <Text x={810} y={36}>Case Management · 目标驱动</Text>
             <Box x={552} y={175} w={66} h={52} title="事件"/><Box x={998} y={175} w={70} h={52} title="目标" tone="green"/>
-            <Line d="M618 185H630V105H648" dashed/><Line d="M618 201H648" dashed/><Line d="M618 217H630V297H648" dashed/>
-            <Line d="M958 105H980V185H996" dashed/><Line d="M958 201H996" dashed/><Line d="M958 297H980V217H996" dashed/>
+            <Line d="M618 186C642 186 622 103 650 103M618 201H650M618 216C642 216 622 283 650 283" dashed arrow="none"/>
+            <Line d="M958 103C986 103 970 185 996 185M958 193C978 193 978 201 996 201M958 283C986 283 970 217 996 217" dashed/>
             {[
-              { y: 62, title: "提拉路径 ?", steps: ["缺口分析", "产能核验", "交期协商", "提拉方案"] },
-              { y: 158, title: "替代路径 ?", steps: ["候选筛选", "技术验证", "客户确认", "替代方案"] },
-              { y: 254, title: "新路径 ?", steps: ["补充事实", "约束分析", "资源核验", "方案推演"] },
-            ].map(({ y, title, steps }) => <g key={title} className="casePath">
-              <rect className="casePathPanel" x="650" y={y} width="308" height="90" rx="8"/>
-              <text className="casePathTitle" x="662" y={y + 17}>{title}</text>
-              <Line d={`M726 ${y + 43}H738V${y + 35}H750M738 ${y + 43}V${y + 65}H750`}/>
-              <Line d={`M822 ${y + 35}H838V${y + 43}H852M822 ${y + 65}H838V${y + 43}`} />
-              <Line d={`M896 ${y + 59}V${y + 84}H696V${y + 60}`} dashed gold/>
-              <Box x={662} y={y + 28} w={64} h={32} title={steps[0]}/>
-              <Box x={752} y={y + 23} w={70} h={24} title={steps[1]}/><Box x={752} y={y + 53} w={70} h={24} title={steps[2]}/>
-              <Box x={854} y={y + 27} w={92} h={32} title={steps[3]}/>
-              <text className="casePathRevision" x="923" y={y + 76} textAnchor="middle">修订</text>
+              { y: 58, title: "提拉可行？", evidence: ["产能余量", "交期约束", "供应商反馈", "待补信息？"] },
+              { y: 148, title: "能否替代？", evidence: ["物料特性", "客户要求", "研发意见", "待验证？"] },
+              { y: 238, title: "还有别的解？", evidence: ["新线索", "资源约束", "角色反馈", "未知因素？"] },
+            ].map(({ y, title, evidence }, index) => <g key={title} className="caseExploration">
+              <ellipse className="caseExplorationBoundary" cx="804" cy={y + 45} rx="154" ry="43"/>
+              <path className="caseEvidenceLink" d={`M696 ${y + 26}Q751 ${y + 16} 780 ${y + 41}M708 ${y + 70}Q750 ${y + 80} 780 ${y + 50}M829 ${y + 40}Q856 ${y + 15} 884 ${y + 22}M830 ${y + 51}Q859 ${y + 73} 883 ${y + 69}M700 ${y + 30}Q677 ${y + 49} 708 ${y + 66}M885 ${y + 26}Q917 ${y + 45} 885 ${y + 65}`}/>
+              <ellipse className="caseHypothesis" cx="804" cy={y + 45} rx="50" ry="17"/>
+              <text className="caseHypothesisTitle" x="804" y={y + 46} textAnchor="middle" dominantBaseline="middle">{title}</text>
+              {[{ x: 696, dy: 26 }, { x: 708, dy: 70 }, { x: 884, dy: 22 }, { x: 883, dy: 69 }].map(({ x, dy }, i) => <g key={evidence[i]} className={i === 3 ? "caseUnknownEvidence" : "caseKnownEvidence"}>
+                <circle cx={x} cy={y + dy} r="4"/>
+                <text x={x + (i < 2 ? -8 : 8)} y={y + dy + 4} textAnchor={i < 2 ? "end" : "start"}>{evidence[i]}</text>
+              </g>)}
+              <text className="caseExplorationLabel" x="804" y={y + 14} textAnchor="middle">{index < 2 ? `探索 ${index === 0 ? "A" : "B"}` : "新方向 · 随信息浮现"}</text>
             </g>)}
+            <Text x={810} y={344} small>补充事实 · 调整假设 · 发现新路径</Text>
           </g>
           <Line d="M255 356V365Q255 375 265 375H800Q810 375 810 365V356" arrow="none"/>
           <Line d="M540 375V391"/>
