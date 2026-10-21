@@ -124,3 +124,26 @@
 
 .personBox .boxTitle { font-size: 14px; }
 #slide-3 .agentBox .boxTitle { font-size: 15px; }
+
+.governanceLead { fill: #526d5e; font-size: 18px; }
+.governancePanel { fill: #f1f5ee; stroke: #d2dfd2; stroke-width: 1.2; }
+.responsibilityPanel { fill: #f7f1e5; stroke: #dfcfaa; }
+.governanceSection { fill: #28594a; font-size: 17px; font-weight: 700; }
+.governanceHint { fill: #647a69; font-size: 14px; }
+.governanceDiagram .boxTitle { font-size: 17px; }
+.governanceDiagram .boxSub { font-size: 13px; }
+.governanceHero { fill: #214d3d; font-size: 23px; font-weight: 700; }
+.governanceCollaboration { fill: #edf1eb; }
+.assetNumber { fill: #a5b9a9; font-size: 24px; }
+.assetName { fill: #356b54; font-size: 20px; font-weight: 600; }
+.assetTitle { fill: #214d3d; font-size: 28px; font-weight: 700; }
+.assetQuestion { fill: #526d5e; font-size: 17px; }
+.assetDetail { fill: #3e604c; font-size: 15px; }
+.assetExample { fill: #738375; font-size: 13px; }
+.assetOutcome { fill: #dce9dc; }
+.assetOutcomeText { fill: #28594a; font-size: 17px; font-weight: 600; }
+.asset-policies .governancePanel { fill: #f7f1e5; stroke: #dfcfaa; }
+.asset-policies .assetName, .asset-policies .assetTitle, .asset-policies .assetOutcomeText { fill: #85622d; }
+.asset-policies .assetOutcome { fill: #ecdfbf; }
+.asset-knowledge .governancePanel { fill: #edf2ef; }
+.asset-knowledge .assetOutcome { fill: #dce6df; }

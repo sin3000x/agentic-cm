@@ -5,7 +5,7 @@ import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 
 import { botAvatars, personAvatars } from "../lib/identities";
 import "./about.css";
 
-const chapters = ["封面", "流程与 Case", "角色与求解", "能力与责任", "Case 工作流", "平台资产", "技术架构"];
+const chapters = ["封面", "流程与 Case", "角色与求解", "能力与责任", "平台资产", "Case 工作流", "技术架构"];
 
 function Slide({ number, title, children, note, presentingSlide }: { presentingSlide: number | null; number: number; title: ReactNode; children: ReactNode; note?: string }) {
   return <section className={`aboutSlide${number === 1 ? " aboutCover" : ""}${presentingSlide !== null && presentingSlide !== number ? " aboutSlideInactive" : ""}`} id={`slide-${number}`} aria-labelledby={`heading-${number}`}>
@@ -212,22 +212,64 @@ export default function AboutPage() {
           <Text x={540} y={451}>协作的基本单元，从角色交接 → 路径求解</Text>
         </Diagram>
       </Slide>
-      <Slide presentingSlide={presenting ? currentSlide : null} number={4} title="能力 vs 责任" note="备注：这是理想化设计，信息无法全部在系统中承载；实际应用中，人还需在 Agent 提问时补充信息。">
-        <Diagram label="人员能力沉淀为跨角色 Skills，Path Agent 整合并生成方案；人负责批准否决或提出修改意见，所有记录归入 Case" height={448}>
-          <rect className="diagramPanel" x="0" y="0" width="300" height="338" rx="14"/>
-          <Text x={150} y={38}>人的能力 → 可以抽取</Text><Text x={950} y={106}>人的责任 → 仍然存在</Text>
-          <Box x={22} y={66} w={256} h={66} title="计划能力 · 供需与交期"/><Box x={22} y={154} w={256} h={66} title="研发能力 · 替代可行性"/><Box x={22} y={242} w={256} h={66} title="订单能力 · 客户与履约"/>
-          <Line d="M284 99H316Q326 99 326 109V265Q326 275 316 275H284M284 187H326" arrow="none"/>
-          <Line d="M326 187H362"/>
-          <AgentBox x={372} y={138} w={250} h={98} title="Path Agent" sub="跨角色整合分析" agent="path"/>
-          <Text x={497} y={78} small>Case 事实 + 探索目标</Text><Line d="M497 91V128"/>
-          <Text x={719} y={169} small>建议方案</Text><Line d="M630 187H812"/><Text x={719} y={213} small>证据与风险</Text>
-          <Box x={822} y={138} w={258} h={98} title="相关责任人" sub="批准 / 否决 / 修改意见" tone="gold" icon="people"/>
-          <Line d="M951 246V292Q951 304 939 304H509Q497 304 497 292V246" gold/><Text x={710} y={289} small>修改意见</Text>
-          <Box x={0} y={382} w={1080} h={60} title="Case 统一记录与审计：事实 → 方案版本 → 人员意见 → 承诺与决策" tone="green"/>
+      <Slide presentingSlide={presenting ? currentSlide : null} number={4} title="能力 vs 责任" note="这是理想化设计；信息无法全部由系统承载，实际应用中仍需由人补充 Agent 所需的信息。">
+        <Diagram label="能力可以沉淀复用，责任仍由人承担。Path Agent 组合计划研发订单能力分析事实并提出方案，责任人批准否决或要求修改。人提供修改意见与补充信息，Agent 据此继续推演和修订方案。" height={438}>
+          <g className="governanceDiagram">
+            <text className="governanceLead" x="0" y="22">能力可以沉淀复用，责任仍由人承担</text>
+            <rect className="governancePanel" x="0" y="54" width="520" height="300" rx="16"/>
+            <rect className="governancePanel responsibilityPanel" x="560" y="54" width="520" height="300" rx="16"/>
+            <text className="governanceSection" x="24" y="88">Agent · 分析与建议</text>
+            <text className="governanceSection" x="584" y="88">人 · 确认与决策</text>
+            <circle cx="66" cy="153" r="43" fill="#fff"/>
+            <image href={botAvatars.path} x="27" y="110" width="78" height="86" preserveAspectRatio="xMidYMid meet"/>
+            <text className="governanceHero" x="126" y="144">整合能力，生成方案</text>
+            <text className="governanceHint" x="126" y="176">基于 Case 事实与探索目标开展分析</text>
+            {["王淼", "林乔", "陈澄"].map((name, i) => <image key={name} href={personAvatars[name]} x={584 + i * 33} y="128" width="48" height="48" preserveAspectRatio="xMidYMid slice" style={{ clipPath: "circle(50%)" }}/>)}
+            <text className="governanceHero" x="718" y="144">确认承诺，作出决策</text>
+            <text className="governanceHint" x="718" y="176">专业角色 · Case Owner</text>
+            <Box x={24} y={255} w={144} h={68} title="计划能力" sub="供需 · 交期"/>
+            <Box x={188} y={255} w={144} h={68} title="研发能力" sub="替代 · 技术约束"/>
+            <Box x={352} y={255} w={144} h={68} title="订单能力" sub="客户 · 履约影响"/>
+            <Box x={584} y={255} w={144} h={68} title="批准" sub="确认方案与承诺" tone="gold"/>
+            <Box x={748} y={255} w={144} h={68} title="否决" sub="说明原因与约束" tone="gold"/>
+            <Box x={912} y={255} w={144} h={68} title="提出修改" sub="补充信息与意见" tone="gold"/>
+            <rect className="governanceCollaboration" x="0" y="374" width="1080" height="54" rx="10"/>
+            <text className="governanceSection" x="24" y="407">围绕 Case 持续协作</text>
+            <text className="governanceHint" x="1056" y="407" textAnchor="end">方案与证据 / 人员反馈 / 继续推演与修订</text>
+          </g>
         </Diagram>
       </Slide>
-      <Slide presentingSlide={presenting ? currentSlide : null} number={5} title="三类 Agent：规划、推演、汇总">
+      <Slide presentingSlide={presenting ? currentSlide : null} number={5} title="三类资产：能力、规则、经验" note="平台从协作记录中自动整理角色偏好与知识，经人确认后纳入 Knowledge，供后续 Case 使用。">
+        <Diagram label="将能力沉淀为 Skills，将审批责任落实为 Policies，由平台自动整理角色偏好与知识，经人确认后纳入 Knowledge，供后续 Case 使用。" height={438}>
+          <g className="governanceDiagram">
+            <text className="governanceLead" x="0" y="22">把人机分工，落实为可复用、可治理的平台资产</text>
+            {[
+              { x: 0, kind: "skills", number: "01", name: "Skills", title: "能力可复用", question: "如何分析与求解", detail: "分析方法 · 工具使用", example: "供需评估 / 替代验证", outcome: "Agent 跨角色组合调用" },
+              { x: 370, kind: "policies", number: "02", name: "Policies", title: "责任有规则", question: "何时需要谁来确认", detail: "Case 类型 · Path · 审批策略", example: "确定性匹配，触发不依赖 LLM", outcome: "审批与承诺仍由人确认" },
+              { x: 740, kind: "knowledge", number: "03", name: "Knowledge", title: "经验可参考", question: "理解角色偏好，积累业务知识", detail: "角色偏好 · 业务知识 · 协作经验", example: "平台自动整理，人只做确认", outcome: "为后续分析提供参考" },
+            ].map(({ x, kind, number, name, title, question, detail, example, outcome }) => <g key={name} className={`assetCard asset-${kind}`}>
+              <rect className="governancePanel" x={x} y="54" width="340" height="270" rx="16"/>
+              <text className="assetNumber" x={x + 314} y="90" textAnchor="end">{number}</text>
+              <text className="assetName" x={x + 24} y="94">{name}</text>
+              <text className="assetTitle" x={x + 24} y="135">{title}</text>
+              <text className="assetQuestion" x={x + 24} y="170">{question}</text>
+              <path d={`M${x + 24} 188H${x + 316}`} stroke="#d3dfd3"/>
+              <text className="assetDetail" x={x + 24} y="215">{detail}</text>
+              <text className="assetExample" x={x + 24} y="239">{example}</text>
+              <rect className="assetOutcome" x={x + 12} y="265" width="316" height="47" rx="9"/>
+              <text className="assetOutcomeText" x={x + 170} y="294" textAnchor="middle">{outcome}</text>
+            </g>)}
+            <text className="governanceSection" x="0" y="354">知识如何沉淀</text>
+            <text className="governanceHint" x="166" y="354">来源：Case 协作记录</text>
+            <Line d="M268 402H296"/><Line d="M488 402H516"/><Line d="M756 402H784"/>
+            <Box x={0} y={372} w={260} h={60} title="平台自动整理" sub="角色偏好与知识"/>
+            <Box x={304} y={372} w={176} h={60} title="人工确认" tone="gold"/>
+            <Box x={524} y={372} w={224} h={60} title="纳入 Knowledge"/>
+            <Box x={792} y={372} w={288} h={60} title="后续 Case 分析" tone="green"/>
+          </g>
+        </Diagram>
+      </Slide>
+      <Slide presentingSlide={presenting ? currentSlide : null} number={6} title="三类 Agent：规划、推演、汇总">
         <Diagram label="三条 Path 并行探索审批后汇总，由 Case Owner 决策；关闭 Case 后回到最初的供应链事件，完成处置闭环" height={495} inset={24}>
           <Text x={109} y={24}>01 · 规划范围</Text>
           <Text x={528} y={24}>02 · 并行探索与审批</Text>
@@ -261,17 +303,6 @@ export default function AboutPage() {
           <text x="824" y="282" textAnchor="middle" fontSize="13" fill="#8b642a"><tspan x="824">审批超期</tspan></text>
           <Line d="M982 330V468Q982 480 970 480H-4Q-16 480-16 468V121Q-16 109-4 109H12"/>
           <Text x={540} y={510}>关闭 Case · 事件闭环</Text>
-        </Diagram>
-      </Slide>
-      <Slide presentingSlide={presenting ? currentSlide : null} number={6} title="三类资产：能力、规则、经验" note="演进方式：角色意见与经验经人工整理后纳入 Knowledge，供后续 Case 参考；当前不做自动学习或自动回写。">
-        <Diagram label="Skills 是可复用能力，Policies 通过确定性规则触发审批，Knowledge 保存观察记忆经验；Case 意见经验经整理沉淀供下次分析参考" height={450}>
-          <rect className="diagramPanel" x="0" y="0" width="340" height="300" rx="14"/><rect className="diagramPanel" x="370" y="0" width="340" height="300" rx="14"/><rect className="diagramPanel" x="740" y="0" width="340" height="300" rx="14"/>
-          <Text x={170} y={43}>Skills · 可复用的能力</Text><Text x={540} y={43}>Policies · 审批策略</Text><Text x={910} y={43}>Knowledge · 观察、记忆、经验</Text>
-          <Box x={25} y={86} w={290} h={70} title="分析方法 + 工具使用"/><Line d="M170 165V194"/><Box x={25} y={204} w={290} h={70} title="Agent 跨角色组合调用" tone="green"/>
-          <Box x={395} y={86} w={290} h={70} title="Case 类型 + Path"/><Line d="M540 165V194"/><Box x={395} y={204} w={290} h={70} title="确定性匹配 → 审批责任" tone="gold"/>
-          <Box x={765} y={86} w={290} h={70} title="角色意见 + 既往经验"/><Line d="M910 165V194"/><Box x={765} y={204} w={290} h={70} title="供 Agent 参考与判断" tone="green"/>
-          <Text x={540} y={339}>触发不依赖 LLM</Text>
-          <Box x={0} y={377} w={248} h={67} title="本次 Case 意见与经验"/><Line d="M256 410H282"/><Box x={292} y={377} w={220} h={67} title="沉淀与人工确认"/><Line d="M520 410H546"/><Box x={556} y={377} w={220} h={67} title="Knowledge"/><Line d="M784 410H810"/><Box x={820} y={377} w={260} h={67} title="下一次 Case 的分析" tone="green"/>
         </Diagram>
       </Slide>
       <Slide presentingSlide={presenting ? currentSlide : null} number={7} title="四层架构">
