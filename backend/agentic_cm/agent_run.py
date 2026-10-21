@@ -1,13 +1,14 @@
 """AgentRun bookkeeping shared by every Agent invocation.
 
 Each Agent call must open a run, emit an ordered trace, and close the run as
-SUCCEEDED or FAILED — including when the Agent raises, so a failed run keeps
+SUCCEEDED, FAILED, or CANCELLED — including when the Agent raises, so a failed run keeps
 its audit trail while the Case stays untouched. This was duplicated verbatim
 for the Orchestrator, Path, and Synthesis calls in CaseService.
 """
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -132,6 +133,10 @@ async def agent_run(
     )
     try:
         yield run
+    except asyncio.CancelledError as exc:
+        run.trace("run.cancelled", "CANCELLED", "Agent 运行已终止", {"reason": str(exc)})
+        store.finish_agent_run(run_id, status="CANCELLED")
+        raise
     except Exception as exc:
         run.trace(
             "run.failed",

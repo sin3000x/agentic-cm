@@ -121,6 +121,8 @@ export function AiWorkingCard({
                     ? "正在推演"
                     : status === "SUCCEEDED"
                       ? "已完成"
+                      : status === "CANCELLED"
+                        ? "已终止"
                       : status === "FAILED"
                         ? "失败"
                         : executionMode === "parallel"
@@ -318,10 +320,11 @@ function TraceActivity({ start, end, running }: {
 }) {
   const event = end ?? start;
   const tool = typeof event.details.tool === "string" ? event.details.tool : null;
+  const cancelled = event.status === "CANCELLED";
   const failed = event.status === "FAILED";
   const pending = !end && start.step === "deepagent.tool.started";
   const state = failed ? "failed" : pending && running ? "running" : pending ? "unknown" : "completed";
-  const status = failed ? "失败" : pending ? (running ? "执行中" : "未记录结果") : event.status === "STARTED" ? "已发起" : "已完成";
+  const status = cancelled ? "已终止" : failed ? "失败" : pending ? (running ? "执行中" : "未记录结果") : event.status === "STARTED" ? "已发起" : "已完成";
   const duration = end ? traceDuration(start.created_at, end.created_at) : null;
   const input = start.details.input ?? event.details.input;
   const output = event.details.output;
@@ -371,7 +374,7 @@ export function AgentTracePanel({
         ? "PATH AGENT"
         : "SYNTHESIS AGENT";
   const typedRuns = runs.filter((run) => run.agent_type === agentType);
-  const statusLabel = { RUNNING: "运行中", SUCCEEDED: "已完成", FAILED: "失败" } as const;
+  const statusLabel = { RUNNING: "运行中", SUCCEEDED: "已完成", FAILED: "失败", CANCELLED: "已终止" } as const;
   return (
     <section
       className={`agentTracePanel${embedded ? " embedded" : ""}`}
@@ -397,7 +400,7 @@ export function AgentTracePanel({
             return (
               <details
                 className={`traceRun ${run.status.toLowerCase()}`}
-                open={autoExpand && (run.status === "RUNNING" || run.status === "FAILED")}
+                open={autoExpand && (run.status === "RUNNING" || run.status === "FAILED" || run.status === "CANCELLED")}
                 key={run.id}
               >
                 <summary>

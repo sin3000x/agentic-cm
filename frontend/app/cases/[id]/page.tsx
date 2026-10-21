@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import AppSidebar from "../../app-sidebar";
 import { CommitmentDecisionForm, InformationAnswerForm } from "../../human-input";
-import { apiGet, apiGetText, apiPost, apiUrl, isAbort } from "../../lib/api";
+import { apiGet, apiGetText, apiPost, apiUrl, ApiError, isAbort } from "../../lib/api";
 import {
   demoIdentities,
   setDemoIdentity,
@@ -99,6 +99,9 @@ export default function Home() {
   const { identity: currentIdentity } = useDemoIdentity();
   const [caseRefreshKey, setCaseRefreshKey] = useState(0);
   const identityNameRef = useRef(currentIdentity.name);
+  const agentRequestRef = useRef(false);
+  const automaticPausedRef = useRef(false);
+  const [stoppingAgent, setStoppingAgent] = useState(false);
   const automaticRunsRef = useRef(new Set<string>());
   const [approvalReview, setApprovalReview] = useState<ApprovalReview | null>(null);
   const startAutomaticManifest = useEffectEvent(() => {
@@ -197,7 +200,8 @@ export default function Home() {
       apiGet<CaseDetails>(`/api/cases/${activeCaseId}`, identityQuery, controller.signal),
       apiGet<TimelineEvent[]>(`/api/cases/${activeCaseId}/timeline`, undefined, controller.signal),
     ])
-      .then(([data, timeline]) => {
+      .then(async ([data, timeline]) => {
+        if (controller.signal.aborted) return;
         setCaseDetails(data);
         setPhase(data.phase);
         setCaseStatus(data.status);
@@ -219,29 +223,40 @@ export default function Home() {
           );
         }
         if (data.permissions?.can_view_manifest === true) {
-          Promise.all(
+          const [orchestratorRuns, loadedPathRuns, loadedSynthesisRuns] = await Promise.all(
             ["orchestrator", "path", "synthesis"].map((agentType) =>
               apiGet<AgentRun[]>(
                 `/api/cases/${activeCaseId}/agent-runs`,
                 { ...identityQuery, agent_type: agentType },
                 controller.signal,
-              ).catch(() => [] as AgentRun[]),
+              ),
             ),
-          )
-            .then(([orchestratorRuns, loadedPathRuns, loadedSynthesisRuns]) => {
-              setAgentRuns(orchestratorRuns);
-              setPathAgentRuns(loadedPathRuns);
-              setSynthesisAgentRuns(loadedSynthesisRuns);
-            })
-            .catch((error) => {
-              if (!(error instanceof DOMException && error.name === "AbortError")) {
-                setAgentRuns([]);
-                setPathAgentRuns([]);
-                setSynthesisAgentRuns([]);
-              }
-            });
+          );
+          if (controller.signal.aborted) return;
+          setAgentRuns(orchestratorRuns);
+          setPathAgentRuns(loadedPathRuns);
+          setSynthesisAgentRuns(loadedSynthesisRuns);
+          const stageRun = data.phase === "INTAKE"
+            ? { kind: "manifest" as const, run: orchestratorRuns[0] }
+            : data.phase === "PATH_EXPLORATION"
+              ? {
+                  kind: "alternatives" as const,
+                  run: loadedPathRuns.find((run, index, runs) =>
+                    run.status === "CANCELLED" &&
+                    runs.findIndex((candidate) => pathIdForRun(candidate) === pathIdForRun(run)) === index,
+                  ),
+                }
+              : data.phase === "FINAL_REVIEW"
+                ? { kind: "synthesis" as const, run: loadedSynthesisRuns[0] }
+                : null;
+          // A persisted stop remains paused across reloads and role changes.
+          if (stageRun?.run?.status === "CANCELLED") {
+            automaticPausedRef.current = true;
+            setFailedAiRun(stageRun.kind);
+          }
         }
         if (
+          !agentRequestRef.current && !automaticPausedRef.current &&
           data.permissions?.can_view_manifest === true &&
           data.phase === "INTAKE" &&
           !data.manifest
@@ -252,7 +267,7 @@ export default function Home() {
             startAutomaticManifest();
           }
         }
-        if (data.permissions?.can_view_manifest === true && data.phase === "PATH_EXPLORATION") {
+        if (!agentRequestRef.current && !automaticPausedRef.current && data.permissions?.can_view_manifest === true && data.phase === "PATH_EXPLORATION") {
           const pendingPathIds = (data.manifest?.paths ?? [])
             .filter((path) => path.selected)
             .filter((path) => {
@@ -269,6 +284,7 @@ export default function Home() {
           }
         }
         if (
+          !agentRequestRef.current && !automaticPausedRef.current &&
           data.permissions?.can_decide_case === true &&
           data.phase === "FINAL_REVIEW" &&
           !data.synthesis_report
@@ -309,6 +325,7 @@ export default function Home() {
         loadRuns("path"),
         loadRuns("synthesis"),
       ]);
+      if (identityNameRef.current !== currentIdentity.name) return;
       setAgentRuns(orchestratorRuns);
       setPathAgentRuns(loadedPathRuns);
       setSynthesisAgentRuns(loadedSynthesisRuns);
@@ -317,9 +334,29 @@ export default function Home() {
     }
   }
 
+  async function stopAgent() {
+    setStoppingAgent(true);
+    automaticPausedRef.current = true;
+    try {
+      await apiPost(`/api/cases/${activeCaseId}/agent-runs/cancel`, {
+        actor: currentIdentity.name,
+        role: currentIdentity.role,
+      });
+    } catch (error) {
+      setMessage(`终止失败：${error instanceof Error ? error.message : "请重试"}`);
+    } finally {
+      await refreshAgentRuns();
+      setCaseRefreshKey((current) => current + 1);
+      setStoppingAgent(false);
+    }
+  }
+
   async function generateManifest() {
+    if (agentRequestRef.current) return;
     setBusy(true);
     setAiRunStartedAt(new Date().toISOString());
+    agentRequestRef.current = true;
+    automaticPausedRef.current = false;
     setAiRunKind("manifest");
     setAiRunStep(0);
     setFailedAiRun(null);
@@ -329,6 +366,7 @@ export default function Home() {
         actor: currentIdentity.name,
         role: currentIdentity.role,
       });
+      if (identityNameRef.current !== currentIdentity.name) return;
       setPhase("MANIFEST_REVIEW");
       loadManifest(data.manifest, data.workflow_paths ?? []);
       setCapabilities(null);
@@ -337,14 +375,22 @@ export default function Home() {
       await refreshTimeline();
       setMessage("Manifest 已生成。");
     } catch (error) {
+      automaticPausedRef.current = true;
       setFailedAiRun("manifest");
+      if (identityNameRef.current !== currentIdentity.name) return;
+      if (error instanceof ApiError && error.detail === "Agent 运行已终止") {
+        setMessage("Agent 已终止，已完成的结果和运行记录已保留，可手动重试。");
+        return;
+      }
       setMessage(
         `Manifest 生成失败：${error instanceof Error ? error.message : "请确认本地 API 与 Planner 配置"}。`,
       );
     } finally {
       await refreshAgentRuns();
+      agentRequestRef.current = false;
       setAiRunKind(null);
       setBusy(false);
+      setCaseRefreshKey((current) => current + 1);
     }
   }
 
@@ -357,6 +403,7 @@ export default function Home() {
         actor: currentIdentity.name,
         role: currentIdentity.role,
       });
+      if (identityNameRef.current !== currentIdentity.name) return;
       loadManifest(data.manifest, data.workflow_paths ?? []);
       setSelectedPathIds(
         (data.manifest?.paths ?? []).filter((path) => path.selected).map((path) => path.id),
@@ -379,10 +426,13 @@ export default function Home() {
   }
 
   async function generateAlternatives(pathIds: string | string[]) {
+    if (agentRequestRef.current) return;
     const requestedPathIds = Array.isArray(pathIds) ? pathIds : [pathIds];
     if (requestedPathIds.length === 0) return;
     setBusy(true);
     setAiRunStartedAt(new Date().toISOString());
+    agentRequestRef.current = true;
+    automaticPausedRef.current = false;
     setAiRunKind("alternatives");
     setAiRunStep(0);
     setAiPathIds(requestedPathIds);
@@ -397,6 +447,7 @@ export default function Home() {
           role: currentIdentity.role,
         },
       );
+      if (identityNameRef.current !== currentIdentity.name) return;
       const updatedCase = data.case;
       setCaseDetails(updatedCase);
       if (data.execution_mode === "parallel" || data.execution_mode === "serial") {
@@ -420,20 +471,31 @@ export default function Home() {
         ? `Path Agent 已暂停 ${waitingCount} 条 Path 等待人工补充信息；问题已投递给对应角色。`
         : `Path Agent 已完成 ${requestedPathIds.length} 条 Path 的可审查方案。`);
     } catch (error) {
+      automaticPausedRef.current = true;
       setFailedAiRun("alternatives");
+      if (identityNameRef.current !== currentIdentity.name) return;
+      if (error instanceof ApiError && error.detail === "Agent 运行已终止") {
+        setMessage("Agent 已终止，已完成的结果和运行记录已保留，可手动重试。");
+        return;
+      }
       setMessage(
         `替代方案生成失败：${error instanceof Error ? error.message : "请确认 Path Agent 配置"}。`,
       );
     } finally {
       await refreshAgentRuns();
+      agentRequestRef.current = false;
       setAiRunKind(null);
       setBusy(false);
+      setCaseRefreshKey((current) => current + 1);
     }
   }
 
   async function generateSynthesis() {
+    if (agentRequestRef.current) return;
     setBusy(true);
     setAiRunStartedAt(new Date().toISOString());
+    agentRequestRef.current = true;
+    automaticPausedRef.current = false;
     setAiRunKind("synthesis");
     setAiRunStep(0);
     setFailedAiRun(null);
@@ -443,19 +505,28 @@ export default function Home() {
         actor: currentIdentity.name,
         role: currentIdentity.role,
       });
+      if (identityNameRef.current !== currentIdentity.name) return;
       setSynthesisReport(data.synthesis_report ?? null);
       setOwnerDecision(data.owner_decision ?? null);
       await refreshTimeline();
       setMessage("Synthesis Agent 已汇总所有成功与失败 Path，等待 Case Owner 决策。 ");
     } catch (error) {
+      automaticPausedRef.current = true;
       setFailedAiRun("synthesis");
+      if (identityNameRef.current !== currentIdentity.name) return;
+      if (error instanceof ApiError && error.detail === "Agent 运行已终止") {
+        setMessage("Agent 已终止，已完成的结果和运行记录已保留，可手动重试。");
+        return;
+      }
       setMessage(
         `汇总报告生成失败：${error instanceof Error ? error.message : "请确认 Synthesis Agent 配置"}。`,
       );
     } finally {
       await refreshAgentRuns();
+      agentRequestRef.current = false;
       setAiRunKind(null);
       setBusy(false);
+      setCaseRefreshKey((current) => current + 1);
     }
   }
 
@@ -474,6 +545,7 @@ export default function Home() {
         action,
         guidance: action === "MODIFY" ? normalizedGuidance : undefined,
       });
+      if (identityNameRef.current !== currentIdentity.name) return;
       setCaseStatus(data.status);
       setPhase(data.phase);
       setOwnerDecision(data.owner_decision ?? null);
@@ -540,6 +612,7 @@ export default function Home() {
       setDemoIdentity(demoIdentities[0].name);
       setApprovalReview(null);
       setFailedAiRun(null);
+      automaticPausedRef.current = false;
       automaticRunsRef.current.clear();
       setCaseRefreshKey((current) => current + 1);
       setMessage(datasetId === "supply-chain-supply-information-v1"
@@ -625,6 +698,7 @@ export default function Home() {
         `/api/cases/${caseId}/paths/${node.path_id}/commitments/${node.id}/decision`,
         { actor: currentIdentity.name, role: currentIdentity.role, decision, expected_revision: expectedRevision, reason },
       );
+      if (identityNameRef.current !== currentIdentity.name) return;
       if (caseId === activeCaseId) {
         setCaseDetails(data);
         setCommitmentNodes(data.commitment_nodes ?? []);
@@ -648,6 +722,7 @@ export default function Home() {
         `/api/cases/${activeCaseId}/paths/${pathId}/information-requests/${request.id}/answer`,
         { actor: currentIdentity.name, role: currentIdentity.role, answer, quantity },
       );
+      if (identityNameRef.current !== currentIdentity.name) return;
       setCaseDetails(data);
       setPathAttempts(data.path_attempts ?? []);
       setCommitmentNodes(data.commitment_nodes ?? []);
@@ -714,18 +789,18 @@ export default function Home() {
   const liveAgentRuns = aiRunStartedAt
     ? allLiveAgentRuns.filter((run) => run.started_at >= aiRunStartedAt)
     : [];
-  const latestFailedOrchestratorRuns = agentRuns[0]?.status === "FAILED" ? [agentRuns[0]] : [];
+  const latestFailedOrchestratorRuns = ["FAILED", "CANCELLED"].includes(agentRuns[0]?.status) ? [agentRuns[0]] : [];
   // Exploration already shows every Path run, including failures and retries.
   const latestFailedPathRuns = phase === "PATH_EXPLORATION"
     ? []
     : pathAgentRuns.filter((run, index, runs) =>
-        run.status === "FAILED" &&
+        ["FAILED", "CANCELLED"].includes(run.status) &&
         runs.findIndex((candidate) =>
           (pathIdForRun(candidate) ?? candidate.id) === (pathIdForRun(run) ?? run.id),
         ) === index,
       );
   const latestFailedSynthesisRuns =
-    synthesisAgentRuns[0]?.status === "FAILED" ? [synthesisAgentRuns[0]] : [];
+    ["FAILED", "CANCELLED"].includes(synthesisAgentRuns[0]?.status) ? [synthesisAgentRuns[0]] : [];
   const latestFailedRunCount =
     latestFailedOrchestratorRuns.length +
     latestFailedPathRuns.length +
@@ -1331,6 +1406,11 @@ export default function Home() {
             <Link href="/">Case 总览</Link> <span>/</span> {caseDetails?.id ?? activeCaseId}
           </div>
           <div className="topActions">
+            {(aiRunKind || [...agentRuns, ...pathAgentRuns, ...synthesisAgentRuns].some((run) => run.status === "RUNNING")) && canViewManifest && (
+              <button className="ghost" disabled={stoppingAgent} onClick={stopAgent}>
+                {stoppingAgent ? "正在终止…" : "终止 Agent"}
+              </button>
+            )}
             <button className="ghost" onClick={() => {
               document.getElementById("audit")?.scrollIntoView({ block: "start" });
             }}>流转记录</button>
@@ -1697,13 +1777,13 @@ export default function Home() {
                       </section>
                     )}
                     {canViewManifest && latestFailedRunCount > 0 && (
-                      <section className="failedAgentTraces" aria-label="最新失败 Agent Trace">
+                      <section className="failedAgentTraces" aria-label="最新未完成 Agent Trace">
                         <header>
                           <span>
-                            <small>AGENT FAILURE</small>
-                            <strong>最新失败运行 · Trace 已自动展开</strong>
+                            <small>AGENT STOPPED</small>
+                            <strong>最新未完成运行 · Trace 已自动展开</strong>
                           </span>
-                          <em>{latestFailedRunCount} FAILED</em>
+                          <em>{latestFailedRunCount} 未完成</em>
                         </header>
                         {latestFailedOrchestratorRuns.length > 0 && (
                           <AgentTracePanel

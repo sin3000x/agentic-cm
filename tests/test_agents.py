@@ -1521,3 +1521,110 @@ def test_deterministic_substitution_reports_use_role_specific_business_evidence(
     assert "QFN-48" not in reports["主计划"]
     assert "AVL" in reports["供应经理"]
     assert "AVL" not in reports["主计划"]
+
+
+@pytest.mark.parametrize("mode", ["serial", "parallel"])
+def test_cancel_path_batch_stops_running_and_queued_paths(tmp_path, monkeypatch, mode):
+    from agentic_cm import api
+
+    async def scenario():
+        entered = asyncio.Event()
+        stopped = asyncio.Event()
+        calls = []
+        delegate = deterministic_path_adapter()
+
+        class BlockingPathAgent:
+            profile = "test/cancellable"
+
+            async def generate(self, context, trace):
+                calls.append(context.path["id"])
+                if len(calls) == 1:
+                    return await delegate.generate(context, trace)
+                entered.set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    stopped.set()
+
+        service = make_service(
+            tmp_path, planner=AllMatchedSkillPathsPlanner(),
+            path_agent=BlockingPathAgent(), path_execution_mode=mode, path_max_concurrency=1,
+        )
+        monkeypatch.setattr(api, "service", service)
+        await service.orchestrate_case(DEMO_CASE_ID, actor=OWNER_ACTOR, role=OWNER_ROLE)
+        path_ids = [path.id for path in service.get_case(DEMO_CASE_ID).manifest.paths]
+        assert len(path_ids) >= 3
+        service.approve_manifest(DEMO_CASE_ID, path_ids, actor=OWNER_ACTOR, role=OWNER_ROLE)
+        owner = {"actor": OWNER_ACTOR, "role": OWNER_ROLE}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api.app), base_url="http://test") as client:
+            pending = asyncio.create_task(client.post(
+                f"/api/cases/{DEMO_CASE_ID}/paths/execute", json=owner | {"path_ids": path_ids},
+            ))
+            try:
+                await asyncio.wait_for(entered.wait(), timeout=10)
+                forbidden = await client.post(
+                    f"/api/cases/{DEMO_CASE_ID}/agent-runs/cancel",
+                    json={"actor": "王淼", "role": "主计划"},
+                )
+                assert forbidden.status_code == 403
+                assert not stopped.is_set()
+                duplicate = await client.post(f"/api/cases/{DEMO_CASE_ID}/paths/execute", json=owner | {"path_ids": path_ids})
+                assert duplicate.status_code == 409
+                response = await client.post(f"/api/cases/{DEMO_CASE_ID}/agent-runs/cancel", json=owner)
+                assert response.json() == {"cancelled": True}
+                assert (await pending).status_code == 409
+                assert stopped.is_set()
+                assert calls == path_ids[:2]
+                runs = service.repository.list_agent_runs(DEMO_CASE_ID, agent_type="path")
+                assert {run["status"] for run in runs} == {"SUCCEEDED", "CANCELLED"}
+                cancelled = next(run for run in runs if run["status"] == "CANCELLED")
+                assert cancelled["completed_at"]
+                assert cancelled["events"][-1]["step"] == "run.cancelled"
+                attempts = service.get_case(DEMO_CASE_ID).path_attempts
+                assert attempts[0].solution_revision is not None
+                assert all(attempt.solution_revision is None for attempt in attempts[1:])
+                assert DEMO_CASE_ID not in api._agent_operations
+                assert (await client.post(f"/api/cases/{DEMO_CASE_ID}/agent-runs/cancel", json=owner)).json() == {"cancelled": False}
+                service.path_agent.adapter = delegate
+                retry = await client.post(f"/api/cases/{DEMO_CASE_ID}/paths/execute", json=owner | {"path_ids": path_ids[1:]})
+                assert retry.status_code == 200
+            finally:
+                if not pending.done():
+                    pending.cancel()
+                    await asyncio.gather(pending, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+
+def test_cancel_planner_keeps_case_unchanged_and_allows_retry(tmp_path, monkeypatch):
+    from agentic_cm import api
+
+    async def scenario():
+        entered = asyncio.Event()
+
+        class BlockingPlanner:
+            async def propose(self, *args):
+                entered.set()
+                await asyncio.Event().wait()
+
+        service = make_service(tmp_path, planner=BlockingPlanner())
+        monkeypatch.setattr(api, "service", service)
+        before = service.get_case(DEMO_CASE_ID).to_dict()
+        owner = {"actor": OWNER_ACTOR, "role": OWNER_ROLE}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api.app), base_url="http://test") as client:
+            pending = asyncio.create_task(client.post(f"/api/cases/{DEMO_CASE_ID}/orchestrate", json=owner))
+            try:
+                await asyncio.wait_for(entered.wait(), timeout=10)
+                response = await client.post(f"/api/cases/{DEMO_CASE_ID}/agent-runs/cancel", json=owner)
+                assert response.json() == {"cancelled": True}
+                assert (await pending).status_code == 409
+                assert service.get_case(DEMO_CASE_ID).to_dict() == before
+                assert service.repository.list_agent_runs(DEMO_CASE_ID)[0]["status"] == "CANCELLED"
+                service.orchestrator.planner = DeterministicPlannerAdapter()
+                assert (await client.post(f"/api/cases/{DEMO_CASE_ID}/orchestrate", json=owner)).status_code == 200
+            finally:
+                if not pending.done():
+                    pending.cancel()
+                    await asyncio.gather(pending, return_exceptions=True)
+
+    asyncio.run(scenario())

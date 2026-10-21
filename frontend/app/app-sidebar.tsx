@@ -210,7 +210,6 @@ export default function AppSidebar({
         <button
           className="identityButton"
           type="button"
-          disabled={busy}
           onClick={() => setShowIdentityMenu((value) => !value)}
           aria-expanded={showIdentityMenu}
         >

@@ -41,7 +41,7 @@ Registry identity (`capabilities.AssetRef`) also has `kind` and `source`. Conver
 | `path_agent.py` | Frozen Manifest → `SolutionRevision` |
 | `synthesis_agent.py` | Terminal PathAttempts → `SynthesisReport` |
 | `agent_runtime.py` | Shared LLM call, retry, `AgentError` |
-| `api.py` | HTTP; exception handlers map domain errors |
+| `api.py` | HTTP; single-process Agent request tracking and Owner cancellation; exception handlers map domain errors |
 
 Invalid persisted Case JSON is treated as empty and `ensure_demo_data()` reseeds the demo. There is no legacy decoder.
 
@@ -54,3 +54,5 @@ INTAKE → MANIFEST_REVIEW → PATH_EXPLORATION → PROFESSIONAL_COMMITMENT → 
 Agents propose. Humans approve commitments and the Owner decision. The platform owns Case state.
 
 During Path exploration, `AWAITING_INFORMATION` pauses a Path for role-scoped human answers. It creates no solution revision or approval. Revision requests include reasons; all commitments bind the reviewed solution revision and are renewed for a new version.
+
+Agent requests can be terminated by the Case Owner through `POST /api/cases/{case_id}/agent-runs/cancel`. Cancellation stops the current invocation and queued Paths, records `CANCELLED` with its trace, and preserves already committed results. Switching demo identity changes the view without cancelling the invocation; results remain attributed to the initiating identity.

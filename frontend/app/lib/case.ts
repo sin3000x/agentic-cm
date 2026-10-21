@@ -264,7 +264,7 @@ export type AgentTraceEvent = {
   id: number;
   sequence: number;
   step: string;
-  status: "STARTED" | "COMPLETED" | "FAILED";
+  status: "STARTED" | "COMPLETED" | "FAILED" | "CANCELLED";
   summary: string;
   details: Record<string, unknown>;
   created_at: string;
@@ -273,7 +273,7 @@ export type AgentTraceEvent = {
 export type AgentRun = {
   id: string;
   agent_type: "orchestrator" | "path" | "synthesis";
-  status: "RUNNING" | "SUCCEEDED" | "FAILED";
+  status: "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
   adapter_profile: string;
   initiated_by: string;
   started_at: string;
@@ -284,7 +284,7 @@ export type AgentRun = {
 };
 
 export type AiRunKind = "manifest" | "alternatives" | "synthesis";
-export type PathRunUiStatus = "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED";
+export type PathRunUiStatus = "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
 
 export const initialHumanProposal: HumanProposal = {
   revision: 0,

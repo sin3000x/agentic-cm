@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import os
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal, TypeVar
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,6 +34,28 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type"],
 )
+
+
+# This control plane runs in one process. Track the entire request, including
+# queued Paths, so cancellation cannot leave the rest of a batch running.
+_agent_operations: dict[str, asyncio.Task[Any]] = {}
+OperationResult = TypeVar("OperationResult")
+
+
+async def execute_agent_operation(
+    case_id: str, operation: Callable[[], Awaitable[OperationResult]],
+) -> OperationResult:
+    if case_id in _agent_operations:
+        raise InvalidTransitionError("此 Case 已有 Agent 正在运行")
+    task = asyncio.create_task(operation())
+    _agent_operations[case_id] = task
+    try:
+        return await task
+    except asyncio.CancelledError:
+        raise HTTPException(status_code=409, detail="Agent 运行已终止") from None
+    finally:
+        if _agent_operations.get(case_id) is task:
+            del _agent_operations[case_id]
 
 
 class AdapterSelectionRequest(BaseModel):
@@ -203,9 +227,29 @@ def get_case_agent_runs(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/api/cases/{case_id}/agent-runs/cancel")
+async def cancel_agent_operation(case_id: str, request: OwnerActionRequest):
+    case = service.get_case(case_id)
+    service._require_case_owner(case, actor=request.actor, role=request.role)
+    task = _agent_operations.get(case_id)
+    if task is None or task.done():
+        return {"cancelled": False}
+    task.cancel(f"由 {request.actor} 终止")
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        # A simultaneous failure has already been recorded by agent_run.
+        pass
+    return {"cancelled": task.cancelled()}
+
+
 @app.post("/api/cases/{case_id}/orchestrate")
 async def orchestrate_case(case_id: str, request: OwnerActionRequest):
-    await service.orchestrate_case(case_id, actor=request.actor, role=request.role)
+    await execute_agent_operation(
+        case_id, lambda: service.orchestrate_case(case_id, actor=request.actor, role=request.role)
+    )
     return service.get_case_view(case_id, actor=request.actor, role=request.role)
 
 
@@ -222,14 +266,18 @@ def approve_manifest(case_id: str, request: ManifestApprovalRequest):
 
 @app.post("/api/cases/{case_id}/paths/{path_id}/execute")
 async def execute_path(case_id: str, path_id: str, request: OwnerActionRequest):
-    case = await service.execute_path(case_id, path_id, actor=request.actor, role=request.role)
+    case = await execute_agent_operation(
+        case_id, lambda: service.execute_path(case_id, path_id, actor=request.actor, role=request.role)
+    )
     return case.to_dict()
 
 
 @app.post("/api/cases/{case_id}/paths/execute")
 async def execute_paths(case_id: str, request: PathExecutionRequest):
-    case = await service.execute_paths(
-        case_id, request.path_ids, actor=request.actor, role=request.role
+    case = await execute_agent_operation(
+        case_id, lambda: service.execute_paths(
+            case_id, request.path_ids, actor=request.actor, role=request.role
+        ),
     )
     return {
         "execution_mode": service.path_execution_mode,
@@ -245,7 +293,9 @@ def get_inbox(role: str):
 
 @app.post("/api/cases/{case_id}/synthesize")
 async def synthesize_case(case_id: str, request: OwnerActionRequest):
-    case = await service.synthesize_case(case_id, actor=request.actor, role=request.role)
+    case = await execute_agent_operation(
+        case_id, lambda: service.synthesize_case(case_id, actor=request.actor, role=request.role)
+    )
     return case.to_dict()
 
 
